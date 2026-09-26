@@ -83,7 +83,7 @@
     max-width: 130px;
   }
   .card-btn.active .status {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .status.is-connected,
   .card-btn.active .status.is-connected {

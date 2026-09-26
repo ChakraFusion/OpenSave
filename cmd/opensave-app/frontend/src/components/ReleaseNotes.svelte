@@ -140,7 +140,7 @@
     border-color: rgba(126, 224, 168, 0.25);
   }
   .kind.added {
-    color: var(--accent);
+    color: var(--accent-text);
     background: rgba(var(--accent-rgb), 0.12);
     border-color: rgba(var(--accent-rgb), 0.3);
   }

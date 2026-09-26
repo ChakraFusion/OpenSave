@@ -184,7 +184,7 @@
     display: grid;
     place-items: center;
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .welcome h3 {
     font-size: 1.3rem;

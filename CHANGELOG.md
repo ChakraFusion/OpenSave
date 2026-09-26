@@ -13,6 +13,13 @@ All notable changes to OpenSave are documented here. This project adheres to
   a controller beside it, and its page says when the session began. It
   used to say "Playing now" in the colour of a sync, with a spinning sync
   icon, though nothing was syncing.
+- **Eighteen accent colours.** Settings → Appearance adds red, amber, gold,
+  yellow, lime, emerald, cyan, sky, indigo, purple, pink and slate to the
+  six there were. The text on a light accent — a primary button, a badge,
+  the tick in a checkbox — is drawn dark where white would not read, and
+  the accent used as text on the page is deepened in the light theme and
+  lifted in the dark one until it reads. The six there were look exactly
+  as they did.
 
 ### Changed
 
@@ -41,6 +48,9 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Fixed
 
+- **The Changelog no longer sits in one corner of a large window.** Full
+  screen, it hugged the left edge with most of the window empty beside it;
+  it is now a column of a readable width in the middle.
 - **A save folder that cannot be read is no longer taken for an empty one.**
   When the folder itself could not be listed — its permissions refusing it,
   or it gone for a moment — it read as a folder with nothing in it. The game

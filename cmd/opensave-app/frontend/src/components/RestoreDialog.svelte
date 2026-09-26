@@ -134,7 +134,7 @@
     display: flex;
   }
   .file.changed .kind {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .file.restored .kind {
     color: var(--success);

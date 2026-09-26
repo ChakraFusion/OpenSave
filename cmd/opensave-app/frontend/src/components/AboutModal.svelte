@@ -105,7 +105,7 @@
     font-weight: 700;
   }
   .ver {
-    color: var(--accent);
+    color: var(--accent-text);
     font-weight: 600;
     font-size: 0.9rem;
     margin-top: 2px;

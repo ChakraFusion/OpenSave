@@ -374,7 +374,7 @@
     border: none;
     padding: 0;
     font: inherit;
-    color: var(--accent);
+    color: var(--accent-text);
     cursor: pointer;
   }
   .chips {

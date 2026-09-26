@@ -359,7 +359,7 @@
     color: var(--warn);
   }
   .status.tone-busy {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .status.tone-playing {
     color: var(--success);

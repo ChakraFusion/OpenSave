@@ -131,7 +131,7 @@
   }
   li.current .mark {
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   li.done .mark {
     border-color: transparent;

@@ -65,7 +65,7 @@
     border: 2px dashed var(--accent);
     border-radius: var(--radius-lg);
     background: var(--bg-raised);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   strong {
     color: var(--text);

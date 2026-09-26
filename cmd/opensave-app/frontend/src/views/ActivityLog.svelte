@@ -195,7 +195,7 @@
     border: none;
     padding: 0;
     font: inherit;
-    color: var(--accent);
+    color: var(--accent-text);
     cursor: pointer;
   }
 
@@ -281,7 +281,7 @@
     text-underline-offset: 2px;
   }
   .game:hover {
-    color: var(--accent-hover);
+    color: var(--accent-text);
     text-decoration-color: currentColor;
   }
   .clock {

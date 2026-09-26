@@ -348,7 +348,7 @@
   }
   .kind-manual .tag.kind {
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .kind-session .tag.kind {
     border-color: rgba(var(--success-rgb), 0.45);
@@ -368,10 +368,10 @@
     gap: 3px;
     border-color: transparent;
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .btn.icon.on {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .note {
     display: block;

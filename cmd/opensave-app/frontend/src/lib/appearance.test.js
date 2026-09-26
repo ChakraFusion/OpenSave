@@ -98,13 +98,32 @@ describe('resolvedTheme', () => {
 describe('accent colours', () => {
   it('derives the hover shade and the RGB triple the tints use', () => {
     expect(lighten('#000000', 0.5)).toBe('#808080');
-    expect(accentVars('violet')).toEqual({ '--accent': '#8a63f4', '--accent-hover': lighten('#8a63f4', 0.12), '--accent-rgb': '138, 99, 244' });
+    expect(accentVars('violet')).toMatchObject({ '--accent': '#8a63f4', '--accent-hover': lighten('#8a63f4', 0.12), '--accent-rgb': '138, 99, 244' });
     expect(accentVars('nonsense')['--accent']).toBe(ACCENTS.violet.hex);
   });
 
-  it('keeps white button text readable on every accent', () => {
+  it('keeps the text on every accent readable: white where it reads, dark on the light colours', () => {
     for (const [id, a] of Object.entries(ACCENTS)) {
-      expect(contrast(a.hex, '#ffffff'), id).toBeGreaterThanOrEqual(3);
+      expect(contrast(a.hex, accentVars(id)['--on-accent']), id).toBeGreaterThanOrEqual(3);
+    }
+    // The point of the change: a yellow can be offered at all.
+    expect(accentVars('yellow')['--on-accent']).not.toBe('#ffffff');
+  });
+
+  it('keeps the accent readable as text on the page, in either theme', () => {
+    for (const id of Object.keys(ACCENTS)) {
+      expect(contrast(accentVars(id, 'dark')['--accent-text'], '#17171a'), `${id} on dark`).toBeGreaterThanOrEqual(3);
+      expect(contrast(accentVars(id, 'light')['--accent-text'], '#ffffff'), `${id} on light`).toBeGreaterThanOrEqual(3);
+    }
+  });
+
+  it('leaves the accents there have always been exactly as they were', () => {
+    for (const id of ['violet', 'blue', 'teal', 'green', 'orange', 'rose']) {
+      for (const theme of ['dark', 'light']) {
+        const v = accentVars(id, theme);
+        expect(v['--on-accent'], id).toBe('#ffffff');
+        expect(v['--accent-text'], `${id} ${theme}`).toBe(ACCENTS[id].hex);
+      }
     }
   });
 });
@@ -133,5 +152,14 @@ describe('applyAppearance', () => {
     applyAppearance(DEFAULT_APPEARANCE, { root, prefersDark: false });
     expect(root.dataset.theme).toBe('dark');
     expect(root.style.zoom).toBe('');
+  });
+
+  it('tells the page when marks on the accent must be dark, which an inline image cannot read from a variable', () => {
+    const root = fakeRoot();
+    applyAppearance({ ...DEFAULT_APPEARANCE, theme: 'light', accent: 'yellow' }, { root });
+    expect(root.dataset.onAccent).toBe('dark');
+    expect(root.props['--accent-text']).not.toBe(ACCENTS.yellow.hex); // darkened to read on white
+    applyAppearance({ ...DEFAULT_APPEARANCE, accent: 'blue' }, { root });
+    expect(root.dataset.onAccent).toBe('light');
   });
 });

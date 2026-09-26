@@ -172,7 +172,7 @@
     height: 38px;
     border-radius: 10px;
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -234,12 +234,12 @@
     background: var(--accent);
   }
   nav button.active :global(svg) {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .nav-badge {
     margin-left: auto;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     border-radius: 999px;
     font-size: 0.7rem;
     font-weight: 700;

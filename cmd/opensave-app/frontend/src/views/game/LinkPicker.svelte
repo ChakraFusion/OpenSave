@@ -160,7 +160,7 @@
     display: grid;
     place-items: center;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .name {
     font-size: 0.8rem;

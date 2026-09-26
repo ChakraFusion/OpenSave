@@ -485,7 +485,7 @@
     border: 0;
     padding: 2px 0;
     font-size: 0.72rem;
-    color: var(--accent);
+    color: var(--accent-text);
     cursor: pointer;
     text-align: center;
     white-space: nowrap;

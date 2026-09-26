@@ -5,7 +5,7 @@
   import Moon from 'lucide-svelte/icons/moon';
   import Sun from 'lucide-svelte/icons/sun';
   import MonitorCog from 'lucide-svelte/icons/monitor-cog';
-  import { appearance, THEMES, ACCENTS, SCALES } from '../../lib/appearance.js';
+  import { appearance, THEMES, ACCENTS, SCALES, onAccent } from '../../lib/appearance.js';
   import { systemReducesMotion } from '../../lib/motion.js';
 
   const set = (patch) => appearance.update((v) => ({ ...v, ...patch }));
@@ -34,7 +34,7 @@
           aria-checked={$appearance.accent === id}
           aria-label={a.label}
           title={a.label}
-          style="--swatch: {a.hex}"
+          style="--swatch: {a.hex}; --swatch-on: {onAccent(a.hex)}"
           on:click={() => set({ accent: id })}
         >
           {#if $appearance.accent === id}<Check size={14} strokeWidth={3} />{/if}
@@ -111,10 +111,13 @@
     color: var(--text);
     font-weight: 600;
   }
+  /* Two rows of nine. */
   .swatches {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     padding: 3px 0;
+    max-width: 316px;
   }
   .swatch {
     width: 28px;
@@ -122,7 +125,7 @@
     border-radius: 50%;
     border: none;
     background: var(--swatch);
-    color: #fff;
+    color: var(--swatch-on);
     display: grid;
     place-items: center;
     cursor: pointer;

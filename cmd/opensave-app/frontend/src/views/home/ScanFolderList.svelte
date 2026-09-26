@@ -100,7 +100,7 @@
   }
   .tag-primary {
     border-color: var(--accent);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .tag-loc {
     border-color: var(--ok, var(--accent));

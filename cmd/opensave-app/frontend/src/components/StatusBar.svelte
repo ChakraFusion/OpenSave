@@ -117,7 +117,7 @@
     gap: 12px;
   }
   .pct {
-    color: var(--accent);
+    color: var(--accent-text);
     font-weight: 600;
   }
   .offline {
@@ -156,7 +156,7 @@
     padding: 0 5px;
     border-radius: 999px;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     font-size: 0.65rem;
     font-weight: 700;
   }

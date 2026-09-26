@@ -154,7 +154,7 @@
     color: var(--danger);
   }
   .change.changed :global(svg) {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .path {
     flex: 1;

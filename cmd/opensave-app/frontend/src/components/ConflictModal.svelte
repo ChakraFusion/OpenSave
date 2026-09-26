@@ -304,7 +304,7 @@
      amber — a count of what differs is information, not a hazard. */
   .v-diff strong {
     font-weight: 700;
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .v-diff-bytes {
     color: var(--text-dim);

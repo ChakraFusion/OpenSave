@@ -45,9 +45,13 @@
 </div>
 
 <style>
+  /* A column to read, held to a readable line length and centred in the
+     window. Left-aligned, a maximised window left it in one corner with most
+     of the screen empty beside it. */
   .page {
     padding: 26px 30px 40px;
-    max-width: 780px;
+    max-width: 820px;
+    margin: 0 auto;
   }
   .head {
     display: flex;
@@ -71,7 +75,7 @@
     text-align: right;
     font-size: 0.9rem;
     font-weight: 600;
-    color: var(--accent);
+    color: var(--accent-text);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     padding: 8px 12px;

@@ -117,7 +117,7 @@
     display: grid;
     place-items: center;
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .offer-body {
     flex: 1;

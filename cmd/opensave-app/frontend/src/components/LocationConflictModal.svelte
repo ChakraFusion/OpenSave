@@ -254,7 +254,7 @@
   }
   .v-diff strong {
     font-weight: 700;
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .v-only {
     font-size: 0.76rem;

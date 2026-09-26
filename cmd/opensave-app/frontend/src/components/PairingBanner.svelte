@@ -96,7 +96,7 @@
     display: grid;
     place-items: center;
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .pair-body {
     flex: 1;

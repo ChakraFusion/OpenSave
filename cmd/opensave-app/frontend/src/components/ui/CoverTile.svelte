@@ -151,7 +151,7 @@
   }
   .fallback-icon {
     display: flex;
-    color: var(--accent);
+    color: var(--accent-text);
     opacity: 0.85;
   }
   .fallback-name {
@@ -173,7 +173,7 @@
     height: 24px;
     border-radius: 50%;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -210,7 +210,7 @@
     font-size: 0.68rem;
     font-weight: 700;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
   }
   .hover {
     position: absolute;

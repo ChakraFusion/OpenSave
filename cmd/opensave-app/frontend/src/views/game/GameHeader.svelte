@@ -244,7 +244,7 @@
     margin-top: 2px;
   }
   .syncing {
-    color: var(--accent);
+    color: var(--accent-text);
     font-weight: 600;
   }
   .synced-with {

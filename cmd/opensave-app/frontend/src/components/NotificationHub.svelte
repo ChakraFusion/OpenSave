@@ -182,7 +182,7 @@
     padding: 0 4px;
     border-radius: 8px;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     font-size: 0.62rem;
     font-weight: 700;
     line-height: 15px;
@@ -318,7 +318,7 @@
     border: none;
     background: none;
     padding: 0;
-    color: var(--accent-hover);
+    color: var(--accent-text);
     font: inherit;
     font-size: 0.8rem;
     cursor: pointer;

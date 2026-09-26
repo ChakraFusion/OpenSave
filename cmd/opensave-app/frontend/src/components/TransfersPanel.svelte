@@ -156,7 +156,7 @@
     color: var(--text-dim);
   }
   .dir.download {
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .main {
     flex: 1;

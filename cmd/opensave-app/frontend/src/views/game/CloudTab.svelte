@@ -118,7 +118,7 @@
   .linklike {
     background: none;
     border: none;
-    color: var(--accent);
+    color: var(--accent-text);
     cursor: pointer;
     padding: 0;
     font: inherit;

@@ -868,7 +868,7 @@
     height: 46px;
     display: grid;
     place-items: center;
-    color: var(--accent);
+    color: var(--accent-text);
     border-radius: 50%;
     background: var(--accent-soft);
     border: 1px solid rgba(var(--accent-rgb), 0.35);

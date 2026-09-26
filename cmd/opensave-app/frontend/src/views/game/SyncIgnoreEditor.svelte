@@ -223,7 +223,7 @@
   /* The location a file lives in, when the game has more than its save
      folder — the same filename can appear in two of them. */
   .file-loc {
-    color: var(--accent);
+    color: var(--accent-text);
     margin-right: 6px;
   }
   .verdict {

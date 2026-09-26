@@ -231,7 +231,7 @@
     padding: 0;
     font: inherit;
     font-size: 0.78rem;
-    color: var(--accent);
+    color: var(--accent-text);
     text-decoration: underline;
     cursor: pointer;
   }
