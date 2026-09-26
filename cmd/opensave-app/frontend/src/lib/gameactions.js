@@ -24,6 +24,13 @@ export function latestSnapshot(game) {
   return snaps.reduce((best, s) => (!best || s.timestamp > best.timestamp ? s : best), null);
 }
 
+/** Whether a game can be launched from here: it has a program or a Steam App
+ *  ID, and is not known to be missing from this device — Steam asked to run a
+ *  game it does not have offers to install it instead (daemon.InstallState). */
+export function canLaunch(game) {
+  return !!(game?.appId || game?.exePath) && game.installed !== 'not-found';
+}
+
 /** The menu for one game, in order; `null` is a divider. Pure, so tested.
  *  `favourite` is whether the game is in Favourites. */
 export function gameMenuItems(game, { now = new Date(), favourite = false } = {}) {
@@ -35,7 +42,7 @@ export function gameMenuItems(game, { now = new Date(), favourite = false } = {}
     null,
     { id: 'sync', label: 'Sync now' },
     { id: 'snapshot', label: 'Snapshot now' },
-    ...(game.appId || game.exePath ? [{ id: 'launch', label: 'Launch' }] : []),
+    ...(canLaunch(game) ? [{ id: 'launch', label: 'Launch' }] : []),
     { id: 'folder', label: 'Open save folder' },
     {
       id: 'restore-latest',

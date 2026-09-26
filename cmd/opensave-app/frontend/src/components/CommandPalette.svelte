@@ -9,7 +9,7 @@
   import { PAUSE_CHOICES, pauseSync, resumeSync } from '../lib/syncpause.js';
   import { collections, collectionFilter } from '../lib/collections.js';
   import { api } from '../lib/api.js';
-  import { visibleGames, runGameAction } from '../lib/gameactions.js';
+  import { visibleGames, runGameAction, canLaunch } from '../lib/gameactions.js';
   import { showSetupAgain } from '../lib/setup.js';
   import { appearance, resolvedTheme } from '../lib/appearance.js';
   import { PAGES } from '../lib/shortcuts.js';
@@ -74,7 +74,7 @@
       { label: g.name, kind: 'Game', idle: true, weight: 1, run: () => runGameAction('open', g) },
       { label: `Sync ${g.name}`, kind: 'Action', weight: -1, run: () => runGameAction('sync', g) },
       { label: `Snapshot ${g.name}`, kind: 'Action', weight: -1, keywords: ['backup', 'save'], run: () => runGameAction('snapshot', g) },
-      ...(g.appId || g.exePath ? [{ label: `Launch ${g.name}`, kind: 'Action', weight: -1, keywords: ['play', 'start'], run: () => runGameAction('launch', g) }] : []),
+      ...(canLaunch(g) ? [{ label: `Launch ${g.name}`, kind: 'Action', weight: -1, keywords: ['play', 'start'], run: () => runGameAction('launch', g) }] : []),
       { label: `Open ${g.name} save folder`, kind: 'Action', weight: -1, keywords: ['explorer', 'files'], run: () => runGameAction('folder', g) }
     ]),
     // Snapshots with words of their own — a note, or a comment someone typed

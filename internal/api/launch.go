@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -29,11 +30,35 @@ func (s *Server) handleLaunchGame(w http.ResponseWriter, r *http.Request) {
 
 	switch exe := strings.TrimSpace(game.ExePath); {
 	case exe != "":
+		if _, err := os.Stat(exe); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]string{
+				"error": fmt.Sprintf("the program set for %s is not there any more (%s) — set it again under Configuration",
+					game.Name, exe),
+				"reason": "program-missing",
+			})
+			return
+		}
 		if err := runExecutable(exe); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not launch executable: "+err.Error())
 			return
 		}
 	case game.AppID != "":
+		// Steam asked to run a game it does not have offers to install it,
+		// which is not what the button promised — and for a copy kept
+		// outside Steam it is a different copy altogether. Said here instead,
+		// with the way to launch the one that is here. Only when there is a
+		// Steam to have asked: without one there is no knowing.
+		if installed, steamHere, dir := s.Daemon.SteamInstall(game); steamHere && !installed {
+			msg := fmt.Sprintf("%s is not installed in Steam on this device — install it there, "+
+				"or set the program it starts with under Configuration", game.Name)
+			if dir != "" {
+				msg = fmt.Sprintf("%s is not installed in Steam on this device, but it is in %s. "+
+					"Play it once from there and Launch will start it, or set its program under Configuration",
+					game.Name, dir)
+			}
+			writeJSON(w, http.StatusConflict, map[string]string{"error": msg, "reason": "not-installed"})
+			return
+		}
 		if err := openURL("steam://run/" + game.AppID); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not launch via Steam: "+err.Error())
 			return

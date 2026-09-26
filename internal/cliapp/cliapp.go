@@ -666,6 +666,9 @@ type statusReportGame struct {
 	// 8601, empty when never). See `opensave sessions`.
 	PlaytimeMs   int64  `json:"playtimeMs"`
 	LastPlayedAt string `json:"lastPlayedAt"`
+	// Whether the game is installed on this device: "found", "not-found",
+	// or empty when there is no telling (daemon.InstallState).
+	Installed string `json:"installed"`
 }
 
 type statusReportPeer struct {
@@ -707,6 +710,7 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 				MaxManualSnapshots: g.MaxManualSnapshots,
 				SavePathMissing:    daemon.SaveFolderMissing(g.SavePath),
 				Emptied:            emptiedOrNil(d, g.ID),
+				Installed:          d.InstallState(g),
 			}
 			if st, err := d.Store.PlayStatsFor(g.ID); err == nil && st.Sessions > 0 {
 				entry.PlaytimeMs = st.PlaytimeMs
@@ -761,6 +765,9 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 		}
 		if e, held := d.EmptiedSaveOf(g.ID); held && e.State == "held" {
 			fmt.Printf("      %s\n", warnText(fmt.Sprintf("every save file was deleted here — not synced until you answer (opensave emptied %s delete|restore)", g.ID)))
+		}
+		if d.InstallState(g) == daemon.InstallNotFound {
+			fmt.Printf("      %s\n", faint("not found on this device — Steam does not have it, and it is in no folder games are kept in"))
 		}
 		if since, ok := playing[g.ID]; ok {
 			fmt.Printf("      %s\n", accent("playing now")+faint(", since "+since.Local().Format("15:04")))

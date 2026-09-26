@@ -494,6 +494,10 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		"playingSince":    playingSince,
 		"playtimeMs":      play.PlaytimeMs,
 		"playSessions":    play.Sessions,
+		// Whether the game is installed on this device: "found", "not-found",
+		// or "" when there is no telling (daemon.InstallState). A game that is
+		// not here is one nobody plays here, which is why it shows no play.
+		"installed": s.Daemon.InstallState(g),
 		// Every save file went at once here, and the game is held back from
 		// the other devices until someone says whether that was meant.
 		"emptied": emptiedOf(s.Daemon, g.ID),

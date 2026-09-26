@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { gameMenuItems, latestSnapshot } from './gameactions.js';
+import { canLaunch, gameMenuItems, latestSnapshot } from './gameactions.js';
 
 const game = (extra = {}) => ({
   id: 'g1',
@@ -28,6 +28,15 @@ describe('gameMenuItems', () => {
     expect(ids(gameMenuItems(game()))).not.toContain('launch');
     expect(ids(gameMenuItems(game({ appId: '1145360' })))).toContain('launch');
     expect(ids(gameMenuItems(game({ exePath: 'C:/Games/Hades.exe' })))).toContain('launch');
+  });
+
+  it('does not offer Launch for a game known not to be on this device', () => {
+    // Steam asked to run it would offer to install it instead.
+    expect(ids(gameMenuItems(game({ appId: '1145360', installed: 'not-found' })))).not.toContain('launch');
+    expect(canLaunch(game({ appId: '1145360', installed: 'not-found' }))).toBe(false);
+    // Found, or no telling: offered as before.
+    expect(canLaunch(game({ appId: '1145360', installed: 'found' }))).toBe(true);
+    expect(canLaunch(game({ exePath: 'C:/Games/Hades.exe', installed: '' }))).toBe(true);
   });
 
   it('greys out restoring when there is no snapshot, and says when the latest is from', () => {

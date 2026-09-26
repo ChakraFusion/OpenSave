@@ -9,6 +9,7 @@
   import { api, native, gameCover } from '../../lib/api.js';
   import { timeAgo } from '../../lib/timeago.js';
   import { playLength } from '../../lib/format.js';
+  import { canLaunch } from '../../lib/gameactions.js';
   import ArrowLeft from 'lucide-svelte/icons/arrow-left';
   import Play from 'lucide-svelte/icons/play';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
@@ -116,6 +117,9 @@
       {:else if game.lastPlayedAt}
         · <span title={new Date(game.lastPlayedAt).toLocaleString()}>played {timeAgo(game.lastPlayedAt, now)}, {playLength(game.playtimeMs)} in all</span>
       {/if}
+      {#if game.installed === 'not-found'}
+        · <span title="Steam on this PC does not have it, and it is in no folder games are kept in. Set its program under Configuration to launch it from somewhere else.">not found on this PC</span>
+      {/if}
     </div>
     {#if syncedWith.length > 0}
       <div class="sub synced-with">
@@ -130,7 +134,7 @@
     {/if}
   </div>
   <div class="head-actions">
-    {#if game.appId || game.exePath}
+    {#if canLaunch(game)}
       <button class="btn" disabled={$busy} on:click={launchGame}><Play size={15} />Launch</button>
     {/if}
     <button class="btn primary" disabled={$busy} on:click={syncNow}><RefreshCw size={15} />Sync now</button>

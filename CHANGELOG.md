@@ -22,6 +22,22 @@ All notable changes to OpenSave are documented here. This project adheres to
   Steam, or asked to install one. It starts in its own folder, where games
   look for their files, and a shortcut or batch file opens as a double-click
   would. Games with no program set still launch through Steam.
+- **A game kept outside Steam learns how it is started.** Played once from
+  its own folder — a copy in `D:\Games`, say — it remembers the program that
+  ran, and Launch starts that from then on. The program is the one that ran
+  for most of the session, not the small one that started it or the crash
+  reporter beside it. Games Steam has installed are left to Steam, and a
+  program you set yourself is never replaced.
+- **Launch says when Steam does not have the game.** It used to open Steam,
+  which offered to install it. Now it says the game is not installed in
+  Steam here, and where it was found instead if it was. A program that has
+  gone — uninstalled, a drive unplugged — is said to be gone.
+- **"Not found on this PC".** A game with a Steam App ID that Steam here
+  does not have, and that is in no folder games are kept in, says so on its
+  page and in Activity — which is why it shows no play here — and offers no
+  Launch. Only said when it is certain: a game with no App ID, or on a
+  machine with no Steam, is never reported missing. `opensave status` says
+  it too, and `--json` carries `installed`.
 
 ### Fixed
 

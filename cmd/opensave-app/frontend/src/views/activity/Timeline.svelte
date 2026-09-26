@@ -108,6 +108,7 @@
             {#if g.lastPlayedAt}
               <span class="main">{playedWhere(g, report.device)}</span>
               <span class="sub">{timeAgo(iso(g.lastPlayedAt), now)}</span>
+            {:else if game.installed === 'not-found'}<span class="none" title="Steam on this PC does not have it, and it is in no folder games are kept in">Not found on this PC</span>
             {:else}<span class="none">—</span>{/if}
           </span>
           <span class="cell">

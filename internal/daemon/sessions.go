@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -44,16 +45,21 @@ type sessionState struct {
 	// startHash is each playing game's save as it was when play began, to
 	// tell afterwards whether the session changed it.
 	startHash map[string]string
-	installs  struct {
+	// seen counts, for each game being played whose program is still to be
+	// learned, the polls each program from its folder was running in.
+	seen     map[string]map[string]int
+	installs struct {
 		at       time.Time
 		byAppID  map[string]string
 		byFolder map[string]string
+		steam    bool // a Steam library was found at all
 	}
 }
 
 func (d *Daemon) initSessions() {
 	d.sessions.list = sessions.List
 	d.sessions.startHash = map[string]string{}
+	d.sessions.seen = map[string]map[string]int{}
 	d.sessions.tracker = &sessions.Tracker{
 		Grace:   sessionGrace,
 		OnStart: d.sessionStarted,
@@ -74,7 +80,7 @@ func (d *Daemon) PlayingSince(gameID string) time.Time {
 
 // PollSessions looks at what is running once.
 func (d *Daemon) PollSessions() {
-	targets, err := d.sessionTargets()
+	targets, learn, err := d.sessionTargets()
 	if err != nil || len(targets) == 0 {
 		d.sessions.tracker.Poll(nil, time.Now())
 		return
@@ -83,7 +89,9 @@ func (d *Daemon) PollSessions() {
 	if err != nil {
 		return
 	}
-	d.sessions.tracker.Poll(sessions.Running(procs, targets), time.Now())
+	running := sessions.Running(procs, targets)
+	d.notePrograms(procs, targets, learn, running)
+	d.sessions.tracker.Poll(running, time.Now())
 }
 
 func (d *Daemon) runSessions(ctx context.Context) {
@@ -117,31 +125,167 @@ func programName(exe string) string {
 	return strings.ToLower(exe[strings.LastIndex(exe, "/")+1:])
 }
 
-func (d *Daemon) sessionTargets() ([]sessions.Target, error) {
+// sessionTargets is every tracked game to look for, and the ones whose
+// program is to be learned from what runs in their folder (see learnProgram).
+func (d *Daemon) sessionTargets() ([]sessions.Target, map[string]bool, error) {
 	games, err := d.Store.ListGames()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	byAppID, byFolder := d.installDirs()
+	byAppID, byFolder, _ := d.installDirs()
 	targets := make([]sessions.Target, 0, len(games))
+	learn := map[string]bool{}
 	for _, g := range games {
 		t := sessions.Target{GameID: g.ID, AppID: g.AppID}
-		if exe := strings.TrimSpace(g.ExePath); exe != "" && !launcherPrograms[programName(exe)] {
+		exe := strings.TrimSpace(g.ExePath)
+		if exe != "" && !launcherPrograms[programName(exe)] {
 			t.Exe = exe
 			if dir := programFolder(exe); dir != "" {
 				t.Dirs = append(t.Dirs, dir)
 			}
 		}
-		if dir := byAppID[g.AppID]; g.AppID != "" && dir != "" {
+		dir, viaSteam := installFolder(g, byAppID, byFolder)
+		if dir != "" {
 			t.Dirs = append(t.Dirs, dir)
-		} else if dir := byFolder[strings.ToLower(g.Name)]; dir != "" && specificEnough(dir) {
-			t.Dirs = append(t.Dirs, dir)
-		} else if dir := byFolder[folderish(g.Name)]; dir != "" && specificEnough(dir) {
-			t.Dirs = append(t.Dirs, dir)
+		}
+		// Steam launches the games it has installed; the rest need a
+		// program to start them, and none was given.
+		if dir != "" && !viaSteam && exe == "" {
+			learn[g.ID] = true
 		}
 		targets = append(targets, t)
 	}
-	return targets, nil
+	return targets, learn, nil
+}
+
+// installFolder is where a game is installed on this device, if that is
+// known, and whether Steam installed it there.
+func installFolder(g store.Game, byAppID, byFolder map[string]string) (dir string, viaSteam bool) {
+	if dir := byAppID[g.AppID]; g.AppID != "" && dir != "" {
+		return dir, true
+	}
+	if dir := byFolder[strings.ToLower(g.Name)]; dir != "" && specificEnough(dir) {
+		return dir, false
+	}
+	if dir := byFolder[folderish(g.Name)]; dir != "" && specificEnough(dir) {
+		return dir, false
+	}
+	return "", false
+}
+
+// Install states, as a game's entry reports them.
+const (
+	InstallFound    = "found"
+	InstallNotFound = "not-found"
+)
+
+// InstallState says whether a game is installed on this device: found, not
+// found, or "" when there is no telling.
+//
+// "Not found" is said only when it is certain enough to be worth saying: the
+// game has a Steam App ID, Steam is here and does not have it, and it is not
+// in any other folder games are kept in. A game with no App ID — an
+// emulator's save, one installed somewhere of the user's own choosing — is
+// not reported missing merely because this device cannot see where it is.
+func (d *Daemon) InstallState(g store.Game) string {
+	if exe := strings.TrimSpace(g.ExePath); exe != "" && !launcherPrograms[programName(exe)] {
+		if _, err := os.Stat(exe); err == nil {
+			return InstallFound
+		}
+	}
+	byAppID, byFolder, steam := d.installDirs()
+	if dir, _ := installFolder(g, byAppID, byFolder); dir != "" {
+		return InstallFound
+	}
+	if g.AppID != "" && steam {
+		return InstallNotFound
+	}
+	return ""
+}
+
+// SteamInstall reads afresh whether Steam on this device has a game
+// installed, and whether there is a Steam here to ask at all. Fresh, not the
+// session poll's copy: it answers a click, and a game installed a minute ago
+// must launch. dir is where the game was found otherwise, if it was.
+func (d *Daemon) SteamInstall(g store.Game) (installed, steamHere bool, dir string) {
+	d.sessions.mu.Lock()
+	d.sessions.installs.at = time.Time{} // read again below
+	d.sessions.mu.Unlock()
+	byAppID, byFolder, steam := d.installDirs()
+	dir, viaSteam := installFolder(g, byAppID, byFolder)
+	return viaSteam, steam, dir
+}
+
+// notePrograms counts, for the games whose program is being learned, which
+// programs from their folders are running.
+func (d *Daemon) notePrograms(procs []sessions.Proc, targets []sessions.Target, learn map[string]bool, running map[string]int) {
+	d.sessions.mu.Lock()
+	defer d.sessions.mu.Unlock()
+	for _, t := range targets {
+		if _, playing := running[t.GameID]; !playing || !learn[t.GameID] {
+			continue
+		}
+		for _, p := range procs {
+			if !sessions.InFolder(p, t) {
+				continue
+			}
+			if d.sessions.seen[t.GameID] == nil {
+				d.sessions.seen[t.GameID] = map[string]int{}
+			}
+			d.sessions.seen[t.GameID][p.Exe]++
+		}
+	}
+}
+
+// helperNames mark programs that run from a game's folder beside the game
+// without being it: crash reporters, anti-cheat, installers.
+var helperNames = []string{
+	"crash", "reporter", "werfault", "unins", "redist", "dxsetup",
+	"anticheat", "battleye", "beservice", "helper", "updater",
+}
+
+// learnProgram gives a game the program it was just played with, when it had
+// none and Steam cannot start it: a copy kept in D:\Games, say. Without one,
+// Launch had nothing to run, or went to Steam and asked to install the game.
+//
+// The program is the one that ran for most of the session. A game started
+// through a small program of its own shows that one for a poll or two, and
+// the game itself for the rest; a crash reporter runs as long as the game,
+// but is named as one and skipped. Of two running equally long, the larger
+// file is the game.
+func (d *Daemon) learnProgram(gameID string, seen map[string]int) {
+	best, bestN, bestSize := "", 0, int64(-1)
+	for exe, n := range seen {
+		name := programName(exe)
+		helper := false
+		for _, h := range helperNames {
+			if strings.Contains(name, h) {
+				helper = true
+				break
+			}
+		}
+		info, err := os.Stat(exe)
+		if helper || err != nil {
+			continue
+		}
+		size := info.Size()
+		if n > bestN || (n == bestN && (size > bestSize || (size == bestSize && exe < best))) {
+			best, bestN, bestSize = exe, n, size
+		}
+	}
+	if best == "" {
+		return
+	}
+	game, err := d.Store.GetGame(gameID)
+	if err != nil || strings.TrimSpace(game.ExePath) != "" {
+		return // one was set meanwhile, and that one is the user's
+	}
+	game.ExePath = best
+	if err := d.Store.UpdateGame(game); err != nil {
+		d.Log.Log("warn", fmt.Sprintf("could not remember how %q is started: %v", game.Name, err))
+		return
+	}
+	d.Log.Log("info", fmt.Sprintf("%q runs from %s; Launch starts it from there now", game.Name, best))
 }
 
 // programFolder is the folder a game's launch program is in, whose programs
@@ -187,17 +331,19 @@ func specificEnough(dir string) bool {
 	return len(parts) >= 3
 }
 
-func (d *Daemon) installDirs() (map[string]string, map[string]string) {
+func (d *Daemon) installDirs() (byAppID, byFolder map[string]string, steam bool) {
 	d.sessions.mu.Lock()
 	defer d.sessions.mu.Unlock()
 	if d.Scanner == nil {
-		return nil, nil
+		return nil, nil, false
 	}
-	if time.Since(d.sessions.installs.at) > installDirsFresh || d.sessions.installs.byAppID == nil {
-		d.sessions.installs.byAppID, d.sessions.installs.byFolder = d.Scanner.InstallDirs()
-		d.sessions.installs.at = time.Now()
+	in := &d.sessions.installs
+	if time.Since(in.at) > installDirsFresh || in.byAppID == nil {
+		in.byAppID, in.byFolder = d.Scanner.InstallDirs()
+		in.steam = d.Scanner.HasSteam()
+		in.at = time.Now()
 	}
-	return d.sessions.installs.byAppID, d.sessions.installs.byFolder
+	return in.byAppID, in.byFolder, in.steam
 }
 
 func (d *Daemon) sessionStarted(gameID string, at time.Time) {
@@ -219,6 +365,8 @@ func (d *Daemon) sessionEnded(gameID string, started, ended time.Time) {
 	d.sessions.mu.Lock()
 	startHash := d.sessions.startHash[gameID]
 	delete(d.sessions.startHash, gameID)
+	seen := d.sessions.seen[gameID]
+	delete(d.sessions.seen, gameID)
 	d.sessions.mu.Unlock()
 
 	game, err := d.Store.GetGame(gameID)
@@ -237,6 +385,7 @@ func (d *Daemon) sessionEnded(gameID string, started, ended time.Time) {
 	if err := d.Store.AddPlaySession(gameID, started.UnixMilli(), ended.UnixMilli()); err != nil {
 		d.Log.Log("warn", err.Error())
 	}
+	d.learnProgram(gameID, seen)
 	d.Log.Log("info", fmt.Sprintf("stopped playing %q after %s", game.Name, spokenLength(length)))
 
 	hash, err := d.currentContentHash(game)

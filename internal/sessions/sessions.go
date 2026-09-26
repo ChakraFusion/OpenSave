@@ -92,6 +92,21 @@ func matches(p Proc, t Target) bool {
 	return false
 }
 
+// InFolder reports whether a process is a program from inside one of a
+// target's folders — by its own path, not its command line. Through Proton
+// the program is Wine, and Wine is not a game anyone could launch.
+func InFolder(p Proc, t Target) bool {
+	if p.Exe == "" {
+		return false
+	}
+	for _, dir := range t.Dirs {
+		if dir != "" && inside(p.Exe, dir) {
+			return true
+		}
+	}
+	return false
+}
+
 func norm(p string) string {
 	p = filepath.Clean(strings.TrimSpace(p))
 	if runtime.GOOS == "windows" {
