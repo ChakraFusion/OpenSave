@@ -41,6 +41,14 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Fixed
 
+- **A save folder that cannot be read is no longer taken for an empty one.**
+  When the folder itself could not be listed — its permissions refusing it,
+  or it gone for a moment — it read as a folder with nothing in it. The game
+  was then held back as if every save file had been deleted, and stopped
+  syncing though its save was all there; and a sync that read it that way
+  told the other device every file had been deleted, which deleted them
+  there. Such a folder now fails to read, and nothing is synced or held
+  until it can be.
 - **An edit made on both devices to a game's second save folder is no
   longer lost.** When the other device's word that a sync had finished
   arrived late — after both edits — one device's change quietly replaced

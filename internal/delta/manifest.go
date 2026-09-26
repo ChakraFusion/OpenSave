@@ -234,6 +234,18 @@ func BuildManifest(root string) (Manifest, error) {
 	var dirs []string
 	err = filepath.Walk(root, func(path string, walkInfo os.FileInfo, walkErr error) error {
 		if walkErr != nil {
+			// The save folder itself could not be read — its listing refused,
+			// or the folder gone since it was looked at. That is not an empty
+			// folder, and must not be described as one: a manifest with
+			// nothing in it says every file was deleted, which is what a sync
+			// passes on to the other devices and what holds a game back as
+			// emptied (syncengine/hold.go). The skips below are for what is
+			// INSIDE the folder; applied to the folder, they returned an empty
+			// manifest and no error, and a device stopped syncing a save it
+			// still had.
+			if path == root {
+				return walkErr
+			}
 			// Permission-denied subtrees (Windows legacy junctions like
 			// AppData\Local\Application Data, locked system dirs) are
 			// skipped instead of failing the whole manifest — one

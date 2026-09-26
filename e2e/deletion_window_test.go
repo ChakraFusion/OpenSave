@@ -40,6 +40,7 @@ func TestDeletionImmediatelyAfterArrivalStillPropagates(t *testing.T) {
 		func() {
 			a := testutil.NewTestDaemon(t, "DelWin-A")
 			b := testutil.NewTestDaemon(t, "DelWin-B")
+			logOnFailure(t, a, b)
 			a.PairWith(b)
 
 			a.WriteSave("keep.sav", "keep me")
