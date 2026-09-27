@@ -1,4 +1,5 @@
 <script>
+  import { dialogOut } from '../lib/motion.js';
   import { conflicts, conflictResolution, games, toast } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { demandAttention } from '../lib/notify.js';
@@ -139,7 +140,7 @@
 </script>
 
 {#if current && conflict}
-  <div class="overlay">
+  <div class="overlay" out:dialogOut|global>
     <div class="modal card">
       <h3 class="with-icon"><GitCompareArrows size={20} /> Save conflict — {gameName}</h3>
       <p class="desc">

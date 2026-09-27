@@ -1,6 +1,11 @@
 <script>
   import { toasts, dismissToast } from '../lib/stores.js';
   import X from 'lucide-svelte/icons/x';
+  import { flip } from 'svelte/animate';
+  import { gated, slideAway } from '../lib/motion.js';
+
+  // The toasts that stay close up as one leaves, rather than jumping.
+  const settle = gated(flip);
 
   function act(t) {
     dismissToast(t.id);
@@ -10,7 +15,7 @@
 
 <div class="toasts" role="status" aria-live="polite">
   {#each $toasts as t (t.id)}
-    <div class="toast {t.kind}" class:has-action={t.action}>
+    <div class="toast {t.kind}" class:has-action={t.action} out:slideAway animate:settle={{ duration: 200 }}>
       <span class="message">{t.message}</span>
       {#if t.action}
         <button class="btn small" on:click={() => act(t)}>{t.action.label}</button>

@@ -2,6 +2,7 @@
   // Using OpenSave with a gamepad, on this device (lib/controller.js). Kept
   // with the appearance in local storage: it is about this screen and what
   // is in the hands in front of it.
+  import { slidingIndicator } from '../../lib/motion.js';
   import { appearance } from '../../lib/appearance.js';
   import { CONTROLLER_MODES, controllerOn, padUsed } from '../../lib/controller.js';
   import { settings } from '../../lib/stores.js';
@@ -22,7 +23,7 @@
 </script>
 
 <div class="row">
-  <div class="segmented" role="radiogroup" aria-label="Controller">
+  <div class="segmented" role="radiogroup" aria-label="Controller" use:slidingIndicator={{ mode: 'fill' }}>
     {#each Object.entries(CONTROLLER_MODES) as [id, label]}
       <button role="radio" aria-checked={$appearance.controller === id} class:on={$appearance.controller === id} on:click={() => set({ controller: id })}>
         {label}

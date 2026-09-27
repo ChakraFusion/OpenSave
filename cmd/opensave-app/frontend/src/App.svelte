@@ -1,5 +1,6 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
+  import { pageOut } from './lib/motion.js';
   import { initApi, connectWS, native } from './lib/api.js';
   import { applyMessage, wsConnected, view, appUpdate, toast, showAbout, cloudOffers, newGames, navigate, settings, games, availableUpdate } from './lib/stores.js';
   import { startController, controllerOn, padUsed, pageStep } from './lib/controller.js';
@@ -170,6 +171,18 @@
     changelog: Changelog,
     activity: ActivityLog
   };
+
+  // A new page opens at its top. The page area is one scroller shared by every
+  // page, so without this the next page opened as far down as the last had
+  // been scrolled — Activity half-way down because Settings was. Only a change
+  // of page: something that changes within one (a dialog it opens) keeps its
+  // place.
+  let mainEl;
+  let shownPage = '';
+  $: if (mainEl && $view.name !== shownPage) {
+    if (shownPage) mainEl.scrollTop = 0;
+    shownPage = $view.name;
+  }
 </script>
 
 <div class="shell">
@@ -243,7 +256,7 @@
       </div>
     {:else if ready}
       <Sidebar />
-      <main>
+      <main bind:this={mainEl}>
         <!-- At the top of the page rather than floating over it: floating, they
              sat on the page's own header buttons for as long as they were
              shown. These wait for an answer; they should not take anything away
@@ -256,12 +269,16 @@
         {/if}
         <!-- Keyed by page, so arriving somewhere new plays the short rise in
              app.css (still, with animations off); moving between two games
-             is the same page and does not. -->
-        {#key $view.name}
-          <div class="view">
-            <svelte:component this={views[$view.name] ?? Home} params={$view.params} />
-          </div>
-        {/key}
+             is the same page and does not. The page being left fades as the
+             next rises, both in one grid cell so neither pushes the other
+             down while they overlap. -->
+        <div class="views">
+          {#key $view.name}
+            <div class="view" out:pageOut>
+              <svelte:component this={views[$view.name] ?? Home} params={$view.params} />
+            </div>
+          {/key}
+        </div>
       </main>
     {:else}
       <div class="boot-loading">
@@ -307,7 +324,12 @@
     padding: 24px 28px;
     min-width: 0;
   }
+  .views {
+    display: grid;
+  }
   .view {
+    grid-area: 1 / 1;
+    min-width: 0;
     animation: arrive 0.2s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
   }
   .boot-loading,

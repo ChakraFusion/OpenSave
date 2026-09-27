@@ -272,14 +272,18 @@ input[type='radio']:disabled {
   transition:
     background 0.12s,
     border-color 0.12s,
-    color 0.12s;
+    color 0.12s,
+    transform 0.16s cubic-bezier(0.2, 0.7, 0.2, 1.4);
   white-space: nowrap;
 }
 .btn:hover {
   background: var(--btn-bg-hover);
 }
+/* Pressed: it gives under the pointer, quickly, and springs back on release
+   (the slight overshoot in the transition above). */
 .btn:active:not(:disabled) {
-  transform: translateY(0.5px);
+  transform: scale(0.96);
+  transition-duration: 0.06s;
 }
 .btn:disabled {
   opacity: 0.45;
@@ -375,6 +379,53 @@ input[type='radio']:disabled {
   height: 2px;
   border-radius: 2px;
   background: var(--accent);
+}
+
+/* ── Sliding selection ──────────────────────────────────────────────
+   One marker a tab bar, segmented control or the sidebar moves to whatever is
+   selected, instead of each item drawing its own and the mark jumping
+   (slidingIndicator in lib/motion.js). Placed instantly at first and on a
+   resize; only a change of selection moves it. */
+.slide-mark {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+.slide-mark.moving {
+  transition:
+    transform 0.24s cubic-bezier(0.2, 0.7, 0.2, 1),
+    width 0.24s cubic-bezier(0.2, 0.7, 0.2, 1),
+    height 0.24s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.slide-underline {
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.slide-fill {
+  background: var(--accent-soft);
+}
+.slide-bar {
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+/* The moving mark stands in for each item's own. */
+.pill-tabs.slides > button.active::after {
+  display: none;
+}
+/* A segmented control's buttons are drawn opaque, one of them filled; with a
+   fill sliding underneath they go clear, and the control keeps their colour.
+   !important because each control's own styles are scoped, and more specific
+   than any shared rule can be. */
+.segmented.slides {
+  background: var(--bg);
+}
+.segmented.slides > button {
+  position: relative;
+  z-index: 1;
+  background: transparent !important;
 }
 
 .card {

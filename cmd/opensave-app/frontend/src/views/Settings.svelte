@@ -1,4 +1,5 @@
 <script>
+  import { slidingIndicator } from '../lib/motion.js';
   import { onMount, onDestroy } from 'svelte';
   import { settings, toast, askConfirm, gameList, navigate } from '../lib/stores.js';
   import { showSetupAgain } from '../lib/setup.js';
@@ -310,7 +311,7 @@
 {#if !draft}
   <Skeleton kind="cards" count={3} />
 {:else}
-  <div class="pill-tabs" style="margin-bottom: 18px;">
+  <div class="pill-tabs" style="margin-bottom: 18px;" use:slidingIndicator={{ inset: 10 }}>
     <button class:active={tab === 'general'} on:click={() => showTab('general')}>General</button>
     <button class:active={tab === 'sync'} on:click={() => showTab('sync')}>Sync</button>
     <button class:active={tab === 'storage'} on:click={() => showTab('storage')}>Storage</button>

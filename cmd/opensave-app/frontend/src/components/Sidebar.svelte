@@ -18,6 +18,7 @@
       revealed = next;
     }
   };
+  import { slidingIndicator } from '../lib/motion.js';
   import { view, navigate, settings, stateLoaded, gameList, conflictCount, pairingRequests, syncActivity } from '../lib/stores.js';
   import { gameCover } from '../lib/api.js';
   import CoverImage from './CoverImage.svelte';
@@ -68,7 +69,7 @@
     </div>
   </div>
 
-  <nav>
+  <nav use:slidingIndicator={{ mode: 'fill', className: 'slide-nav' }}>
     {#each nav as item}
       <button class:active={$view.name === item.id} on:click={() => navigate(item.id)}>
         <svelte:component this={item.icon} size={17} strokeWidth={1.8} />
@@ -224,6 +225,32 @@
     color: var(--text);
   }
   nav button.active::before {
+    content: '';
+    position: absolute;
+    left: -10px;
+    top: 9px;
+    bottom: 9px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
+  }
+  /* With the selection sliding (slidingIndicator, lib/motion.js), one marker
+     draws the active fill and its accent bar, and moves between items; the
+     buttons put theirs away and sit over it. */
+  nav:global(.slides) button {
+    z-index: 1;
+  }
+  nav:global(.slides) button.active {
+    background: transparent;
+  }
+  nav:global(.slides) button.active::before {
+    display: none;
+  }
+  nav :global(.slide-nav) {
+    background: var(--bg-active);
+    border-radius: var(--radius);
+  }
+  nav :global(.slide-nav)::before {
     content: '';
     position: absolute;
     left: -10px;

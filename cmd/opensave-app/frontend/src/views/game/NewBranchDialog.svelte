@@ -1,6 +1,7 @@
 <script>
   // What a new branch starts from. Fires `create` with true for a copy of the
   // current save, false for an empty one; `cancel` otherwise.
+  import { dialogOut } from '../../lib/motion.js';
   import { createEventDispatcher } from 'svelte';
   import GitBranch from 'lucide-svelte/icons/git-branch';
   import History from 'lucide-svelte/icons/history';
@@ -22,7 +23,7 @@
 <!-- The same furniture as the conflict modal on purpose — both are "this is
      about to touch your save folder, choose". -->
 <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
-<div class="overlay" on:click={() => dispatch('cancel')}>
+<div class="overlay" on:click={() => dispatch('cancel')} out:dialogOut|global>
   <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
   <div class="modal card" on:click|stopPropagation>
     <h3 class="with-icon"><GitBranch size={19} /> New branch — {name}</h3>

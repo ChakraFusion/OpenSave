@@ -5,7 +5,7 @@
   // but a library capsule only for some, and a custom cover is whatever shape
   // someone found. Art whose shape is far from the tile's is shown whole over
   // a blurred copy of itself rather than cropped to a sliver of its middle.
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy } from 'svelte';
   import Check from 'lucide-svelte/icons/check';
   import CoverImage from '../../components/CoverImage.svelte';
   import { gameCover, isDaemonURL } from '../../lib/api.js';
@@ -29,6 +29,24 @@
   export let enter = -1;
 
   const dispatch = createEventDispatcher();
+
+  // A sync that has just finished says so for a moment: a tick where the
+  // spinning icon was, then the tile goes back to saying when it synced. Only
+  // for a sync that ended well — one that failed says that instead.
+  let wasSyncing = false;
+  let justSynced = false;
+  let syncedTimer;
+  $: {
+    if (wasSyncing && status.state === 'synced') {
+      justSynced = true;
+      clearTimeout(syncedTimer);
+      syncedTimer = setTimeout(() => (justSynced = false), 1800);
+    } else if (status.state === 'syncing') {
+      justSynced = false;
+    }
+    wasSyncing = status.state === 'syncing';
+  }
+  onDestroy(() => clearTimeout(syncedTimer));
 
   // A custom cover wins in either style; otherwise Steam's art in the shape
   // asked for, which for tall art may still come back as the banner.
@@ -157,7 +175,7 @@
         />{:else if status.tone === 'busy'}<RefreshCw
           size={12}
           class="status-icon spin"
-        />{/if}<span class="status-text" title={status.label}>{status.label}</span>
+        />{:else if justSynced}<Check size={13} strokeWidth={2.6} class="status-icon synced" />{/if}<span class="status-text" title={status.label}>{status.label}</span>
     </div>
     {#if cover === 'wide'}
       <div class="meta">
@@ -381,6 +399,25 @@
   }
   .status :global(.spin) {
     animation: tile-spin 1.6s linear infinite;
+  }
+  /* The tick after a sync: in with a small overshoot, held, then out. */
+  .status :global(.synced) {
+    color: var(--success);
+    animation:
+      synced-in 0.32s cubic-bezier(0.2, 0.7, 0.2, 1.5) backwards,
+      synced-out 0.4s ease-in 1.4s forwards;
+  }
+  @keyframes synced-in {
+    from {
+      transform: scale(0.3);
+      opacity: 0;
+    }
+  }
+  @keyframes synced-out {
+    to {
+      opacity: 0;
+      transform: scale(0.8);
+    }
   }
   @keyframes tile-spin {
     to {

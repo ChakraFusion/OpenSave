@@ -1,4 +1,5 @@
 <script>
+  import { slidingIndicator } from '../lib/motion.js';
   import { onDestroy } from 'svelte';
   import Check from 'lucide-svelte/icons/check';
   import Dot from 'lucide-svelte/icons/dot';
@@ -68,7 +69,7 @@
 <div class="head">
   <div class="title-row">
     <h2 class="page-title">Activity</h2>
-    <div class="segmented" role="tablist" aria-label="Activity view">
+    <div class="segmented" role="tablist" aria-label="Activity view" use:slidingIndicator={{ mode: 'fill' }}>
       <button role="tab" aria-selected={view === 'timeline'} class:on={view === 'timeline'} on:click={() => (view = 'timeline')}>Timeline</button>
       <button role="tab" aria-selected={view === 'log'} class:on={view === 'log'} on:click={() => (view = 'log')}>Log</button>
     </div>

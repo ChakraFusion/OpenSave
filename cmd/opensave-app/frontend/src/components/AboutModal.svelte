@@ -1,4 +1,5 @@
 <script>
+  import { dialogOut } from '../lib/motion.js';
   import { onMount } from 'svelte';
   import { native } from '../lib/api.js';
   import { navigate } from '../lib/stores.js';
@@ -37,7 +38,7 @@
 
 <svelte:window on:keydown={onKeydown} />
 
-<div class="backdrop" use:backdropClose={onClose} role="presentation">
+<div class="backdrop" use:backdropClose={onClose} role="presentation" out:dialogOut|global>
   <div class="modal" role="dialog" aria-modal="true" aria-label="About OpenSave">
     <button class="btn ghost icon x" on:click={onClose} title="Close" aria-label="Close"><X size={18} /></button>
     <img class="logo" src={logoUrl} alt="" />

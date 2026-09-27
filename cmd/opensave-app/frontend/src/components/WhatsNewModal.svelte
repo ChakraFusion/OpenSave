@@ -1,4 +1,5 @@
 <script>
+  import { dialogOut } from '../lib/motion.js';
   import { backdropClose } from '../lib/backdrop.js';
   import ReleaseNotes from './ReleaseNotes.svelte';
   import DiscordBanner from './DiscordBanner.svelte';
@@ -22,7 +23,7 @@
 
 <svelte:window on:keydown={onKeydown} />
 
-<div class="backdrop" use:backdropClose={onClose} role="presentation">
+<div class="backdrop" use:backdropClose={onClose} role="presentation" out:dialogOut|global>
   <div class="modal" role="dialog" aria-modal="true" aria-label="What's new in OpenSave">
     <button class="btn ghost icon x" on:click={onClose} title="Close" aria-label="Close"><X size={18} /></button>
 

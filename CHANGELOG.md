@@ -20,6 +20,15 @@ All notable changes to OpenSave are documented here. This project adheres to
   the accent used as text on the page is deepened in the light theme and
   lifted in the dark one until it reads. The six there were look exactly
   as they did.
+- **Movement that says what happened.** Buttons give a little when pressed.
+  The notifications panel unfolds from the bell and folds back into it, its
+  items arriving one after another, and the badge pops when its count
+  changes. Dialogs and messages leave the way they came instead of
+  vanishing, and the messages left close up rather than jumping. Pages
+  cross-fade. The sidebar, the tab bars and the two- and three-way switches
+  slide their mark to what you pick. And a game's tile shows a tick for a
+  moment when a sync of it has finished. All of it follows Settings →
+  Appearance → Animations, and the system's setting to reduce motion.
 
 ### Changed
 
@@ -48,6 +57,8 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Fixed
 
+- **A new page opens at its top.** Moving between pages kept the scroll
+  position, so Activity could open half-way down because Settings had been.
 - **The Changelog no longer sits in one corner of a large window.** Full
   screen, it hugged the left edge with most of the window empty beside it;
   it is now a column of a readable width in the middle.

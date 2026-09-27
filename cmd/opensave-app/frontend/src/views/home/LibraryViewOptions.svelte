@@ -2,6 +2,7 @@
   // How the library looks: cover style, tiles per row, tile size. Shown in
   // Settings and in the library's View menu; both change the same thing, at
   // once. See lib/libraryview.js.
+  import { slidingIndicator } from '../../lib/motion.js';
   import { libraryView, COVER_STYLES, TILE_SIZES, COLUMN_CHOICES } from '../../lib/libraryview.js';
 
   const set = (patch) => libraryView.update((v) => ({ ...v, ...patch }));
@@ -40,7 +41,7 @@
 
     <div class="group">
       <span class="label">Tile size</span>
-      <div class="segmented" class:off={$libraryView.columns !== 'auto'}>
+      <div class="segmented" class:off={$libraryView.columns !== 'auto'} use:slidingIndicator={{ mode: 'fill' }}>
         {#each Object.entries(TILE_SIZES) as [id, label]}
           <button
             class:on={$libraryView.size === id}

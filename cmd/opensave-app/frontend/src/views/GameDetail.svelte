@@ -1,4 +1,5 @@
 <script>
+  import { slidingIndicator } from '../lib/motion.js';
   import { games } from '../lib/stores.js';
   import { createRunner } from '../lib/runner.js';
   import GameHeader from './game/GameHeader.svelte';
@@ -56,7 +57,7 @@
   {#key params.gameId}
     <GameHeader {game} {runner} />
 
-    <div class="pill-tabs tabs">
+    <div class="pill-tabs tabs" use:slidingIndicator={{ inset: 10 }}>
       {#each tabs as t (t.id)}
         <button class:active={tab === t.id} on:click={() => (tab = t.id)}><svelte:component this={t.icon} size={15} />{t.label}</button>
       {/each}

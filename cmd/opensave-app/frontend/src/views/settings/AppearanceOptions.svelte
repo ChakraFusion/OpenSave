@@ -6,7 +6,7 @@
   import Sun from 'lucide-svelte/icons/sun';
   import MonitorCog from 'lucide-svelte/icons/monitor-cog';
   import { appearance, THEMES, ACCENTS, SCALES, onAccent } from '../../lib/appearance.js';
-  import { systemReducesMotion } from '../../lib/motion.js';
+  import { systemReducesMotion, slidingIndicator } from '../../lib/motion.js';
 
   const set = (patch) => appearance.update((v) => ({ ...v, ...patch }));
   const themeIcons = { dark: Moon, light: Sun, system: MonitorCog };
@@ -15,7 +15,7 @@
 <div class="options">
   <div class="group">
     <span class="label" id="ap-theme">Theme</span>
-    <div class="segmented" role="radiogroup" aria-labelledby="ap-theme">
+    <div class="segmented" role="radiogroup" aria-labelledby="ap-theme" use:slidingIndicator={{ mode: 'fill' }}>
       {#each Object.entries(THEMES) as [id, label]}
         <button role="radio" aria-checked={$appearance.theme === id} class:on={$appearance.theme === id} on:click={() => set({ theme: id })}>
           <svelte:component this={themeIcons[id]} size={14} />{label}
@@ -130,10 +130,24 @@
     place-items: center;
     cursor: pointer;
     box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.15);
-    transition: transform 0.12s;
+    transition: transform 0.16s cubic-bezier(0.2, 0.7, 0.2, 1.4);
   }
   .swatch:hover {
     transform: scale(1.08);
+  }
+  .swatch:active {
+    transform: scale(0.92);
+    transition-duration: 0.06s;
+  }
+  /* The tick pops in on the colour just chosen. */
+  .swatch :global(svg) {
+    animation: tick-pop 0.24s cubic-bezier(0.2, 0.7, 0.2, 1.5) backwards;
+  }
+  @keyframes tick-pop {
+    from {
+      transform: scale(0.3);
+      opacity: 0;
+    }
   }
   .swatch[aria-checked='true'] {
     box-shadow:

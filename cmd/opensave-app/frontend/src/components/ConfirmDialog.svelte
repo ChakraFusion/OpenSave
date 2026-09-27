@@ -1,4 +1,5 @@
 <script>
+  import { dialogOut } from '../lib/motion.js';
   import { confirmRequest, answerConfirm } from '../lib/stores.js';
   import { backdropClose } from '../lib/backdrop.js';
 
@@ -18,7 +19,7 @@
 <svelte:window on:keydown={onKeydown} />
 
 {#if $confirmRequest}
-  <div class="backdrop" use:backdropClose={() => answerConfirm(false)} role="presentation">
+  <div class="backdrop" use:backdropClose={() => answerConfirm(false)} role="presentation" out:dialogOut|global>
     <div class="modal card" role="alertdialog" aria-modal="true" aria-label={$confirmRequest.title}>
       <h3>{$confirmRequest.title}</h3>
       <p class="message">{$confirmRequest.message}</p>

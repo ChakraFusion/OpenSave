@@ -8,6 +8,7 @@
   // click that starts and ends on the backdrop (see backdrop.js for why both).
   // `closable` turns all three off at once, for a dialog that must not be
   // dismissed while it is writing something.
+  import { dialogOut } from '../../lib/motion.js';
   import { onMount } from 'svelte';
   import X from 'lucide-svelte/icons/x';
   import { backdropClose } from '../../lib/backdrop.js';
@@ -38,6 +39,7 @@
 
 <div
   class="overlay"
+  out:dialogOut|global
   use:backdropClose={close}
   on:keydown={(e) => e.key === 'Escape' && close()}
   role="presentation"

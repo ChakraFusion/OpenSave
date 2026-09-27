@@ -7,6 +7,7 @@
   import TriangleAlert from 'lucide-svelte/icons/triangle-alert';
   import Info from 'lucide-svelte/icons/info';
   import CoverImage from './CoverImage.svelte';
+  import { unfold } from '../lib/motion.js';
   import { api, gameCover } from '../lib/api.js';
   import { stateLoaded, games, conflicts, locationConflicts, pairingRequests, cloudOffers, newGames, navigate, activityTick, availableUpdate } from '../lib/stores.js';
   import { waitingOnYou, happened, badgeCount, loadSeenAt, saveSeenAt, exampleEvents } from '../lib/notifications.js';
@@ -95,11 +96,12 @@
     aria-expanded={open}
   >
     <Bell size={14} />
-    {#if count}<span class="badge">{count > 9 ? '9+' : count}</span>{/if}
+    {#if count}{#key count}<span class="badge">{count > 9 ? '9+' : count}</span>{/key}{/if}
   </button>
 
   {#if open}
-    <div class="panel" bind:this={panel} role="dialog" aria-label="Notifications">
+    <!-- Unfolds out of the bell and folds back into it (lib/motion.js). -->
+    <div class="panel" bind:this={panel} role="dialog" aria-label="Notifications" transition:unfold>
       <div class="head">
         <span class="title">Notifications</span>
         {#if events.some((e) => e.unread)}
@@ -109,8 +111,8 @@
       <div class="scroll">
         {#if waiting.length}
           <div class="section">Needs you</div>
-          {#each waiting as w (w.id)}
-            <button class="item tone-{w.tone}" on:click={() => go(w)}>
+          {#each waiting as w, i (w.id)}
+            <button class="item tone-{w.tone}" style="--i: {i}" on:click={() => go(w)}>
               {#if w.gameId && $games[w.gameId]}
                 <span class="thumb"><span class="initials">{initials($games[w.gameId].name)}</span><CoverImage src={gameCover($games[w.gameId])} alt="" /></span>
               {:else}
@@ -122,8 +124,8 @@
         {/if}
         {#if events.length}
           <div class="section">Earlier</div>
-          {#each events as e (e.id)}
-            <button class="item" class:unread={e.unread} on:click={() => go(e)}>
+          {#each events as e, i (e.id)}
+            <button class="item" class:unread={e.unread} style="--i: {Math.min(waiting.length + i, 10)}" on:click={() => go(e)}>
               {#if e.example}
                 <span class="thumb icon"><Info size={15} /></span>
               {:else}
@@ -167,6 +169,14 @@
     display: grid;
     place-items: center;
     cursor: pointer;
+    transition:
+      background 0.12s,
+      color 0.12s,
+      transform 0.16s cubic-bezier(0.2, 0.7, 0.2, 1.4);
+  }
+  .bell:active {
+    transform: scale(0.9);
+    transition-duration: 0.06s;
   }
   .bell:hover,
   .bell[aria-expanded='true'] {
@@ -187,6 +197,13 @@
     font-weight: 700;
     line-height: 15px;
     text-align: center;
+    /* Keyed on the count, so it pops each time the number changes. */
+    animation: badge-pop 0.3s cubic-bezier(0.2, 0.7, 0.2, 1.5) backwards;
+  }
+  @keyframes badge-pop {
+    from {
+      transform: scale(0.4);
+    }
   }
   .panel {
     position: absolute;
@@ -246,6 +263,15 @@
     font: inherit;
     text-align: left;
     cursor: pointer;
+    /* One after another as the panel opens, and a new one as it arrives. */
+    animation: item-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+    animation-delay: calc(40ms + var(--i, 0) * 24ms);
+  }
+  @keyframes item-in {
+    from {
+      opacity: 0;
+      transform: translateY(5px);
+    }
   }
   .item:hover {
     background: var(--bg-hover);

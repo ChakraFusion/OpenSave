@@ -1,4 +1,5 @@
 <script>
+  import { slidingIndicator } from '../lib/motion.js';
   import { peers, discoveredPeers, wanRoom, appUpdate, toast, askConfirm } from '../lib/stores.js';
   import { api, native } from '../lib/api.js';
   import InternetSync from './InternetSync.svelte';
@@ -127,7 +128,7 @@
 {/if}
 
 <h3 class="section">Add a device</h3>
-<div class="pill-tabs connect-tabs">
+<div class="pill-tabs connect-tabs" use:slidingIndicator={{ inset: 10 }}>
   <button class:active={connectTab === 'lan'} on:click={() => (connectTab = 'lan')}><Network size={15} />On this network</button>
   <button class:active={connectTab === 'wan'} on:click={() => (connectTab = 'wan')}>
     <Globe size={15} />Over the internet

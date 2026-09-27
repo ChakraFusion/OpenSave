@@ -7,6 +7,7 @@
   // here would do something to the save folder while the user was looking at
   // a settings folder. Two answers only, and the screen says which folder it
   // is asking about in every sentence.
+  import { dialogOut } from '../lib/motion.js';
   import { locationConflicts, games, toast } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { demandAttention } from '../lib/notify.js';
@@ -99,7 +100,7 @@
 </script>
 
 {#if current}
-  <div class="overlay">
+  <div class="overlay" out:dialogOut|global>
     <div class="modal card">
       <h3 class="with-icon"><FolderOpen size={20} /> “{current.root}” folder — {gameName}</h3>
       <p class="desc">
