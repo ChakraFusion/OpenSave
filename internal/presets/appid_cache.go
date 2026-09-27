@@ -107,13 +107,28 @@ func LookupSteamApp(appID string) (string, error) {
 	var payload map[string]struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Name string `json:"name"`
+			Name       string      `json:"name"`
+			SteamAppID json.Number `json:"steam_appid"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	dec := json.NewDecoder(resp.Body)
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
 		return "", err
 	}
 	entry, ok := payload[appID]
+	if !ok {
+		// Steam answers some ids under another key — Elden Ring's 1245620
+		// under 2855530, an edition of it — and names the app it is about
+		// inside. That answer is about this id all the same; an answer about
+		// some other app is not.
+		for _, e := range payload {
+			if e.Data.SteamAppID.String() == appID {
+				entry, ok = e, true
+				break
+			}
+		}
+	}
 	if !ok || !entry.Success || entry.Data.Name == "" {
 		return "", ErrSteamAppUnknown
 	}

@@ -79,6 +79,12 @@ All notable changes to OpenSave are documented here. This project adheres to
   switch to. And a device following another onto a branch it has not got
   fetches that device's save rather than reading its own empty folder as a
   deletion — which switching branches by hand could also set off.
+- **Well-known games are no longer called "not a Steam game".** Steam has
+  begun answering some App IDs under the id of an edition — Elden Ring's
+  1245620 comes back as 2855530 — and OpenSave read only the id it asked
+  about. The App ID field told people a correct number was wrong, and a scan
+  could lose those games' names. The answer is now read by the app it says
+  it is about.
 - **Cloud backup is only called set up when it is.** A new install has cloud
   backup switched on with no folder or account chosen. Home showed it as
   "Local Folder", the setup guide counted it as done and never asked, and

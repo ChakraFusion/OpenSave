@@ -81,3 +81,30 @@ func TestFetchSteamAppName_StillEmptyOnFailure(t *testing.T) {
 		t.Errorf("fetchSteamAppName returned %q on a failure; want empty", got)
 	}
 }
+
+// Steam answers some App IDs under another key: asked about 1245620 (Elden
+// Ring), it keys the answer "2855530", an edition of it, and says in the
+// answer that it is steam_appid 1245620. Read only under the id asked about,
+// that answer said "no Steam game has this App ID" of a game everyone knows.
+func TestLookupSteamApp_AnAnswerKeyedByAnotherIDStillCounts(t *testing.T) {
+	stubSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"2855530":{"success":true,"data":{"type":"game","name":"ELDEN RING","steam_appid":1245620}}}`))
+	})
+	name, err := LookupSteamApp("1245620")
+	if err != nil {
+		t.Fatalf("a real game reported as %v", err)
+	}
+	if name != "ELDEN RING" {
+		t.Errorf("name = %q", name)
+	}
+}
+
+// But an answer about some other app is not an answer about this one.
+func TestLookupSteamApp_AnAnswerAboutAnotherAppIsNot(t *testing.T) {
+	stubSteam(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"2855530":{"success":true,"data":{"type":"game","name":"Something Else","steam_appid":2855530}}}`))
+	})
+	if _, err := LookupSteamApp("1245620"); !errors.Is(err, ErrSteamAppUnknown) {
+		t.Errorf("err = %v, want ErrSteamAppUnknown", err)
+	}
+}
