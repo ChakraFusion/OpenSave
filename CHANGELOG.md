@@ -32,6 +32,17 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Changed
 
+- **`opensave` says whether cloud backup is working.** The overview gains a
+  `cloud` line: backing up, and to where; not set up; or off. `--json`
+  carries `cloudEnabled`, `cloudReady` and `cloudProvider`.
+- **Counts read as English.** "1 snapshot", "3 games" — no more
+  "snapshot(s)", in the app or the command line. The status bar counts
+  devices online rather than peers, as the rest of the app does.
+- **A handheld looks like one.** A device set to "Handheld (ROG Ally / Legion
+  Go)" showed as a computer on the Devices page; only a Steam Deck showed as
+  a handheld.
+- **Snapshots lose their coloured edges.** The tag on each one already says
+  what kind it is. Settings → Appearance lines its labels up across the top.
 - **Launch starts the program you set.** A game with an executable set is
   started with it, even when it also has a Steam App ID — which is often
   there only for its name and cover, and launched a different copy through
