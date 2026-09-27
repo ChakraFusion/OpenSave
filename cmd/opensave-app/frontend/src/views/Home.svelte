@@ -87,7 +87,7 @@
   $: showGuide =
     $setupState.seen &&
     !$setupState.dismissed &&
-    !setupSteps({ games: $gameList.length, peers: Object.keys($peers).length, cloud: $settings?.cloudSync?.enabled, skipped: $setupState.skipped }).finished;
+    !setupSteps({ games: $gameList.length, peers: Object.keys($peers).length, cloud: $settings?.cloudSync?.ready, skipped: $setupState.skipped }).finished;
 
   $: rows = $visibleGames.map((game) => ({
     game,

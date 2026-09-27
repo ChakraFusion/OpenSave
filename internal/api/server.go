@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	cloudsvc "github.com/opensave/opensave/internal/cloud"
 	"github.com/opensave/opensave/internal/daemon"
 	"github.com/opensave/opensave/internal/logging"
 	"github.com/opensave/opensave/internal/p2p"
@@ -402,8 +403,11 @@ func (s *Server) settingsWire() map[string]any {
 
 	cloud, err := s.Daemon.Store.GetCloudConfig()
 	if err == nil {
+		// "ready" is on and with somewhere to send to (cloud.Ready). The UI
+		// says cloud backup is set up only when it is true.
 		out["cloudSync"] = map[string]any{
 			"enabled":             cloud.Enabled,
+			"ready":               cloudsvc.Ready(cloud),
 			"provider":            cloud.Provider,
 			"url":                 cloud.URL,
 			"username":            cloud.Username,

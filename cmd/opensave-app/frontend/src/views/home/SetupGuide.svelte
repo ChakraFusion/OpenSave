@@ -19,7 +19,7 @@
   $: plan = setupSteps({
     games: $gameList.length,
     peers: Object.keys($peers).length,
-    cloud: $settings?.cloudSync?.enabled,
+    cloud: $settings?.cloudSync?.ready,
     skipped: $setupState.skipped
   });
   const skip = (id) => setupState.update((s) => ({ ...s, skipped: [...new Set([...s.skipped, id])] }));

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/opensave/opensave/internal/cloud"
 	"github.com/opensave/opensave/internal/snapshot"
 	"github.com/opensave/opensave/internal/store"
 )
@@ -76,7 +77,7 @@ func (d *Daemon) RepairSnapshots(ctx context.Context) (RepairReport, error) {
 	// branch it was uploaded under — a snapshot moved by linking two games
 	// kept its id and may still carry its old names in the cloud.
 	inCloud := map[string]string{}
-	if cfg, cErr := d.Store.GetCloudConfig(); cErr == nil && cfg.Enabled && cloudListable(cfg.Provider) {
+	if cfg, cErr := d.Store.GetCloudConfig(); cErr == nil && cloud.Ready(cfg) && cloudListable(cfg.Provider) {
 		files, lErr := d.Cloud.List()
 		if lErr != nil {
 			report.CloudError = lErr.Error()

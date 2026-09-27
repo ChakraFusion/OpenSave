@@ -133,7 +133,7 @@ async function offerCloudCleanup(game) {
   } catch {
     return;
   }
-  if (!settings?.cloudSync?.enabled) return;
+  if (!settings?.cloudSync?.ready) return;
   toast(`${game.name}'s cloud snapshots were kept.`, 'info', {
     ttl: 12000,
     action: {

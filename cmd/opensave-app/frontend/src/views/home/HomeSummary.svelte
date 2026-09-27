@@ -76,8 +76,14 @@
         ? `${paired[0].name} · ${online.length ? 'online' : 'offline'}`
         : `${online.length} of ${paired.length} online`;
 
-  $: cloudOn = !!$settings?.cloudSync?.enabled;
-  $: cloud = cloudOn ? (providerById($settings.cloudSync.provider)?.label ?? 'On') : 'Off';
+  // Set up, not just switched on: a fresh install has backup on with no
+  // folder chosen, which backs up nothing.
+  $: cloudOn = !!$settings?.cloudSync?.ready;
+  $: cloud = cloudOn
+    ? (providerById($settings.cloudSync.provider)?.label ?? 'On')
+    : $settings?.cloudSync?.enabled
+      ? 'Not set up'
+      : 'Off';
 
   $: space = spaceUsed(Object.fromEntries(rows.map((r) => [r.game.id, r.game])));
 

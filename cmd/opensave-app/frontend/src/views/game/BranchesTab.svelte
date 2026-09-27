@@ -3,6 +3,7 @@
   // a run kept apart from the main one.
   import { askConfirm } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
+  import { plural } from '../../lib/format.js';
   import NewBranchDialog from './NewBranchDialog.svelte';
   import Plus from 'lucide-svelte/icons/plus';
 
@@ -59,7 +60,7 @@
           <span class="name">{branch.name}</span>
           {#if branch.name === game.activeBranch}<span class="badge online">active</span>{/if}
         </div>
-        <div class="meta">{branch.snapshots?.length ?? 0} snapshot(s)</div>
+        <div class="meta">{plural(branch.snapshots?.length ?? 0, 'snapshot')}</div>
       </div>
       {#if branch.name !== game.activeBranch}
         <div class="actions">

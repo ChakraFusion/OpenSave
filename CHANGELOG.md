@@ -68,6 +68,13 @@ All notable changes to OpenSave are documented here. This project adheres to
   switch to. And a device following another onto a branch it has not got
   fetches that device's save rather than reading its own empty folder as a
   deletion — which switching branches by hand could also set off.
+- **Cloud backup is only called set up when it is.** A new install has cloud
+  backup switched on with no folder or account chosen. Home showed it as
+  "Local Folder", the setup guide counted it as done and never asked, and
+  every snapshot was logged as "uploading" and then went nowhere. Home now
+  says "Not set up" until a folder is chosen or an account signed in, the
+  setup guide asks, and nothing claims to upload until there is somewhere to
+  upload to.
 - **Quitting as a game is tracked or a snapshot starts waits for it
   properly.** Shutdown waits for snapshots and cloud copies still being
   written, and one that started just as it began waiting was counted in a

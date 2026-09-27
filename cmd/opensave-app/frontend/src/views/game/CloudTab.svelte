@@ -1,7 +1,7 @@
 <script>
   // This game's snapshots in the cloud backup: restore one, or send up the
   // ones that are only here.
-  import { navigate, toast, askConfirm } from '../../lib/stores.js';
+  import { navigate, toast, askConfirm, settings } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import { fmtSize } from '../../lib/format.js';
   import Spinner from '../../components/ui/Spinner.svelte';
@@ -62,10 +62,14 @@
   {:else if !snaps || snaps.length === 0}
     <div class="quiet-block">
       <p>No cloud snapshots for this game yet.</p>
-      <p class="hint">
-        Enable a provider in <button class="linklike" on:click={() => navigate('cloud')}>Cloud Backup</button>,
-        then use “Upload local snapshots”.
-      </p>
+      {#if $settings?.cloudSync?.ready}
+        <p class="hint">New snapshots are copied up as they are taken. “Upload local snapshots” sends the ones from before.</p>
+      {:else}
+        <p class="hint">
+          Set up a provider in <button class="linklike" on:click={() => navigate('cloud')}>Cloud Backup</button>,
+          then use “Upload local snapshots”.
+        </p>
+      {/if}
     </div>
   {:else}
     <table>

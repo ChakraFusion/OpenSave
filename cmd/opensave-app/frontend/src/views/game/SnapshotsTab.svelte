@@ -274,7 +274,6 @@
     gap: 16px;
     padding: 11px 16px;
     border-top: 1px solid var(--border);
-    border-left: 3px solid transparent;
   }
   .row:first-child {
     border-top: none;
@@ -282,18 +281,6 @@
   .row:hover,
   .row.open {
     background: var(--bg-hover);
-  }
-  /* A copy kept before OpenSave replaced the save is the one you look for
-     after something went wrong, so it is marked out from the rest. */
-  .row.kind-safety {
-    border-left-color: var(--warn);
-  }
-  .row.kind-manual {
-    border-left-color: var(--accent);
-  }
-  /* The save as a play session left it: a save point by nature. */
-  .row.kind-session {
-    border-left-color: var(--success);
   }
   .when {
     display: flex;
@@ -342,6 +329,9 @@
     color: var(--text-dim);
     white-space: nowrap;
   }
+  /* The kind is told by its tag alone. A copy kept before OpenSave replaced
+     the save is the one you look for after something went wrong, so its tag
+     is the one in the warning colour. */
   .kind-safety .tag.kind {
     border-color: rgba(var(--warn-rgb), 0.45);
     color: var(--warn);

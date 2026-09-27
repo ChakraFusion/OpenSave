@@ -94,6 +94,37 @@ func IsNotConfigured(err error) bool {
 		strings.Contains(msg, "not authenticated")
 }
 
+// Ready reports whether cfg can send anything: backup is on, and the
+// provider it names has somewhere to send to — a folder or an address, or a
+// sign-in.
+//
+// On is not the same thing. A fresh install has backup on, with the local
+// folder provider and no folder chosen: every snapshot then announced it was
+// "uploading", failed, and said nothing more, and the home screen reported
+// cloud backup as set up. Nothing had been backed up anywhere.
+func Ready(cfg store.CloudConfig) bool {
+	if !cfg.Enabled {
+		return false
+	}
+	switch cfg.Provider {
+	case "local", "webdav", "webhook":
+		return strings.TrimSpace(cfg.URL) != ""
+	case "google_drive", "dropbox", "onedrive":
+		return cfg.AccessToken != "" || cfg.RefreshToken != ""
+	}
+	return false
+}
+
+// notReady is the error for a config that is on but not Ready, worded so
+// IsNotConfigured recognises it.
+func notReady(cfg store.CloudConfig) error {
+	switch cfg.Provider {
+	case "google_drive", "dropbox", "onedrive":
+		return fmt.Errorf("cloud sync not authenticated")
+	}
+	return fmt.Errorf("no %s destination configured", cfg.Provider)
+}
+
 func (s *Service) config() (store.CloudConfig, error) {
 	cfg, err := s.Store.GetCloudConfig()
 	if err != nil {
@@ -249,6 +280,12 @@ func (s *Service) upload(filePath, fileName string, logged bool) error {
 	cfg, err := s.config()
 	if err != nil {
 		return err
+	}
+	// Before anything is said: "uploading" is only true of a copy that has
+	// somewhere to go. (A provider this build does not know is refused
+	// plainly below, not taken for one waiting to be set up.)
+	if _, known := s.providerFor(cfg); known && !Ready(cfg) {
+		return notReady(cfg)
 	}
 
 	f, err := os.Open(filePath)

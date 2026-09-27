@@ -196,7 +196,7 @@ func (d *Daemon) noteRestoreForCloud(snap store.Snapshot) {
 // publishHead announces the game's current save in the cloud.
 func (d *Daemon) publishHead(gameID string) error {
 	cfg, err := d.Store.GetCloudConfig()
-	if err != nil || !cfg.Enabled || !cloudListable(cfg.Provider) {
+	if err != nil || !cloud.Ready(cfg) || !cloudListable(cfg.Provider) {
 		return nil
 	}
 	d.cloudRd.heads.Lock()
@@ -415,7 +415,7 @@ func (d *Daemon) CheckCloud() {
 	defer d.cloudRd.check.Unlock()
 
 	cfg, err := d.Store.GetCloudConfig()
-	if err != nil || !cfg.Enabled || !cloudListable(cfg.Provider) {
+	if err != nil || !cloud.Ready(cfg) || !cloudListable(cfg.Provider) {
 		d.setCloudOffers(nil)
 		return
 	}
