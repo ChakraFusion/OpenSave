@@ -32,6 +32,12 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Changed
 
+- **A conflict can wait.** The question used to fill the window until it
+  was answered, so nothing else could be looked at first — not even the
+  game's own snapshots. "Decide later" (or Esc) puts it aside; nothing of
+  that game syncs meanwhile, Home and the bell say it is waiting, and it
+  comes back when the game is opened. The two sides are shown with the right
+  device icons, a handheld as a handheld.
 - **`opensave` says whether cloud backup is working.** The overview gains a
   `cloud` line: backing up, and to where; not set up; or off. `--json`
   carries `cloudEnabled`, `cloudReady` and `cloudProvider`.

@@ -1,10 +1,12 @@
 <script>
   import { dialogOut } from '../lib/motion.js';
-  import { conflicts, conflictResolution, games, toast } from '../lib/stores.js';
+  import { conflicts, conflictResolution, games, peers, settings, toast, view } from '../lib/stores.js';
+  import { isHandheld } from '../lib/devices.js';
+  import { visited } from '../lib/later.js';
   import { api } from '../lib/api.js';
   import { demandAttention } from '../lib/notify.js';
   import Chevron from './ui/Chevron.svelte';
-  import Laptop from 'lucide-svelte/icons/laptop';
+  import Gamepad2 from 'lucide-svelte/icons/gamepad-2';
   import Monitor from 'lucide-svelte/icons/monitor';
   import History from 'lucide-svelte/icons/history';
   import GitCompareArrows from 'lucide-svelte/icons/git-compare-arrows';
@@ -18,8 +20,31 @@
   // relay pull) runs in the background and only clears the conflict once
   // it finishes — but the user already made their choice, so don't keep
   // the modal (or its disabled buttons) on screen.
-  $: entries = Object.entries($conflicts).filter(([gid]) => !applying.has(gid));
+  // Put off: the decision can wait — nothing of that game syncs until it is
+  // made, and Home, its tile and the bell all say it is waiting. It stays out
+  // of the way until that game's page is opened again (from any of those), or
+  // the app starts again. Remembered with the page it was put off from, so
+  // putting it off while on the game's own page does not bring it straight
+  // back.
+  //
+  // A reactive declaration, not a function that assigns it: assigned from
+  // inside a function, `entries` below had already been worked out for that
+  // update and never saw the game come back.
+  let later = new Map(); // gameId → the view it was put off from
+  $: later = visited(later, $view);
+
+  $: pending = Object.entries($conflicts).filter(([gid]) => !applying.has(gid));
+  $: entries = pending.filter(([gid]) => !later.has(gid));
   $: current = entries[0]; // one at a time
+
+  function putOff() {
+    if (!current || busy) return;
+    later = new Map(later).set(current[0], $view);
+    showDiff = false;
+  }
+  const onKey = (e) => {
+    if (e.key === 'Escape' && current) putOff();
+  };
 
   // When a background resolution reports back: on failure the conflict is
   // still active, so un-hide it (the modal reappears with the error toast
@@ -34,10 +59,14 @@
   $: gameName = current ? ($games[current[0]]?.name ?? current[0]) : '';
   $: conflict = current ? current[1] : null;
   $: peerName = conflict ? (conflict.peer.Name ?? conflict.peer.name ?? 'the other device') : '';
+  $: peerType = conflict ? $peers[conflict.peer.ID ?? conflict.peer.id]?.deviceType : '';
+  $: localIcon = isHandheld($settings?.deviceType) ? Gamepad2 : Monitor;
+  $: peerIcon = isHandheld(peerType) ? Gamepad2 : Monitor;
 
   // Announce new conflicts: chime + surface the window + toast, same
   // treatment as incoming pairing requests.
-  $: onConflicts(entries);
+  // Announced once each, whether or not it has been put off.
+  $: onConflicts(pending);
   function onConflicts(list) {
     const fresh = list.filter(([gid]) => !seen.has(gid));
     if (fresh.length > 0) {
@@ -139,6 +168,8 @@
     s === 'changed' ? 'differs' : s === 'only-remote' ? `only on ${peerName}` : 'only on this device';
 </script>
 
+<svelte:window on:keydown={onKey} />
+
 {#if current && conflict}
   <div class="overlay" out:dialogOut|global>
     <div class="modal card">
@@ -151,7 +182,7 @@
       <div class="versions">
         <div class="version" class:newer={newerSide === 'local'}>
           <div class="v-head">
-            <span class="v-title with-icon"><Laptop size={16} /> This device</span>
+            <span class="v-title with-icon"><svelte:component this={localIcon} size={16} /> This device</span>
             {#if newerSide === 'local'}<span class="v-badge">played more recently</span>{/if}
           </div>
           <div class="v-diff">
@@ -169,7 +200,7 @@
         </div>
         <div class="version" class:newer={newerSide === 'remote'}>
           <div class="v-head">
-            <span class="v-title with-icon"><Monitor size={16} /> {peerName}</span>
+            <span class="v-title with-icon"><svelte:component this={peerIcon} size={16} /> {peerName}</span>
             {#if newerSide === 'remote'}<span class="v-badge">played more recently</span>{/if}
           </div>
           <div class="v-diff">
@@ -217,6 +248,7 @@
       {/if}
 
       <div class="actions">
+        <button class="btn ghost later" disabled={busy} on:click={putOff} title="Nothing of this game syncs until you decide. Open the game to decide.">Decide later</button>
         <button class="btn" disabled={busy} on:click={() => resolve('keep-local')}>Keep mine</button>
         <button class="btn" disabled={busy} on:click={() => resolve('keep-remote')}>Keep theirs</button>
         <button class="btn primary" disabled={busy} on:click={() => resolve('merge-branch')}>
@@ -408,6 +440,10 @@
     gap: 8px;
     justify-content: flex-end;
     flex-wrap: wrap;
+  }
+  /* Apart from the three answers: it is not one of them. */
+  .actions .later {
+    margin-right: auto;
   }
   .hint-line {
     margin-top: 12px;

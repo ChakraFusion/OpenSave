@@ -2,12 +2,12 @@
   // A paired or discovered device, by kind: a handheld or a computer.
   import Gamepad2 from 'lucide-svelte/icons/gamepad-2';
   import Monitor from 'lucide-svelte/icons/monitor';
+  import { isHandheld } from '../lib/devices.js';
 
-  /** The device's reported type: 'deck' and 'handheld' (an Ally, a Legion
-   *  Go — both offered in Settings) are handhelds, anything else a computer. */
+  /** The device's reported type. */
   export let type = '';
 
-  $: handheld = type === 'deck' || type === 'handheld';
+  $: handheld = isHandheld(type);
 </script>
 
 <span class="device-icon" title={handheld ? 'Handheld' : 'Computer'}>

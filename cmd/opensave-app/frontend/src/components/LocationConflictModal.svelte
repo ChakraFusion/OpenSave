@@ -8,11 +8,13 @@
   // a settings folder. Two answers only, and the screen says which folder it
   // is asking about in every sentence.
   import { dialogOut } from '../lib/motion.js';
-  import { locationConflicts, games, toast } from '../lib/stores.js';
+  import { locationConflicts, games, peers, settings, toast, view } from '../lib/stores.js';
+  import { isHandheld } from '../lib/devices.js';
+  import { visited } from '../lib/later.js';
   import { api } from '../lib/api.js';
   import { demandAttention } from '../lib/notify.js';
   import Chevron from './ui/Chevron.svelte';
-  import Laptop from 'lucide-svelte/icons/laptop';
+  import Gamepad2 from 'lucide-svelte/icons/gamepad-2';
   import Monitor from 'lucide-svelte/icons/monitor';
   import History from 'lucide-svelte/icons/history';
   import FolderOpen from 'lucide-svelte/icons/folder-open';
@@ -24,10 +26,26 @@
 
   const keyOf = (c) => `${c.gameId}\u0000${c.root}`;
 
-  $: pending = ($locationConflicts ?? []).filter((c) => !applying.has(keyOf(c)));
+  // Put off as on the whole-game screen (ConflictModal): out of the way until
+  // the game's page is opened again.
+  let later = new Map(); // keyOf(c) → the view it was put off from
+  $: later = visited(later, $view, (key) => key.split('\u0000')[0]);
+  const putOff = () => {
+    if (!current || busy) return;
+    later = new Map(later).set(keyOf(current), $view);
+    showDiff = false;
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape' && current) putOff();
+  };
+
+  $: pending = ($locationConflicts ?? []).filter((c) => !applying.has(keyOf(c)) && !later.has(keyOf(c)));
   $: current = pending[0]; // one at a time, like the whole-game screen
   $: gameName = current ? ($games[current.gameId]?.name ?? current.gameId) : '';
   $: peerName = current ? (current.peer?.name ?? current.peer?.Name ?? 'the other device') : '';
+  $: peerType = current ? $peers[current.peer?.id ?? current.peer?.ID]?.deviceType : '';
+  $: localIcon = isHandheld($settings?.deviceType) ? Gamepad2 : Monitor;
+  $: peerIcon = isHandheld(peerType) ? Gamepad2 : Monitor;
 
   // Announce new ones the same way a save conflict is announced: this is
   // still "something of yours needs a decision before it can sync".
@@ -99,6 +117,8 @@
   }
 </script>
 
+<svelte:window on:keydown={onKey} />
+
 {#if current}
   <div class="overlay" out:dialogOut|global>
     <div class="modal card">
@@ -112,7 +132,7 @@
       <div class="versions">
         <div class="version" class:newer={newerSide === 'local'}>
           <div class="v-head">
-            <span class="v-title with-icon"><Laptop size={16} /> This device</span>
+            <span class="v-title with-icon"><svelte:component this={localIcon} size={16} /> This device</span>
             {#if newerSide === 'local'}<span class="v-badge">changed more recently</span>{/if}
           </div>
           <div class="v-diff">
@@ -127,7 +147,7 @@
         </div>
         <div class="version" class:newer={newerSide === 'remote'}>
           <div class="v-head">
-            <span class="v-title with-icon"><Monitor size={16} /> {peerName}</span>
+            <span class="v-title with-icon"><svelte:component this={peerIcon} size={16} /> {peerName}</span>
             {#if newerSide === 'remote'}<span class="v-badge">changed more recently</span>{/if}
           </div>
           <div class="v-diff">
@@ -163,6 +183,7 @@
       {/if}
 
       <div class="actions">
+        <button class="btn ghost later" disabled={busy} on:click={putOff} title="Nothing of this folder syncs until you decide. Open the game to decide.">Decide later</button>
         <button class="btn" disabled={busy} on:click={() => resolve('keep-remote')}>
           Use {peerName}'s
         </button>
@@ -341,6 +362,9 @@
     display: flex;
     gap: 8px;
     justify-content: flex-end;
+  }
+  .actions .later {
+    margin-right: auto;
   }
   .hint-line {
     margin-top: 12px;
