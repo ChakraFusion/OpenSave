@@ -377,7 +377,7 @@ func cloudBrowse(asJSON bool) int {
 		return 0
 	}
 
-	section(fmt.Sprintf("Cloud backup %s %d file(s) across %d game(s)", symDot(), total, len(games)))
+	section(fmt.Sprintf("Cloud backup %s %s across %s", symDot(), plural(total, "file", "files"), plural(len(games), "game", "games")))
 	t := newTable("game", "branch", "size", "file")
 	for _, g := range games {
 		label := g.GameName
@@ -482,7 +482,7 @@ func cloudPush(asJSON bool, args []string) int {
 	}
 	_ = json.Unmarshal(raw, &res)
 	if res.Uploaded > 0 {
-		success("Uploaded %d snapshot(s) for %s", res.Uploaded, bold(args[0]))
+		success("Uploaded %s for %s", plural(res.Uploaded, "snapshot", "snapshots"), bold(args[0]))
 	} else {
 		success("%s is already up to date in the cloud.", bold(args[0]))
 	}
@@ -705,7 +705,7 @@ func cloudDelete(asJSON bool, args []string) int {
 		Deleted int `json:"deleted"`
 	}
 	_ = json.Unmarshal(raw, &res)
-	success("Removed %d cloud file(s) for %s", res.Deleted, bold(gameID))
+	success("Removed %s for %s", plural(res.Deleted, "cloud file", "cloud files"), bold(gameID))
 	return 0
 }
 
@@ -780,7 +780,7 @@ func cmdFiles(args []string) int {
 		return 0
 	}
 
-	section(fmt.Sprintf("%s %s %d file(s)", snapID, symDot(), len(files)))
+	section(fmt.Sprintf("%s %s %s", snapID, symDot(), plural(len(files), "file", "files")))
 	t := newTable("size", "path")
 	for _, f := range files {
 		// A directory has no size worth printing, and "0 B" next to one reads

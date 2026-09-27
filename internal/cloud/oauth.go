@@ -263,7 +263,7 @@ func (s *Service) getOrRefreshAccessToken(provider string) (string, error) {
 			cfg.ExpiryTimeMs = 0
 			cfg.UserEmail = ""
 			_ = s.Store.UpdateCloudConfig(cfg)
-			return "", fmt.Errorf("your %s session has expired — reconnect under Cloud Backup to sign in again", providerLabel(provider))
+			return "", fmt.Errorf("your %s session has expired — reconnect under Cloud Backup to sign in again", ProviderLabel(provider))
 		}
 		return "", fmt.Errorf("failed to refresh token: %w", err)
 	}
@@ -291,8 +291,8 @@ func isInvalidGrant(err error) bool {
 		strings.Contains(msg, "expired_token")
 }
 
-// providerLabel returns a human-friendly provider name for messages.
-func providerLabel(provider string) string {
+// ProviderLabel returns a human-friendly provider name for messages.
+func ProviderLabel(provider string) string {
 	switch provider {
 	case "google_drive":
 		return "Google Drive"
@@ -300,6 +300,12 @@ func providerLabel(provider string) string {
 		return "Dropbox"
 	case "onedrive":
 		return "OneDrive"
+	case "local":
+		return "Local folder"
+	case "webdav":
+		return "WebDAV"
+	case "webhook":
+		return "Webhook"
 	}
 	return provider
 }
@@ -374,7 +380,7 @@ func (s *Service) postTokenForm(tokenURL string, form url.Values) (tokenResponse
 // fetchUserProfile best-effort resolves the account email for the
 // settings UI.
 func (s *Service) fetchUserProfile(provider, accessToken string) string {
-	fallback := providerLabel(provider) + " account"
+	fallback := ProviderLabel(provider) + " account"
 	var req *http.Request
 	switch provider {
 	case "google_drive":

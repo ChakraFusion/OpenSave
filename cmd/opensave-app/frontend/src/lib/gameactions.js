@@ -5,6 +5,7 @@
 // button on the game's page — same undo, same cloud question afterwards —
 // rather than a second, slightly different copy of it.
 import { derived, get, writable } from 'svelte/store';
+import { plural } from './format.js';
 import { api, native } from './api.js';
 import { askConfirm, gameList, games, navigate, toast, view } from './stores.js';
 import { hiddenKeys, withUndo } from './undo.js';
@@ -147,7 +148,7 @@ async function offerCloudCleanup(game) {
         if (!ok) return;
         try {
           const res = await api.post(`/api/cloud/delete-game/${game.id}`);
-          toast(res.deleted > 0 ? `Removed ${res.deleted} cloud snapshot(s)` : 'No cloud snapshots to remove', 'success');
+          toast(res.deleted > 0 ? `Removed ${plural(res.deleted, 'cloud snapshot')}` : 'No cloud snapshots to remove', 'success');
         } catch (e) {
           toast(`Cloud cleanup failed: ${e.message}`, 'error');
         }

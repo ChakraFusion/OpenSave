@@ -598,7 +598,7 @@ func cmdPeerGames(args []string) int {
 		return 0
 	}
 
-	section(fmt.Sprintf("%s %s %d game(s)", peerID, symDot(), len(games)))
+	section(fmt.Sprintf("%s %s %s", peerID, symDot(), plural(len(games), "game", "games")))
 	t := newTable("id", "name", "app id", "path")
 	for _, g := range games {
 		appID := faint("—")

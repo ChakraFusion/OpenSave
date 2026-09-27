@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/opensave/opensave/internal/cloud"
 	"github.com/opensave/opensave/internal/config"
 	"github.com/opensave/opensave/internal/store"
 	"github.com/opensave/opensave/internal/version"
@@ -30,6 +31,11 @@ type overviewState struct {
 	PeersTotal int    `json:"peersPaired"`
 	Conflicts  int    `json:"conflicts"`
 	RelayRoom  string `json:"relayRoom"`
+	// Cloud backup: on or off, and whether it has somewhere to send to
+	// (cloud.Ready) — on alone backs up nothing.
+	CloudOn       bool   `json:"cloudEnabled"`
+	CloudReady    bool   `json:"cloudReady"`
+	CloudProvider string `json:"cloudProvider"`
 }
 
 func gatherOverview() overviewState {
@@ -54,6 +60,21 @@ func gatherOverview() overviewState {
 			st.Conflicts = payload.ConflictCount
 			st.DeviceName = payload.Settings.DeviceName
 			st.RelayRoom = payload.Settings.SyncCode
+		}
+		// Cloud backup is in the settings, not the status.
+		if raw, err := daemonRequest("GET", "/api/settings", nil); err == nil {
+			var settings struct {
+				CloudSync struct {
+					Enabled  bool   `json:"enabled"`
+					Ready    bool   `json:"ready"`
+					Provider string `json:"provider"`
+				} `json:"cloudSync"`
+			}
+			if json.Unmarshal(raw, &settings) == nil {
+				st.CloudOn = settings.CloudSync.Enabled
+				st.CloudReady = settings.CloudSync.Ready
+				st.CloudProvider = settings.CloudSync.Provider
+			}
 		}
 		if raw, err := daemonRequest("GET", "/api/peers", nil); err == nil {
 			if p, err := decodePeersPayload(raw); err == nil {
@@ -89,6 +110,9 @@ func gatherOverview() overviewState {
 		st.DeviceName = settings.DeviceName
 		st.RelayRoom = settings.SyncCode
 	}
+	if cfg, err := s.GetCloudConfig(); err == nil {
+		st.CloudOn, st.CloudReady, st.CloudProvider = cfg.Enabled, cloud.Ready(cfg), cfg.Provider
+	}
 	return st
 }
 
@@ -123,6 +147,7 @@ func cmdOverview(args []string) int {
 	field("games", gamesValue(st))
 	field("peers", peersSummary(st))
 	field("relay", relaySummary(st))
+	field("cloud", cloudSummary(st))
 	if st.Conflicts > 0 {
 		field("conflicts", warnText(fmt.Sprintf("%d waiting on a decision", st.Conflicts)))
 	}
@@ -157,6 +182,16 @@ func peersSummary(st overviewState) string {
 	default:
 		return fmt.Sprintf("%d paired, %s", st.PeersTotal, okText(fmt.Sprintf("%d online", st.Peers)))
 	}
+}
+
+func cloudSummary(st overviewState) string {
+	switch {
+	case st.CloudReady:
+		return okText("backing up") + faint("  to ") + cloud.ProviderLabel(st.CloudProvider)
+	case st.CloudOn:
+		return warnText("not set up") + faint("  see opensave cloud")
+	}
+	return faint("off")
 }
 
 func relaySummary(st overviewState) string {

@@ -80,7 +80,7 @@
     {#if $wanRoom?.connected}
       <span class="wan">relay: {$wanRoom.roomCode}</span>
     {/if}
-    <span>{onlinePeers} peer{onlinePeers === 1 ? '' : 's'} online</span>
+    <span>{onlinePeers} {onlinePeers === 1 ? 'device' : 'devices'} online</span>
     <button
       class="bar-btn"
       class:on={transfersOpen}

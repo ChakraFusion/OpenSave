@@ -30,7 +30,7 @@ func cmdEmptied(d *daemon.Daemon, args []string) int {
 			fmt.Printf("%s no save is held back: nothing was emptied on this device\n", accent("ok"))
 			return 0
 		}
-		section(fmt.Sprintf("%d emptied save(s) held back from your other devices", len(list)))
+		section(fmt.Sprintf("%s held back from your other devices", plural(len(list), "emptied save", "emptied saves")))
 		for _, e := range list {
 			when := time.UnixMilli(e.SinceMs).UTC().Format(time.RFC3339)
 			state := fmt.Sprintf("every file deleted here %s; %d on your other devices would go too", timeAgo(when, time.Now()), e.Files)

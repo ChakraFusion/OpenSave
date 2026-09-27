@@ -123,7 +123,7 @@ func cmdWrap(args []string) int {
 				} `json:"results"`
 			}
 			if json.Unmarshal(raw, &res) == nil && len(res.Results) > 0 {
-				note(fmt.Sprintf("checked %d device(s) for a newer save", len(res.Results)))
+				note(fmt.Sprintf("checked %s for a newer save", plural(len(res.Results), "device", "devices")))
 			}
 		}
 		_, _ = daemonRequest("POST", "/api/games/"+gameID+"/session", map[string]string{"state": "start"})

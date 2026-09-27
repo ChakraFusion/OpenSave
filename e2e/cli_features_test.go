@@ -592,7 +592,7 @@ func TestCLI_RollbackDryRun(t *testing.T) {
 	c.saveDir("previewing", map[string]string{"slot1.sav": "v2, longer", "slot3.sav": "new"})
 
 	out := c.mustRun("rollback", "previewing", snap, "--dry-run")
-	for _, want := range []string{"change", "slot1.sav", "remove", "slot3.sav", "1 file(s) unchanged"} {
+	for _, want := range []string{"change", "slot1.sav", "remove", "slot3.sav", "1 file unchanged"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("--dry-run output lacks %q:\n%s", want, out)
 		}

@@ -139,9 +139,9 @@ func cmdUntrackAll(d *daemon.Daemon, args []string) int {
 	}
 	if !confirmed {
 		if asJSON {
-			return fail(asJSON, fmt.Errorf("refusing to untrack %d game(s) without --yes", len(games)))
+			return fail(asJSON, fmt.Errorf("refusing to untrack %s without --yes", plural(len(games), "game", "games")))
 		}
-		warning("This will untrack all %d game(s).", len(games))
+		warning("This will untrack all %s.", plural(len(games), "game", "games"))
 		note("Save files and snapshot archives on disk are kept.")
 		hint("opensave untrack-all --yes")
 		return 1
@@ -158,7 +158,7 @@ func cmdUntrackAll(d *daemon.Daemon, args []string) int {
 	if asJSON {
 		return emitJSON(map[string]any{"untracked": n})
 	}
-	success("Untracked %d game(s).", n)
+	success("Untracked %s.", plural(n, "game", "games"))
 	note("Snapshots on disk were kept.")
 	hint("opensave scan     re-add them from the correct locations")
 	return 0
@@ -192,7 +192,7 @@ func cmdPrune(args []string) int {
 		success("Nothing to prune — every game is within its limit.")
 		return 0
 	}
-	success("Removed %d snapshot(s), freed %s", removed, bold(humanBytes(freed)))
+	success("Removed %s, freed %s", plural(removed, "snapshot", "snapshots"), bold(humanBytes(freed)))
 	return 0
 }
 

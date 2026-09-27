@@ -8,7 +8,7 @@
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import { api } from '../../lib/api.js';
   import { askConfirm, navigate, toast } from '../../lib/stores.js';
-  import { fmtSize } from '../../lib/format.js';
+  import { fmtSize, plural } from '../../lib/format.js';
   import { whenLabel } from '../../lib/snapshots.js';
 
   let report = null;
@@ -32,7 +32,7 @@
     busy = true;
     try {
       const res = await api.post('/api/snapshots/prune', {});
-      toast(res.removed > 0 ? `Removed ${res.removed} snapshot(s), freed ${fmtSize(res.freedBytes)}` : 'Nothing to clean up', 'success');
+      toast(res.removed > 0 ? `Removed ${plural(res.removed, 'snapshot')}, freed ${fmtSize(res.freedBytes)}` : 'Nothing to clean up', 'success');
     } catch (e) {
       toast(e.message, 'error');
     } finally {

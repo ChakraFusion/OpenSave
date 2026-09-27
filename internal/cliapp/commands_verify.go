@@ -56,10 +56,10 @@ func cmdVerify(d *daemon.Daemon, args []string) int {
 		return 0
 	}
 	if len(report.Damaged) == 0 {
-		fmt.Printf("%s %d snapshot(s) checked — every one can be restored\n", accent("ok"), report.Checked)
+		fmt.Printf("%s %s checked — every one can be restored\n", accent("ok"), plural(report.Checked, "snapshot", "snapshots"))
 		return 0
 	}
-	section(fmt.Sprintf("%d of %d snapshot(s) cannot be restored", len(report.Damaged), report.Checked))
+	section(fmt.Sprintf("%d of %s cannot be restored", len(report.Damaged), plural(report.Checked, "snapshot", "snapshots")))
 	for _, s := range report.Damaged {
 		fmt.Printf("  %s %s  %s\n      %s\n", symBullet(), bold(s.GameName), faint(s.SnapshotID), dangerText(s.Problem))
 	}
@@ -87,7 +87,7 @@ func cmdVerifyRepair(d *daemon.Daemon, asJSON bool) int {
 		note("the cloud could not be looked at: " + report.CloudError)
 	}
 	if len(report.Remaining) > 0 {
-		section(fmt.Sprintf("%d snapshot(s) have no whole copy anywhere", len(report.Remaining)))
+		section(fmt.Sprintf("%s no whole copy anywhere", plural(len(report.Remaining), "snapshot has", "snapshots have")))
 		for _, r := range report.Remaining {
 			fmt.Printf("  %s %s  %s\n", symBullet(), bold(r.GameName), faint(r.SnapshotID))
 		}
@@ -109,6 +109,6 @@ func cmdVerifyRemove(d *daemon.Daemon, asJSON bool) int {
 		fmt.Printf("%s nothing to remove: no snapshot is known to be damaged\n", accent("ok"))
 		return 0
 	}
-	fmt.Printf("%s removed %d snapshot(s) that could not be restored; the rest of each game's history is unchanged\n", accent("ok"), len(removed))
+	fmt.Printf("%s removed %s that could not be restored; the rest of each game's history is unchanged\n", accent("ok"), plural(len(removed), "snapshot", "snapshots"))
 	return 0
 }

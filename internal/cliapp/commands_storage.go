@@ -72,7 +72,7 @@ func cmdStorage(d *daemon.Daemon, args []string) int {
 	}
 	fmt.Println()
 	for _, g := range r.Games {
-		extra := fmt.Sprintf("%d snapshot(s)", g.Snapshots)
+		extra := plural(g.Snapshots, "snapshot", "snapshots")
 		if g.Pinned > 0 {
 			extra += fmt.Sprintf(", %d pinned", g.Pinned)
 		}
@@ -98,7 +98,7 @@ func cmdStorage(d *daemon.Daemon, args []string) int {
 
 	fmt.Println()
 	if r.Reclaimable > 0 {
-		note(fmt.Sprintf("%s in %d snapshot(s) is past the limits and would be removed by clean-up", humanBytes(r.Reclaimable), r.ReclaimableSnapshots))
+		note(fmt.Sprintf("%s in %s is past the limits and would be removed by clean-up", humanBytes(r.Reclaimable), plural(r.ReclaimableSnapshots, "snapshot", "snapshots")))
 		hint("opensave prune")
 	} else {
 		note("nothing to clean up: every game is within its limits")

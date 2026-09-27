@@ -117,7 +117,7 @@ func describePause(st syncpause.Status) string {
 		}
 		return fmt.Sprintf("for %dh%02dm", h, m)
 	case left >= time.Minute:
-		return fmt.Sprintf("for %d more minute(s)", int(left.Round(time.Minute)/time.Minute))
+		return "for " + plural(int(left.Round(time.Minute)/time.Minute), "more minute", "more minutes")
 	default:
 		return "for less than a minute"
 	}

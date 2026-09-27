@@ -72,7 +72,9 @@
     display: flex;
     flex-wrap: wrap;
     gap: 18px 28px;
-    align-items: flex-end;
+    /* Labels in one line across the top. The swatches run to two rows, and
+       aligned to the bottom the other labels sat a row below theirs. */
+    align-items: flex-start;
   }
   .group {
     display: flex;

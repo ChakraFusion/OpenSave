@@ -401,7 +401,7 @@ func cmdScan(d *daemon.Daemon, args []string) int {
 	if len(numbered) == 0 {
 		section("Auto-scan")
 		if emptyCount > 0 {
-			note(fmt.Sprintf("No saved games found. %d detected folder(s) hold no files yet.", emptyCount))
+			note(fmt.Sprintf("No saved games found. %s detected hold no files yet.", plural(emptyCount, "folder", "folders")))
 			hint("opensave scan --all            show them anyway")
 		} else {
 			note("No game saves detected.")
@@ -411,7 +411,7 @@ func cmdScan(d *daemon.Daemon, args []string) int {
 		return 0
 	}
 
-	header := fmt.Sprintf("Auto-scan %s %d save location(s) in %d game(s)", symDot(), len(found), len(groups))
+	header := fmt.Sprintf("Auto-scan %s %s in %s", symDot(), plural(len(found), "save location", "save locations"), plural(len(groups), "game", "games"))
 	if hidden := total - len(found); hidden > 0 {
 		header += fmt.Sprintf(" %s %d empty hidden", symDot(), hidden)
 	}
@@ -449,7 +449,7 @@ func cmdScan(d *daemon.Daemon, args []string) int {
 			"                               join a game's other folders to it")
 	}
 	if !showEmpty && emptyCount > 0 {
-		hints = append(hints, fmt.Sprintf("opensave scan --all            also show %d empty folder(s)", emptyCount))
+		hints = append(hints, fmt.Sprintf("opensave scan --all            also show %s", plural(emptyCount, "empty folder", "empty folders")))
 	}
 	hint(hints...)
 	fmt.Println()
@@ -591,7 +591,7 @@ func cmdAdd(d *daemon.Daemon, args []string) int {
 			return 1
 		}
 		if n < 1 || n > len(choices) {
-			fmt.Fprintf(os.Stderr, "error: %d is out of range — the last scan found %d location(s)\n", n, len(choices))
+			fmt.Fprintf(os.Stderr, "error: %d is out of range — the last scan found %s\n", n, plural(len(choices), "location", "locations"))
 			return 1
 		}
 		pick := choices[n-1]
@@ -784,7 +784,7 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 				label = accent(b) + faint(" (active)")
 			}
 			fmt.Printf("      %s %s\n", padRight(label, 28),
-				faint(fmt.Sprintf("%d snapshot(s)", len(snaps))))
+				faint(plural(len(snaps), "snapshot", "snapshots")))
 		}
 		// One line per paired device: is that device up to date with THIS
 		// save? "never" is an answer too — it is the one that explains why
@@ -894,7 +894,7 @@ func cmdSnapshotAll(d *daemon.Daemon, args []string) int {
 	if asJSON {
 		emitJSON(res)
 	} else {
-		success("Took a snapshot of %d game(s)", res.Taken)
+		success("Took a snapshot of %s", plural(res.Taken, "game", "games"))
 		for _, f := range res.Failed {
 			fmt.Fprintf(os.Stderr, "  could not snapshot %s: %s\n", f.Name, f.Error)
 		}
@@ -941,7 +941,7 @@ func printRestorePreview(d *daemon.Daemon, gameID, snapshotID string, asJSON boo
 			fmt.Printf("  %s  %-40s %s\n", verbs[c.Change], path, faint(sizes))
 		}
 		fmt.Println()
-		note(fmt.Sprintf("%d file(s) unchanged. Your current save is snapshotted first, so a restore can be undone.", preview.Unchanged))
+		note(fmt.Sprintf("%s unchanged. Your current save is snapshotted first, so a restore can be undone.", plural(preview.Unchanged, "file", "files")))
 	}
 	for _, name := range preview.Unplaced {
 		note(fmt.Sprintf("the %q location has no folder on this device; a restore leaves its files out", name))

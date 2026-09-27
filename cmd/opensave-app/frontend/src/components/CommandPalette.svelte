@@ -3,6 +3,7 @@
   // Enter. Everything in it is also somewhere on screen; this is the way to
   // it that does not need the mouse or knowing where it is.
   import { createEventDispatcher, onMount, tick } from 'svelte';
+  import { plural } from '../lib/format.js';
   import Search from 'lucide-svelte/icons/search';
   import CornerDownLeft from 'lucide-svelte/icons/corner-down-left';
   import { navigate, toast, syncPause } from '../lib/stores.js';
@@ -89,7 +90,7 @@
     try {
       const res = await api.post('/api/snapshots/all', {});
       toast(
-        res.failed?.length ? `Snapshot of ${res.taken} game(s); ${res.failed.length} could not be taken` : `Took a snapshot of ${res.taken} game(s)`,
+        res.failed?.length ? `Snapshot of ${plural(res.taken, 'game')}; ${res.failed.length} could not be taken` : `Took a snapshot of ${plural(res.taken, 'game')}`,
         res.failed?.length ? 'error' : 'success'
       );
     } catch (e) {

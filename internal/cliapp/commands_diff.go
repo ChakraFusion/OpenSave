@@ -27,10 +27,10 @@ func cmdSnapshotDiff(d *daemon.Daemon, args []string) int {
 		return emitJSON(c)
 	}
 	if len(c.Changes) == 0 {
-		note(fmt.Sprintf("the same: %d file(s), none different", c.Unchanged))
+		note(fmt.Sprintf("the same: %s, none different", plural(c.Unchanged, "file", "files")))
 		return 0
 	}
-	section(fmt.Sprintf("%d file(s) differ %s %d the same", len(c.Changes), symDot(), c.Unchanged))
+	section(fmt.Sprintf("%s %s %d the same", plural(len(c.Changes), "file differs", "files differ"), symDot(), c.Unchanged))
 	for _, ch := range c.Changes {
 		path := ch.Path
 		if ch.Location != "" {

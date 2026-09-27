@@ -673,7 +673,7 @@
       <div class="field" style="margin-bottom: 0;">
         <label for="s-port">Daemon port</label>
         <input id="s-port" type="number" class:invalid={unsaved.includes('port')} bind:value={draft.port} />
-        <span class="hint">The local API + LAN peer port. Changing it requires a restart.</span>
+        <span class="hint">The port this device listens on, for the app and for your other devices on the network. Changing it requires a restart.</span>
       </div>
     </div>
 
@@ -681,7 +681,7 @@
       <h3 class="section-title with-icon"><ArrowLeftRight size={17} />Cross-platform path translation</h3>
       <div class="field" style="margin-bottom: 0;">
         <span class="hint">
-          Rewrites a peer's save paths to local conventions, e.g. "C:\Users\me\Saves" → "/home/deck/saves".
+          Rewrites another device's save paths to this one's conventions, e.g. "C:\Users\me\Saves" → "/home/deck/saves".
         </span>
         {#each draft.pathTranslations ?? [] as rule, i}
           <div class="rule-row">

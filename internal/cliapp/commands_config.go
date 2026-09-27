@@ -42,7 +42,7 @@ func cmdExclude(d *daemon.Daemon, args []string) int {
 			fmt.Println("No excluded folders. Auto-scan looks everywhere it knows about.")
 			return 0
 		}
-		fmt.Printf("%d excluded folder(s):\n\n", len(settings.ExcludePaths))
+		fmt.Printf("%s:\n\n", plural(len(settings.ExcludePaths), "excluded folder", "excluded folders"))
 		for _, p := range settings.ExcludePaths {
 			fmt.Printf("  %s\n", p)
 		}

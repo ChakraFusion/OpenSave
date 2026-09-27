@@ -3,6 +3,7 @@
   // files; "overwrite" restores every save in the file onto disk — the daemon
   // takes safety copies of anything it replaces. Fires `close`.
   import { createEventDispatcher, onDestroy } from 'svelte';
+  import { plural } from '../../lib/format.js';
   import { toast, backupProgressEvent } from '../../lib/stores.js';
   import { api } from '../../lib/api.js';
   import Modal from '../../components/ui/Modal.svelte';
@@ -31,7 +32,7 @@
     try {
       const res = await api.post('/api/backup/restore', { sourcePath: source, mode });
       if (res.legacy) {
-        toast(`Imported ${res.imported} snapshot(s), skipped ${res.skipped}`, 'success');
+        toast(`Imported ${plural(res.imported, 'snapshot')}, skipped ${res.skipped}`, 'success');
       } else {
         const bits = [];
         if (res.restored) bits.push(`${res.restored} restored`);
