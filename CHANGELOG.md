@@ -47,8 +47,7 @@ All notable changes to OpenSave are documented here. This project adheres to
 - **A handheld looks like one.** A device set to "Handheld (ROG Ally / Legion
   Go)" showed as a computer on the Devices page; only a Steam Deck showed as
   a handheld.
-- **Snapshots lose their coloured edges.** The tag on each one already says
-  what kind it is. Settings → Appearance lines its labels up across the top.
+- **Settings → Appearance lines its labels up across the top.**
 - **Launch starts the program you set.** A game with an executable set is
   started with it, even when it also has a Steam App ID — which is often
   there only for its name and cover, and launched a different copy through
