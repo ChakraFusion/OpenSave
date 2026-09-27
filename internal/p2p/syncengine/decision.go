@@ -55,6 +55,43 @@ func DetectConflict(local, remote delta.Manifest, lastSyncTimeMs int64, agreedHa
 	return localModified && remoteModified
 }
 
+// OnlyBehind reports whether one side has not diverged from the other but
+// merely fallen behind it: every file it holds is on the other side byte for
+// byte, and every file it lacks is one the two never shared (absent from the
+// lineage, which records what both have held).
+//
+// Such a pair is never a conflict, whatever the clocks or the merge base say.
+// Taking the fuller side loses nothing of the other's, and the result is a
+// state one device really had rather than a merge of two. It is what a device
+// looks like part-way through its first pull, or through taking an update that
+// only added files, if it is asked for its files by a device that does not know
+// to wait (one from before settle.go).
+//
+// The lineage is what keeps this from hiding a real divergence. A file the
+// shorter side deleted was shared, so it is in the lineage and this says no; a
+// file it changed differs, and this says no. What is left can only be files it
+// has not received yet.
+func OnlyBehind(local, remote delta.Manifest, lineageFiles map[string]struct{}) bool {
+	return behind(local, remote, lineageFiles) || behind(remote, local, lineageFiles)
+}
+
+func behind(short, full delta.Manifest, lineageFiles map[string]struct{}) bool {
+	for p, f := range short.Files {
+		if ff, ok := full.Files[p]; !ok || ff.Hash != f.Hash {
+			return false
+		}
+	}
+	for p := range full.Files {
+		if _, has := short.Files[p]; has {
+			continue
+		}
+		if _, shared := lineageFiles[p]; shared {
+			return false
+		}
+	}
+	return true
+}
+
 // sameFiles reports whether both manifests hold exactly the same paths with
 // exactly the same content hashes — i.e. every difference between them is a
 // directory one. Deliberately ignores mtimes: the same bytes written at

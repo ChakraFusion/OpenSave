@@ -49,6 +49,12 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 
 	case "keep-remote":
 		e.Log("info", fmt.Sprintf("conflict on %q resolved: keep REMOTE — overwriting local", gameID))
+		remoteData, err := e.peerStateForResolution(ctx, gameID, peer)
+		if err != nil {
+			return "", err
+		}
+		// From here this device's save is being replaced (settle.go).
+		defer e.Writing(gameID)()
 		// Non-destructive: snapshot the local version first so "keep theirs"
 		// can always be undone from the Snapshots tab. (merge-branch gets
 		// this for free via SwitchBranch's safety snapshot; this path
@@ -56,7 +62,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		if _, err := e.Snapshots.CreateBeforeReplacing(gameID, fmt.Sprintf("This device's version (before keeping %s's)", peer.Name)); err != nil {
 			e.Log("warn", fmt.Sprintf("safety snapshot before keep-remote failed: %v", err))
 		}
-		if err := e.overwriteLocalWithRemote(ctx, gameID, peer, "Resolved conflict: Overwrite with remote"); err != nil {
+		if err := e.overwriteLocalWithRemote(ctx, gameID, peer, remoteData, "Resolved conflict: Overwrite with remote"); err != nil {
 			return "", err
 		}
 		e.markResolvedConverged(gameID, peer)
@@ -68,6 +74,13 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 			snapshot.CleanBranchName(peer.Name),
 			lastN(fmt.Sprintf("%d", time.Now().UnixMilli()), 4))
 		e.Log("info", fmt.Sprintf("conflict on %q resolved: keep BOTH — remote goes to branch %q", gameID, branchName))
+		remoteData, err := e.peerStateForResolution(ctx, gameID, peer)
+		if err != nil {
+			return "", err
+		}
+		// The switch empties the save and the overwrite fills it: between
+		// them it holds nobody's version, so both are one write (settle.go).
+		defer e.Writing(gameID)()
 
 		// Not seeded from the current save: this branch exists to hold the
 		// PEER's version, which overwriteLocalWithRemote writes into it a
@@ -79,7 +92,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		if err := e.Snapshots.SwitchBranch(gameID, branchName); err != nil {
 			return "", err
 		}
-		if err := e.overwriteLocalWithRemote(ctx, gameID, peer, "Diverged save state from peer: "+peer.Name); err != nil {
+		if err := e.overwriteLocalWithRemote(ctx, gameID, peer, remoteData, "Diverged save state from peer: "+peer.Name); err != nil {
 			return "", err
 		}
 		e.markResolvedConverged(gameID, peer)
@@ -141,7 +154,7 @@ func (e *Engine) markResolvedLocal(gameID string, peer Peer) error {
 	if err != nil {
 		return err
 	}
-	touchSaveMtimes(game.SavePath)
+	e.touchSaveMtimes(gameID, game.SavePath)
 	local, err := delta.BuildManifest(game.SavePath)
 	if err != nil {
 		return err
@@ -155,7 +168,11 @@ func (e *Engine) markResolvedLocal(gameID string, peer Peer) error {
 
 // touchSaveMtimes bumps every file's mtime under root to now without
 // changing its content, marking this side as the most recent version.
-func touchSaveMtimes(root string) {
+func (e *Engine) touchSaveMtimes(gameID, root string) {
+	// A save half re-stamped reads as newer in some files and not others, so
+	// nothing reads it for a sync until it is done (settle.go). Taken first so
+	// it is let go after the invalidation.
+	defer e.Writing(gameID)()
 	// Defence in depth. This moves every mtime to now, which a size+mtime
 	// cache notices by itself — the entries miss and are re-read to the same
 	// hashes, since the content is untouched. Kept so the rule stays "every
@@ -190,10 +207,31 @@ func (e *Engine) clearConflict(gameID string) {
 	}
 }
 
+// peerStateForResolution asks the peer for the save a resolution is about to
+// take. Asked before this device writes anything: if the peer is itself
+// part-way through a write it makes this wait, and this device's save should
+// not sit half-replaced meanwhile — nor, if both devices resolve at once,
+// should each be holding its own save while waiting on the other's.
+func (e *Engine) peerStateForResolution(ctx context.Context, gameID string, peer Peer) (ManifestResponse, error) {
+	game, err := e.Store.GetGame(gameID)
+	if err != nil {
+		return ManifestResponse{}, err
+	}
+	remoteData, err := e.Transport.FetchManifest(ctx, peer, gameID, ManifestQuery{Name: game.Name, SavePath: game.SavePath, AppID: game.AppID, CoverURL: game.CoverURL})
+	if isSettling(err) {
+		return ManifestResponse{}, fmt.Errorf("%s is still finishing a sync of this game — try again in a moment", peer.Name)
+	}
+	if err != nil {
+		return ManifestResponse{}, fmt.Errorf("fetch remote manifest: %w", err)
+	}
+	return remoteData, nil
+}
+
 // overwriteLocalWithRemote makes the local save byte-identical to the
-// peer's current state: delete local-only files, pull every added/changed
-// file, then mirror the peer's latest snapshot.
-func (e *Engine) overwriteLocalWithRemote(ctx context.Context, gameID string, peer Peer, mirrorComment string) error {
+// peer's state as remoteData describes it: delete local-only files, pull
+// every added/changed file, then mirror the peer's latest snapshot. The
+// caller holds the write gate.
+func (e *Engine) overwriteLocalWithRemote(ctx context.Context, gameID string, peer Peer, remoteData ManifestResponse, mirrorComment string) error {
 	game, err := e.Store.GetGame(gameID)
 	if err != nil {
 		return err
@@ -203,10 +241,6 @@ func (e *Engine) overwriteLocalWithRemote(ctx context.Context, gameID string, pe
 	// path through them a given conflict resolution happens to take.
 	defer delta.InvalidateRoot(game.SavePath)
 
-	remoteData, err := e.Transport.FetchManifest(ctx, peer, gameID, ManifestQuery{Name: game.Name, SavePath: game.SavePath, AppID: game.AppID, CoverURL: game.CoverURL})
-	if err != nil {
-		return fmt.Errorf("fetch remote manifest: %w", err)
-	}
 	localManifest, err := delta.BuildManifest(game.SavePath)
 	if err != nil {
 		return err

@@ -96,7 +96,8 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		return nil
 	}
 
-	local, err := delta.BuildManifest(sr.root.Path)
+	// Not read part-way through a write (settle.go).
+	local, err := e.ReadManifest(ctx, gameID, sr.root.Path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", sr.root.Path, err)
 	}
@@ -180,7 +181,8 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		}
 	}
 	judged := e.unchangedButForPeerDeletions(gameID, sr.root.Name, local, base)
-	if DetectConflict(judged, remote, e.lastSyncTimeMs(peer.ID), base) {
+	if DetectConflict(judged, remote, e.lastSyncTimeMs(peer.ID), base) &&
+		!OnlyBehind(judged, remote, lineageFiles) {
 		// Neither side is touched. There is no per-location resolution screen
 		// yet, so this location simply stops syncing until the two are made to
 		// agree by hand — which is the safe half of the bargain, and is said
@@ -211,26 +213,32 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 
 	e.handOverEmptying(gameID, peer, local.Files, &decision)
 
+	// Held across the whole apply, as for the main folder: from the first
+	// deletion to the last pull this location is a mixture nobody holds
+	// (settle.go).
+	applied := e.Writing(gameID)
 	deleting := time.Now()
-	e.applyLocalDeletions(sr.root, decision)
+	e.applyLocalDeletions(gameID, sr.root, decision)
 	if n := len(decision.FilesToDeleteLocally); n > 0 {
 		e.RecordActivity(store.ActivityEvent{GameID: gameID, Kind: store.ActivityDeleted, Device: peer.Name,
 			Files: n, Detail: locationDetail(sr.root.Name)})
 		e.noteEmptiedByPeer(gameID, deleting)
 	}
 	e.propagateDeletions(ctx, peer, gameID, sr.root, decision)
-	e.createPulledDirsIn(sr.root, decision.DirsToPull)
+	e.createPulledDirsIn(gameID, sr.root, decision.DirsToPull)
 
 	if len(decision.FilesToPull) > 0 {
 		if err := e.pullFiles(ctx, peer, gameID, game, sr.root, local, rootResp, decision.FilesToPull); err != nil {
+			applied()
 			return err
 		}
 	}
+	applied()
 	if decision.HasPush() {
 		e.Transport.TriggerPeerPull(peer, gameID)
 	}
 
-	fresh, freshErr := delta.BuildManifest(sr.root.Path)
+	fresh, freshErr := e.ReadManifest(ctx, gameID, sr.root.Path)
 	if freshErr == nil {
 		// fresh is unfiltered, and does not need to be: persistRootLineage
 		// intersects the two sides, and the remote side passed here has the

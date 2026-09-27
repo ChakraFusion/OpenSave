@@ -33,9 +33,29 @@ type fakeTransport struct {
 	// state" and "this side finishes the sync" — the window a game that saves
 	// continuously writes into.
 	onTriggerPull func()
+
+	// busyFor answers that many manifest requests with the peer's "still
+	// writing" reply, as a device part-way through a sync of its own does
+	// (settle.go). manifestCalls counts every request.
+	busyFor       int
+	manifestCalls int
+	// onFetchBlocks and onDeleteRemote run in the middle of a pull and of a
+	// deletion's propagation: a test's way to look in while a sync is writing.
+	onFetchBlocks  func()
+	onDeleteRemote func()
 }
 
 func (f *fakeTransport) FetchManifest(ctx context.Context, peer Peer, gameID string, q ManifestQuery) (ManifestResponse, error) {
+	f.mu.Lock()
+	f.manifestCalls++
+	busy := f.busyFor > 0
+	if busy {
+		f.busyFor--
+	}
+	f.mu.Unlock()
+	if busy {
+		return ManifestResponse{}, errors.New(`peer returned 503: {"error":"` + SettlingMessage + `"}`)
+	}
 	if f.manifestErr != nil {
 		return ManifestResponse{}, f.manifestErr
 	}
@@ -51,6 +71,9 @@ func (f *fakeTransport) FetchManifest(ctx context.Context, peer Peer, gameID str
 }
 
 func (f *fakeTransport) FetchBlocks(ctx context.Context, peer Peer, ref FileRef, blockIndices []int, blockSize int) ([]BlockData, error) {
+	if f.onFetchBlocks != nil {
+		f.onFetchBlocks()
+	}
 	relPath := ref.RelPath
 	fullPath := filepath.Join(f.remoteDir, filepath.FromSlash(relPath))
 	entry, err := delta.HashFile(fullPath)
@@ -78,6 +101,9 @@ func (f *fakeTransport) FetchBlocks(ctx context.Context, peer Peer, ref FileRef,
 }
 
 func (f *fakeTransport) DeleteRemote(ctx context.Context, peer Peer, ref FileRef) error {
+	if f.onDeleteRemote != nil {
+		f.onDeleteRemote()
+	}
 	f.mu.Lock()
 	f.deletedOnPeer = append(f.deletedOnPeer, ref.RelPath)
 	f.mu.Unlock()

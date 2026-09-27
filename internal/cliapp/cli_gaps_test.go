@@ -95,6 +95,8 @@ func TestSyncOutcomes(t *testing.T) {
 		`{"p1":{"status":"in_sync"},"p2":{"status":"updated","peerName":"Laptop"}}`: "changed",
 		`{"p1":{"status":"conflict","peerName":"Deck"}}`:                            "conflict",
 		`{"p1":{"status":"peer_awaiting_folder","peerName":"Deck"}}`:                "waiting",
+		`{"p1":{"status":"peer_busy","peerName":"Deck"}}`:                           "queued",
+		`{"p1":{"status":"peer_busy"},"p2":{"status":"updated"}}`:                   "changed",
 		`{}`: "in-sync",
 	} {
 		if got := syncOutcomeOf("g", json.RawMessage(raw)).Kind; got != want {

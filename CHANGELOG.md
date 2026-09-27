@@ -57,6 +57,25 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Fixed
 
+- **Syncing a game from both devices at once no longer raises a conflict.**
+  A device part-way through taking a sync was asked for its files by the
+  other a moment later, and described a save half-way between two states —
+  some files new, some old. The other device read that as the save having
+  changed on both sides and asked which to keep, over a save only one of
+  them had touched. It needed the two syncs to cross, which a new device's
+  first sync meeting the other's own does. A device now finishes writing a
+  save before it describes it; one still writing says so, and is asked
+  again when it has finished (`opensave sync` counts it as queued).
+- **A save taken while the game was still writing it no longer causes a
+  conflict.** The other device pulled the half-written save; the game
+  finished; and the next sync saw both sides changed. A device now
+  remembers what it handed over, so the other holding exactly that is known
+  to hold a state both had.
+- **A device that simply has fewer of the same files is not asked about.**
+  With no history between two devices, one holding part of the other's
+  save — every file it has identical — was taken for a different save.
+  It is behind, and is brought up to date. A device that deleted a file
+  the two once shared, or changed one, still counts as having moved.
 - **A new page opens at its top.** Moving between pages kept the scroll
   position, so Activity could open half-way down because Settings had been.
 - **The Changelog no longer sits in one corner of a large window.** Full

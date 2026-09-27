@@ -596,11 +596,20 @@ func (w *WanClient) serveManifest(route string, body json.RawMessage, peerID str
 	if w.engine.holdingBack(game) {
 		return 404, map[string]string{"error": syncengine.HeldMessage}
 	}
+	// As on the LAN: a save a sync here is writing is not described
+	// (syncengine/settle.go). Each request runs on its own goroutine, so the
+	// wait does not hold up the relay traffic that finishes the write.
+	readDone, ok := w.engine.holdForServing(context.Background(), game.ID)
+	if !ok {
+		return 503, map[string]string{"error": syncengine.SettlingMessage}
+	}
+	defer readDone()
 
 	manifest, err := delta.BuildManifest(game.SavePath)
 	if err != nil {
 		return 500, map[string]string{"error": err.Error()}
 	}
+	w.engine.Sync.NoteServed(game.ID, peerID, manifest) // syncengine/served.go
 	resp := map[string]any{
 		"gameId": gameID, "activeBranch": game.ActiveBranch, "manifest": manifest,
 		"deletionConfirmed": w.engine.Sync.DeletionConfirmed(game.ID),

@@ -1,6 +1,8 @@
 package syncengine
 
 import (
+	"context"
+
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/ignore"
 	"github.com/opensave/opensave/internal/store"
@@ -142,7 +144,11 @@ func filterPathList(paths []string, rules ignore.Rules) []string {
 // remains, so this value can be written as the new base without claiming
 // anything that was not already true.
 func (e *Engine) FilteredContentHash(gameID string, game store.Game) string {
-	m, err := delta.BuildManifest(game.SavePath)
+	// Read while no sync is writing it: a base taken from a half-applied save
+	// would name a state neither device holds (settle.go).
+	ctx, cancel := context.WithTimeout(context.Background(), ServeSettleWait)
+	defer cancel()
+	m, err := e.ReadManifest(ctx, gameID, game.SavePath)
 	if err != nil {
 		return ""
 	}

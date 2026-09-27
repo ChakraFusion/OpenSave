@@ -71,6 +71,16 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if isLoopbackIP(ip) {
+			// The dashboard and the CLI, which do not sign — and, on one
+			// machine, another device's daemon, which does: a second install
+			// for testing, or every device in the e2e suite. That one is still
+			// told apart, so a handler that needs to know which device asked
+			// (lanPeerID) can, as it could over the network. A signature that
+			// fails is not refused here, as nothing on loopback ever was; it
+			// just identifies nobody.
+			if id, _, ok := e.verifyLANRequest(r); ok && id != "" {
+				r = r.WithContext(context.WithValue(r.Context(), lanPeerKey{}, id))
+			}
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -607,6 +617,17 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusNotFound, syncengine.HeldMessage)
 		return
 	}
+	// Never describe a save a sync here is writing: part-way through, it is a
+	// mixture no device holds, and the asker would judge it as a save that had
+	// moved (syncengine/settle.go). Held still while it is read; a write in
+	// progress is waited out if it ends soon, and otherwise answered as busy,
+	// which the asker takes as "ask again".
+	readDone, ok := e.holdForServing(r.Context(), game.ID)
+	if !ok {
+		jsonError(w, http.StatusServiceUnavailable, syncengine.SettlingMessage)
+		return
+	}
+	defer readDone()
 
 	// Extra save locations are included when this game has any; a game with
 	// none produces exactly the manifest it always did, down to the absent
@@ -625,6 +646,9 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 	for name, failure := range failures {
 		e.Log("warn", fmt.Sprintf("could not read the %q location of %q: %v — it is left out of this sync", name, game.Name, failure))
 	}
+	// Remembered, so the asker found holding exactly this later is known to
+	// hold a state this device had (syncengine/served.go).
+	e.Sync.NoteServed(game.ID, lanPeerID(r), manifest)
 
 	// Proto tells the asking peer this device understands save locations
 	// beyond the primary one, so it is safe to send a root name in a block or
@@ -640,6 +664,16 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
 	}
 	jsonOK(w, resp)
+}
+
+// holdForServing holds the game's save still for a manifest to be served from
+// it, waiting at most syncengine.ServeSettleWait for a sync writing it to
+// finish. ok is false if it did not; otherwise done lets go.
+func (e *Engine) holdForServing(ctx context.Context, gameID string) (done func(), ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, syncengine.ServeSettleWait)
+	defer cancel()
+	done, err := e.Sync.Reading(ctx, gameID)
+	return done, err == nil
 }
 
 func (e *Engine) handleBlocks(w http.ResponseWriter, r *http.Request) {

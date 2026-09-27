@@ -81,7 +81,7 @@ func outcomeFromPeers(gameID string, peers map[string]peerSyncResult) syncOutcom
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
-	changed, waiting := false, ""
+	changed, busy, waiting := false, false, ""
 	for _, id := range ids {
 		p := peers[id]
 		who := p.PeerName
@@ -93,6 +93,10 @@ func outcomeFromPeers(gameID string, peers map[string]peerSyncResult) syncOutcom
 			return syncOutcome{Game: gameID, Kind: "conflict", Detail: who}
 		case "updated", "updated_bidirectional", "deletions_synced", "triggered_peer_pull":
 			changed = true
+		case "peer_busy":
+			// The other device was still applying a sync of its own; the
+			// daemon asks again the moment it has finished.
+			busy = true
 		case "peer_awaiting_folder":
 			waiting = who + " is waiting for a folder to be chosen for it"
 		case "peer_holding":
@@ -106,6 +110,8 @@ func outcomeFromPeers(gameID string, peers map[string]peerSyncResult) syncOutcom
 	switch {
 	case changed:
 		return syncOutcome{Game: gameID, Kind: "changed"}
+	case busy:
+		return syncOutcome{Game: gameID, Kind: "queued"}
 	case waiting != "":
 		return syncOutcome{Game: gameID, Kind: "waiting", Detail: waiting}
 	default:

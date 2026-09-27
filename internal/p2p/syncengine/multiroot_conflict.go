@@ -133,7 +133,7 @@ func (e *Engine) ResolveRootConflict(ctx context.Context, gameID, peerID, root, 
 	case "keep-local":
 		// Our copy becomes the shared state: record it as the agreed base so
 		// this exact divergence cannot re-prompt, then ask the peer to pull.
-		local, buildErr := delta.BuildManifest(path)
+		local, buildErr := e.ReadManifest(ctx, gameID, path)
 		if buildErr != nil {
 			return buildErr
 		}
@@ -162,6 +162,9 @@ func (e *Engine) ResolveRootConflict(ctx context.Context, gameID, peerID, root, 
 		remoteData, fetchErr := e.Transport.FetchManifest(ctx, peer, gameID, ManifestQuery{
 			Name: game.Name, SavePath: game.SavePath, AppID: game.AppID, CoverURL: game.CoverURL,
 		})
+		if isSettling(fetchErr) {
+			return fmt.Errorf("%s is still finishing a sync of this game — try again in a moment", peer.Name)
+		}
 		if fetchErr != nil {
 			return fmt.Errorf("fetch the peer's copy: %w", fetchErr)
 		}
