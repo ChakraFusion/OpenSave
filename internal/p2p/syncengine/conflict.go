@@ -19,8 +19,9 @@ import (
 //   - keep-local:   keep this device's version as-is (peer is untouched).
 //   - keep-remote:  adopt the peer's current state on this device, taking a
 //     safety snapshot of the local version first.
-//   - merge-branch: park the peer's state on a new "conflict-<peer>-<id>"
-//     branch so both versions survive; switch between them later.
+//   - merge-branch: keep this device's version, as keep-local does, and
+//     keep the peer's state beside it on a new "conflict-<peer>-<id>"
+//     branch, so both survive; switch between them later.
 func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution string) (branchName string, err error) {
 	e.mu.Lock()
 	conflict := e.activeConflicts[gameID]
@@ -56,9 +57,8 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		// From here this device's save is being replaced (settle.go).
 		defer e.Writing(gameID)()
 		// Non-destructive: snapshot the local version first so "keep theirs"
-		// can always be undone from the Snapshots tab. (merge-branch gets
-		// this for free via SwitchBranch's safety snapshot; this path
-		// otherwise wouldn't.)
+		// can always be undone from the Snapshots tab. (merge-branch never
+		// replaces this device's save, so needs no such copy.)
 		if _, err := e.Snapshots.CreateBeforeReplacing(gameID, fmt.Sprintf("This device's version (before keeping %s's)", peer.Name)); err != nil {
 			e.Log("warn", fmt.Sprintf("safety snapshot before keep-remote failed: %v", err))
 		}
@@ -116,8 +116,8 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 }
 
 // markResolvedConverged records the post-resolution convergence for the
-// keep-remote / keep-both paths, where the local save was just overwritten
-// to match the peer. It captures the CURRENT local manifest as the agreed
+// keep-remote path, where the local save was just overwritten to match the
+// peer. It captures the CURRENT local manifest as the agreed
 // merge-base and lineage, and tells the peer we are now in sync at that
 // hash — the peer, already holding that exact state, re-confirms identity
 // on its own clock (ConfirmInSync) and records the same base. Both sides

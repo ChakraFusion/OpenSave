@@ -264,8 +264,9 @@ You get a screen showing what differs and three choices:
 
 - **Keep mine** — this device's version wins.
 - **Keep theirs** — the other device's version wins.
-- **Keep both** — the other version is put on a new branch so nothing is lost.
-  Pick this if you are not sure.
+- **Keep both** — you carry on with yours, and the other device's version is
+  kept on a new branch beside it, so nothing is lost. Pick this if you are not
+  sure.
 
 Nothing is overwritten until you choose.
 

@@ -193,8 +193,9 @@ opensave conflicts                     # anything waiting on a decision
 opensave resolve elden-ring keep-both  # keep-both | keep-local | keep-remote
 ```
 
-`keep-both` is the safe one: the other device's save lands on a separate
-branch, so nothing is discarded while you work out which you wanted.
+`keep-both` is the safe one: yours stays as it is, and the other device's
+save lands on a separate branch, so nothing is discarded while you work out
+which you wanted.
 
 Auto-sync means you rarely need `sync` by hand; it is there for when you want
 to be sure before shutting a machine down.

@@ -260,7 +260,7 @@ export function applyMessage(msg) {
       } else {
         toast(
           data.resolution === 'merge-branch'
-            ? `Both versions kept for “${gameName}” — the other device's copy is on branch "${data.branchName}"`
+            ? `Both versions kept for “${gameName}” — you carry on with yours, and the other device's is on branch "${data.branchName}"`
             : data.resolution === 'keep-remote'
               ? `Now using the other device's version of “${gameName}” — yours is snapshotted if you change your mind`
               : `Kept this device's version of “${gameName}”`,
