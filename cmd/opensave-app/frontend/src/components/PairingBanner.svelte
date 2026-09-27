@@ -81,12 +81,9 @@
     background: var(--bg-raised);
     border: 1px solid var(--accent);
     border-radius: var(--radius-lg);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--accent-soft);
-    animation: pair-glow 2s ease-in-out infinite;
-  }
-  @keyframes pair-glow {
-    0%, 100% { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--accent-soft); }
-    50% { box-shadow: 0 12px 44px rgba(0, 0, 0, 0.6), 0 0 0 3px var(--accent-soft); }
+    /* Still, no pulse: the outline, the chime and the window coming to the
+       front already say someone is asking. */
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
   }
   .pair-icon {
     flex-shrink: 0;

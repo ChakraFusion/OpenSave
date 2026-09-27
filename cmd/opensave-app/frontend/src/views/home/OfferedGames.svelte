@@ -75,11 +75,11 @@
 {/if}
 
 <style>
-  /* Given the accent border because being noticed IS the feature: an offer
+  /* Outlined in the accent because being noticed IS the feature: an offer
      nobody sees leaves a save silently not syncing, which is worse than a
      folder guessed wrong. */
   .offers {
-    border-left: 3px solid var(--accent);
+    border-color: var(--accent);
   }
   .intro {
     color: var(--text-dim);

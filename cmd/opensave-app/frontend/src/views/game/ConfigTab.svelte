@@ -19,7 +19,9 @@
     appId: game.appId ?? '',
     savePath: game.savePath ?? '',
     exePath: game.exePath ?? '',
-    coverUrl: game.coverUrl ?? '',
+    // The art Steam has for the App ID is not a custom cover: shown here it
+    // read as one, beside a hint saying to leave the field blank for it.
+    coverUrl: game.coverUrl && !game.coverUrl.includes('steamstatic.com/steam/apps/') ? game.coverUrl : '',
     autoSync: game.autoSync ?? true,
     maxSnapshots: game.maxSnapshots ?? 5,
     maxManualSnapshots: game.maxManualSnapshots ?? 0,
