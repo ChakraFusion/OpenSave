@@ -3,7 +3,30 @@
 All notable changes to OpenSave are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.4.0-beta.4] — 2026-09-27
+
+A beta mostly about conflicts, and one of them serious: if you sync between
+devices and have ever answered a conflict with "Keep both", update.
+
+Keep both no longer empties your saves. Answered on both devices, it moved
+each onto the other's version, on a branch of its own; the two then followed
+each other's branches, read the empty folders as every file deleted, and
+passed that on. Both saves were left empty, their versions only in the
+history. Keep both now does what it says: yours stays, and the other device's
+is kept beside it on a branch. Two devices syncing a game at the same moment,
+or a save read while the game was still writing it, no longer raise a
+conflict that was never there. And a conflict can wait: "Decide later" puts
+the question aside until you open the game.
+
+A new install no longer calls cloud backup on when it has nowhere to send
+anything, and the setup guide asks for it. Steam has changed how it answers
+some App IDs, and OpenSave had begun calling well-known games — Elden Ring
+among them — "not a Steam game"; it reads the answer properly again.
+
+The game you are playing is marked on Home and in the sidebar, Launch starts
+the program you set, and there are eighteen accent colours, with some
+movement to go with them — which Settings → Appearance → Animations switches
+off.
 
 ### Added
 
