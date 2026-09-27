@@ -90,7 +90,7 @@ func (d *Daemon) catchUpAfterPause() {
 		if !snapshot.ArchiveExists(h.zipPath) {
 			continue
 		}
-		d.uploads.Add(1)
+		d.uploads.Add()
 		go d.runCloudUpload(h.zipPath, h.remoteName, d.Log)
 		sent++
 	}

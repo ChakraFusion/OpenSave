@@ -18,6 +18,7 @@ import (
 	"github.com/opensave/opensave/internal/cloud"
 	"github.com/opensave/opensave/internal/config"
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/drain"
 	"github.com/opensave/opensave/internal/logging"
 	"github.com/opensave/opensave/internal/p2p"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
@@ -82,7 +83,7 @@ type Daemon struct {
 
 	// uploads counts cloud mirrors still running, so Stop can wait for them
 	// rather than letting process exit truncate one.
-	uploads sync.WaitGroup
+	uploads drain.Group
 
 	// held are the cloud copies of snapshots taken while syncing was paused,
 	// sent when it resumes. See pause.go.
@@ -97,7 +98,7 @@ type Daemon struct {
 	// and the process exits, taking the unfinished snapshot with it. The game
 	// ended up tracked with no history at all, and nothing said so — the one
 	// snapshot you would most want is the state before you started playing.
-	initialSnapshots sync.WaitGroup
+	initialSnapshots drain.Group
 }
 
 // New builds the daemon: resolves paths, runs the one-time legacy JSON
@@ -182,14 +183,13 @@ func New(opts Options) (*Daemon, error) {
 		// sequence, the last two uploaded as 0 bytes.
 		//
 		// Counted here, on the caller's goroutine, and only then moved to the
-		// background. Counting from inside the goroutine raced Stop's wait on
-		// the same counter — a WaitGroup's Add has to be visible before
-		// anything waits on it, and the detector fails the run when it is not.
+		// background, so that Stop, once it has seen the snapshot finish,
+		// also sees its upload.
 		if d.P2P.Pause.Paused() {
 			d.holdUpload(zipPath, remoteFileName)
 			return
 		}
-		d.uploads.Add(1)
+		d.uploads.Add()
 		go d.runCloudUpload(zipPath, remoteFileName, log)
 	}
 	d.P2P.Pause.OnResume(d.catchUpAfterPause)
@@ -472,11 +472,7 @@ func (d *Daemon) Stop() {
 	// the background so the UI stays responsive: a CLI `add` returns as soon
 	// as the game is recorded, and without this the process exits before the
 	// snapshot is written, leaving a tracked game with no history.
-	snapsDone := make(chan struct{})
-	go func() { d.initialSnapshots.Wait(); close(snapsDone) }()
-	select {
-	case <-snapsDone:
-	case <-time.After(uploadDrainTimeout):
+	if !d.initialSnapshots.Wait(uploadDrainTimeout) {
 		d.Log.Log("warn", "an initial snapshot was still running at shutdown; it may be missing")
 	}
 
@@ -485,11 +481,7 @@ func (d *Daemon) Stop() {
 	// Bounded throughout — a wedged provider must not hold a CLI command open
 	// forever, and an upload killed at the timeout is no worse off than it was
 	// before any of this waited at all.
-	done := make(chan struct{})
-	go func() { d.uploads.Wait(); close(done) }()
-	select {
-	case <-done:
-	case <-time.After(uploadDrainTimeout):
+	if !d.uploads.Wait(uploadDrainTimeout) {
 		d.Log.Log("warn", "a cloud upload was still running at shutdown; it may be incomplete")
 	}
 
@@ -774,7 +766,7 @@ func (d *Daemon) TrackGame(game store.Game) (store.Game, error) {
 	// Counted so Stop can wait for it: the CLI's daemon lives only as long as
 	// the command, and without the wait `opensave add` returned before the
 	// snapshot was written and the process took it with it.
-	d.initialSnapshots.Add(1)
+	d.initialSnapshots.Add()
 	go func() {
 		defer d.initialSnapshots.Done()
 		if _, err := d.Snapshots.Create(game.ID, "Initial snapshot", true); err != nil {
@@ -1295,4 +1287,4 @@ func (d *Daemon) RewatchGame(gameID string) {
 // the first snapshot, then the watch — has finished. For tests that go on to
 // change the game's folders: that work walks them, and on Windows a folder
 // being walked or put under watch cannot be deleted from under it.
-func (d *Daemon) WaitForTracking() { d.initialSnapshots.Wait() }
+func (d *Daemon) WaitForTracking() { d.initialSnapshots.Wait(0) }

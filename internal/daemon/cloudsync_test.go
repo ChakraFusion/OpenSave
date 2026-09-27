@@ -77,7 +77,7 @@ func (c *cloudDevice) play(content string) store.Snapshot {
 	if err := c.d.Store.SetLastManifestHash(cloudGame, hash); err != nil {
 		c.t.Fatal(err)
 	}
-	c.d.uploads.Wait()
+	c.d.uploads.Wait(0)
 	time.Sleep(5 * time.Millisecond)
 	return snap
 }
@@ -101,7 +101,7 @@ func (c *cloudDevice) saveIs() string {
 func (c *cloudDevice) check() []CloudOffer {
 	c.t.Helper()
 	c.d.CheckCloud()
-	c.d.uploads.Wait()
+	c.d.uploads.Wait(0)
 	return c.d.CloudOffers()
 }
 
@@ -155,7 +155,7 @@ func TestCloudTakesASaveThatContinuesFromThisOne(t *testing.T) {
 	if err := deck.d.AcceptCloudOffer(cloudGame, a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 
 	// The Desktop sees the Deck is on its own save: nothing to offer back.
 	if offers := desktop.check(); len(offers) != 0 {
@@ -175,7 +175,7 @@ func TestCloudTakesASaveThatContinuesFromThisOne(t *testing.T) {
 
 	// Taking it must not bounce back: the Desktop now sees the Deck on the
 	// Desktop's own save.
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 	if offers := desktop.check(); len(offers) != 0 {
 		t.Errorf("the Desktop was offered its own save back after the Deck took it: %+v", offers)
 	}
@@ -194,7 +194,7 @@ func TestCloudAsksWhenBothDevicesPlayed(t *testing.T) {
 	if err := deck.d.AcceptCloudOffer(cloudGame, a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 
 	desktop.play("desktop went left")
 	b := deck.play("deck went right")
@@ -223,7 +223,7 @@ func TestCloudNeverOffersTheCopyKeptBeforeARestore(t *testing.T) {
 	if err := deck.d.AcceptCloudOffer(cloudGame, a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 	desktop.play("act 2")
 	deck.check()
 	if got := deck.saveIs(); got != "act 2" {
@@ -235,7 +235,7 @@ func TestCloudNeverOffersTheCopyKeptBeforeARestore(t *testing.T) {
 	if _, err := desktop.d.Snapshots.Restore(cloudGame, a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	desktop.d.uploads.Wait()
+	desktop.d.uploads.Wait(0)
 	if n := countSnapshotsNewerThan(t, dir, a1.ID); n < 2 {
 		t.Fatalf("setup: expected the kept copy in the cloud beside act 2, found %d newer snapshots", n)
 	}
@@ -263,11 +263,11 @@ func TestCloudNeverOffersTheCopyKeptBeforeAPull(t *testing.T) {
 	if err := deck.d.AcceptCloudOffer(cloudGame, a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 	deck.play("act 2, on the Deck")
 
 	desktop.check()
-	desktop.d.uploads.Wait()
+	desktop.d.uploads.Wait(0)
 	if got := desktop.saveIs(); got != "act 2, on the Deck" {
 		t.Fatalf("setup: the Desktop did not take the Deck's save; it has %q", got)
 	}
@@ -315,7 +315,7 @@ func TestCloudLeavesAChangedSaveAlone(t *testing.T) {
 	if err := deck.d.AcceptCloudOffer(cloudGame, a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 
 	deck.write("played on the Deck, not snapshotted yet")
 	desktop.play("act 2")
@@ -346,7 +346,7 @@ func TestCloudAutoPullOffAsksInstead(t *testing.T) {
 	if err := deck.d.AcceptCloudOffer(cloudGame, a1.ID); err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 	a2 := desktop.play("act 2")
 
 	offers := deck.check()
@@ -448,7 +448,7 @@ func TestCloudAsksBeforeFillingASaveSomebodyDeleted(t *testing.T) {
 	if _, err := deck.d.Snapshots.Create(cloudGame, "", true); err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 	time.Sleep(5 * time.Millisecond)
 
 	desktop.play("act 1")
@@ -473,7 +473,7 @@ func TestCloudAsksWithoutClaimingProgressWhenItCannotTell(t *testing.T) {
 	if _, err := desktop.d.Snapshots.Create(cloudGame, "", true); err != nil {
 		t.Fatal(err)
 	}
-	desktop.d.uploads.Wait()
+	desktop.d.uploads.Wait(0)
 	time.Sleep(5 * time.Millisecond)
 
 	deck.write("deck start")
@@ -481,14 +481,14 @@ func TestCloudAsksWithoutClaimingProgressWhenItCannotTell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	deck.d.uploads.Wait()
+	deck.d.uploads.Wait(0)
 	time.Sleep(5 * time.Millisecond)
 
 	desktop.check()
 	if err := desktop.d.AcceptCloudOffer(cloudGame, d0.ID); err != nil {
 		t.Fatalf("setup: the Desktop could not take the Deck's save: %v", err)
 	}
-	desktop.d.uploads.Wait()
+	desktop.d.uploads.Wait(0)
 	desktop.play("act 1")
 
 	offers := deck.check()

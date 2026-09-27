@@ -854,7 +854,7 @@ func (m *Manager) CompactAll(ctx context.Context, minAge, pace time.Duration) (C
 				if err := ctx.Err(); err != nil {
 					return res, err
 				}
-				m.inFlight.Add(1)
+				m.inFlight.Add()
 				m.sharedMu.Lock()
 				saved, err := m.compact(s)
 				m.sharedMu.Unlock()

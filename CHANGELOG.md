@@ -68,6 +68,10 @@ All notable changes to OpenSave are documented here. This project adheres to
   switch to. And a device following another onto a branch it has not got
   fetches that device's save rather than reading its own empty folder as a
   deletion — which switching branches by hand could also set off.
+- **Quitting as a game is tracked or a snapshot starts waits for it
+  properly.** Shutdown waits for snapshots and cloud copies still being
+  written, and one that started just as it began waiting was counted in a
+  way that could be missed, or could crash the app on its way out.
 - **Syncing a game from both devices at once no longer raises a conflict.**
   A device part-way through taking a sync was asked for its files by the
   other a moment later, and described a save half-way between two states —

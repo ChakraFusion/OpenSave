@@ -186,7 +186,7 @@ func (d *Daemon) noteRestoreForCloud(snap store.Snapshot) {
 		d.Log.Log("warn", fmt.Sprintf("cloud: could not record the restore of %q: %v", game.Name, err))
 		return
 	}
-	d.uploads.Add(1)
+	d.uploads.Add()
 	go func() {
 		defer d.uploads.Done()
 		_ = d.publishHead(game.ID)

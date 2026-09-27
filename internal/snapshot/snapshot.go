@@ -22,6 +22,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/drain"
 	"github.com/opensave/opensave/internal/store"
 	"github.com/opensave/opensave/internal/winreg"
 )
@@ -78,7 +79,7 @@ type Manager struct {
 	// each writes an archive into the backups directory and then a row. Left
 	// running past shutdown it wrote into a directory that was being deleted
 	// and recorded against a database that was already closed.
-	inFlight sync.WaitGroup
+	inFlight drain.Group
 	// sharedMu is held by a compaction and by the clean-up of shared files
 	// (shared.go): a compaction names shared files before any list does, and
 	// a clean-up running then would take them for unused. pendingRoots are
@@ -92,14 +93,7 @@ type Manager struct {
 // until the timeout. Callers should stop whatever starts snapshots first —
 // otherwise a new one can begin after the wait and before the store closes.
 func (m *Manager) WaitForInFlight(timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() { m.inFlight.Wait(); close(done) }()
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
+	return m.inFlight.Wait(timeout)
 }
 
 // New creates a snapshot Manager.
@@ -193,7 +187,7 @@ func (m *Manager) CreateOnBranchFrom(gameID, branch, dir, comment string) (store
 // createOnBranchFrom is createOnBranch with the folder to archive given: ""
 // for the game's own save locations, as always.
 func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSystemAuto, current bool) (store.Snapshot, error) {
-	m.inFlight.Add(1)
+	m.inFlight.Add()
 	defer m.inFlight.Done()
 
 	game, err := m.Store.GetGame(gameID)
