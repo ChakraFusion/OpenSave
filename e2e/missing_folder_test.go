@@ -24,10 +24,18 @@ func TestMissingFolder_DoesNotWipeThePeer(t *testing.T) {
 	// B's folder goes, whole.
 	testutil.RemoveTree(t, b.SaveDir)
 
-	// Both sides reach for each other, as they would on their own.
+	// Both sides reach for each other, as they would on their own. B may
+	// refuse: removing a folder deletes its files first, and if B's watcher
+	// sees them go before the folder does, B holds the game back as emptied
+	// ("not synced until you say whether that was meant") instead of calling
+	// it missing. Either keeps the loss from A, and that is what this checks —
+	// so a refusal is an answer here, not a failure.
 	for i := 0; i < 3; i++ {
-		b.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
-		a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+		for _, d := range []*testutil.TestDaemon{b, a} {
+			if code := d.APIStatus(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil); code >= 400 && code != http.StatusConflict {
+				t.Fatalf("%s: sync answered %d", d.Name(), code)
+			}
+		}
 		time.Sleep(time.Second)
 	}
 	testutil.SettleSync(t, gameID, a, b)
