@@ -24,6 +24,12 @@ func newTestDaemon(t *testing.T) *Daemon {
 	if err != nil {
 		t.Fatalf("daemon.New: %v", err)
 	}
+	// Hermetic, as the e2e harness is (testutil.NewTestDaemon): no background
+	// download of the Ludusavi manifest into the test's folder. The first name
+	// lookup started one, and on Windows the half-written file it held open
+	// failed the test when t.TempDir came to remove the folder — on a fast
+	// connection rarely, on a slow one most runs.
+	d.Scanner.ManifestURL = ""
 	t.Cleanup(d.Stop)
 	return d
 }
