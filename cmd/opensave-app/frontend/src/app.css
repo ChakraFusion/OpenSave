@@ -157,8 +157,11 @@ input[type='checkbox']:checked {
 }
 /* The same tick in near-black, for an accent light enough that white would
    not show on it. An image cannot take a CSS variable, so the page says which
-   (data-on-accent, set in lib/appearance.js). */
-:root[data-on-accent='dark'] input[type='checkbox']:checked {
+   (data-on-accent, set in lib/appearance.js).
+   Not on a switch (a checkbox in a .check row), which draws a knob and no
+   tick: this rule is more specific than the switch's own, so without the
+   :not it stamped a tick over the knob of every switch that was on. */
+:root[data-on-accent='dark'] input[type='checkbox']:checked:not(.check input) {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.5 8.5l3 3 6-7' fill='none' stroke='%23141416' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 input[type='radio']::after {
