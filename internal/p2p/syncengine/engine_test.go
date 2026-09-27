@@ -43,6 +43,10 @@ type fakeTransport struct {
 	// deletion's propagation: a test's way to look in while a sync is writing.
 	onFetchBlocks  func()
 	onDeleteRemote func()
+	// onSyncEvent runs as this side reports a sync event to the peer —
+	// "sync-complete" once a pull's files are all written, before the sync
+	// that pulled them has finished.
+	onSyncEvent func(eventType string)
 }
 
 func (f *fakeTransport) FetchManifest(ctx context.Context, peer Peer, gameID string, q ManifestQuery) (ManifestResponse, error) {
@@ -124,7 +128,11 @@ func (f *fakeTransport) TriggerPeerPull(peer Peer, gameID string) {
 func (f *fakeTransport) ReportSyncEvent(peer Peer, gameID, eventType string, data map[string]any) {
 	f.mu.Lock()
 	f.syncEvents = append(f.syncEvents, eventType)
+	cb := f.onSyncEvent
 	f.mu.Unlock()
+	if cb != nil {
+		cb(eventType)
+	}
 }
 
 type engineEnv struct {

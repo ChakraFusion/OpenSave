@@ -244,7 +244,8 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		// intersects the two sides, and the remote side passed here has the
 		// excluded paths removed — so they cannot reach the lineage from
 		// either direction. Same arrangement as the main folder.
-		e.persistRootLineage(gameID, peer.ID, sr.root.Name, mergeManifestPaths(fresh, local), remote)
+		e.persistRootLineage(gameID, peer.ID, sr.root.Name,
+			withPulled(mergeManifestPaths(fresh, local), remote, decision.FilesToPull, decision.DirsToPull), remote)
 	}
 
 	// Same ratchet as the primary location, for the same reason: after a pure

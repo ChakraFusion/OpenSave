@@ -107,6 +107,12 @@ off.
   switch to. And a device following another onto a branch it has not got
   fetches that device's save rather than reading its own empty folder as a
   deletion — which switching branches by hand could also set off.
+- **A save deleted the moment it arrives stays deleted.** A file that came
+  from another device and was deleted here before that sync had finished was
+  missing from the record of what the two devices share, so the next sync
+  took the other device's copy for a new file and brought it back, instead
+  of deleting it there. It showed up as a rare failure in the test suite
+  under load.
 - **Well-known games are no longer called "not a Steam game".** Steam has
   begun answering some App IDs under the id of an edition — Elden Ring's
   1245620 comes back as 2855530 — and OpenSave read only the id it asked

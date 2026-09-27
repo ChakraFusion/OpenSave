@@ -774,9 +774,13 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// verifiably on both sides, and dropping it from the lineage here
 	// would make the next pass misread the peer's copy as a brand-new
 	// remote file and resurrect it, instead of propagating the deletion.
+	//
+	// And with what this sync pulled: see withPulled.
 	freshManifest, freshErr := e.ReadManifest(ctx, gameID, game.SavePath)
 	if freshErr == nil {
-		e.persistLineage(gameID, peer.ID, mergeManifestPaths(freshManifest, localManifest), remoteData.Manifest)
+		e.persistLineage(gameID, peer.ID,
+			withPulled(mergeManifestPaths(freshManifest, localManifest), remoteData.Manifest, decision.FilesToPull, decision.DirsToPull),
+			remoteData.Manifest)
 	}
 
 	// Convergence ratchet: after a pure pull (no push, no peer-side
@@ -1056,6 +1060,42 @@ func mergeManifestPaths(a, b delta.Manifest) delta.Manifest {
 		}
 	}
 	return merged
+}
+
+// withPulled is m with the files and folders a sync has just taken from the
+// peer added. When the pull finished they were on both sides, so they belong
+// in the record of what the two share, whatever a read of the folder a
+// moment later finds.
+//
+// The record used to come only from that later read and from the one the
+// sync began with, and a file taken from the peer is in neither if it is
+// deleted here in between: it was not here yet at the start, and gone again
+// by the end. Left out of the record, the deletion was then read as the peer
+// having a new file, and the next sync fetched it back rather than passing
+// the deletion on. The window is short, which is why it showed only as an
+// occasional failure under load (TestReverseDeletionPropagation).
+//
+// A name this system cannot store is left out: pullFiles skips it, so it was
+// never here, and counting it as shared would read its absence as a deletion
+// and delete it on the peer.
+func withPulled(m, remote delta.Manifest, files, dirs []string) delta.Manifest {
+	if len(files) == 0 && len(dirs) == 0 {
+		return m
+	}
+	pulled := delta.Manifest{Files: make(map[string]delta.FileEntry, len(files))}
+	for _, p := range files {
+		fe, ok := remote.Files[p]
+		if !ok || delta.UnrepresentableName(p) != "" {
+			continue
+		}
+		pulled.Files[p] = fe
+	}
+	for _, d := range dirs {
+		if delta.UnrepresentableName(d) == "" {
+			pulled.Dirs = append(pulled.Dirs, d)
+		}
+	}
+	return mergeManifestPaths(m, pulled)
 }
 
 // IntersectLineage returns the sorted file and dir paths present in both
