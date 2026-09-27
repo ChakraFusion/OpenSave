@@ -56,6 +56,14 @@ type Manager struct {
 	// Log receives operational warnings (skipped unreadable files, …).
 	// Optional; nil disables.
 	Log func(level, msg string)
+	// WriteGate is held around every restore and branch switch this manager
+	// makes. Each rewrites a game's save folder — clears it, then fills it —
+	// and a sync must never read the folder half-way (syncengine/settle.go),
+	// or it takes the half-filled folder for the save and passes that on. The
+	// daemon sets it to the sync engine's Writing. Held here rather than by
+	// each caller, so a restore added later cannot forget it. Optional; nil
+	// holds nothing.
+	WriteGate func(gameID string) (done func())
 	// now is swappable for tests; defaults to time.Now.
 	now func() time.Time
 	// idMu serialises snapshot id selection against insertion; see
@@ -163,6 +171,28 @@ func (m *Manager) CreateBeforeReplacing(gameID, comment string) (store.Snapshot,
 // current reports whether the snapshot is of the save as it now stands and
 // will go on standing, as opposed to a copy kept before replacing it.
 func (m *Manager) createOnBranch(gameID, branch, comment string, isSystemAuto, current bool) (store.Snapshot, error) {
+	return m.createOnBranchFrom(gameID, branch, "", comment, isSystemAuto, current)
+}
+
+// CreateOnBranchFrom snapshots a folder that is not the game's save onto one
+// of its branches, as that branch's save: the game's main save location only,
+// with none of its others.
+//
+// It is how the other device's version of a save is kept beside this one's
+// without ever being put in the save folder — answering a conflict with
+// "keep both". Putting it there and snapshotting it meant switching the game
+// to another branch and back, emptying the folder on the way, and a folder
+// emptied by a sync reads to everything else as a save deleted.
+func (m *Manager) CreateOnBranchFrom(gameID, branch, dir, comment string) (store.Snapshot, error) {
+	if dir == "" {
+		return store.Snapshot{}, errors.New("no folder to snapshot")
+	}
+	return m.createOnBranchFrom(gameID, branch, dir, comment, true, false)
+}
+
+// createOnBranchFrom is createOnBranch with the folder to archive given: ""
+// for the game's own save locations, as always.
+func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSystemAuto, current bool) (store.Snapshot, error) {
 	m.inFlight.Add(1)
 	defer m.inFlight.Done()
 
@@ -197,16 +227,22 @@ func (m *Manager) createOnBranch(gameID, branch, comment string, isSystemAuto, c
 		fmt.Sprintf(".staging-%d-%d.zip", os.Getpid(), m.stagingSeq.Add(1)))
 	// Every save location the game has, not just the main one. A game with
 	// none produces exactly the archive it always did.
-	extraRoots, rootsErr := m.Store.GameRootPaths(gameID)
-	if rootsErr != nil {
-		extraRoots = nil
+	src := game.SavePath
+	var extraRoots map[string]string
+	if from == "" {
+		roots, rootsErr := m.Store.GameRootPaths(gameID)
+		if rootsErr == nil {
+			extraRoots = roots
+		}
+		// Refresh the registry capture before archiving it. The capture is a
+		// file in one of the game's locations, so the zip picks it up with
+		// everything else — but the file is only as current as the last time it
+		// was written, and the registry has changed since the game was played.
+		m.refreshRegistryCapture(game, settings, extraRoots)
+	} else {
+		src = from
 	}
-	// Refresh the registry capture before archiving it. The capture is a file
-	// in one of the game's locations, so the zip picks it up with everything
-	// else — but the file is only as current as the last time it was written,
-	// and the registry has changed since the game was played.
-	m.refreshRegistryCapture(game, settings, extraRoots)
-	skipped, captured, err := ZipRootsCapturing(game.SavePath, extraRoots, stagingPath)
+	skipped, captured, err := ZipRootsCapturing(src, extraRoots, stagingPath)
 	if err != nil {
 		os.Remove(stagingPath)
 		return store.Snapshot{}, fmt.Errorf("zip save data: %w", err)
@@ -255,7 +291,12 @@ func (m *Manager) createOnBranch(gameID, branch, comment string, isSystemAuto, c
 	// lineage stops proving it was ever shared. Working it out here costs one
 	// comparison against a list already stored, and it is the only moment when
 	// both the before and after states are in hand.
-	m.recordDeletionsSince(gameID, branch, snapshotID, captured)
+	//
+	// Not for a folder that is not the save (CreateOnBranchFrom): what it lacks
+	// was never deleted from this device's save.
+	if from == "" {
+		m.recordDeletionsSince(gameID, branch, snapshotID, captured)
+	}
 
 	// Before the upload hook, so anything the upload does afterwards sees a
 	// record that already names this snapshot.
@@ -690,6 +731,7 @@ func (m *Manager) DeleteBranch(gameID, branch string) (removed int, freed int64)
 // save). The snapshot may live on any branch, matching the JS behavior of
 // searching all branches.
 func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
+	defer m.writing(gameID)()
 	game, err := m.Store.GetGame(gameID)
 	if err != nil {
 		return store.Snapshot{}, err
@@ -846,6 +888,14 @@ func (m *Manager) CreateBranch(gameID, branchName string, copyCurrentSave bool) 
 	return clean, nil
 }
 
+// writing holds WriteGate for a game, when there is one.
+func (m *Manager) writing(gameID string) (done func()) {
+	if m.WriteGate == nil {
+		return func() {}
+	}
+	return m.WriteGate(gameID)
+}
+
 // gameOf is a small helper for the places that need a game's fields and have
 // already established it exists.
 func gameOf(m *Manager, gameID string) store.Game {
@@ -858,6 +908,7 @@ func gameOf(m *Manager, gameID string) store.Game {
 // active branch pointer, then restore the target branch's latest snapshot
 // (if it has one — switching to a fresh branch leaves the save cleared).
 func (m *Manager) SwitchBranch(gameID, targetBranch string) error {
+	defer m.writing(gameID)()
 	game, err := m.Store.GetGame(gameID)
 	if err != nil {
 		return err

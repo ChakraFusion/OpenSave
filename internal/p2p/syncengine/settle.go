@@ -172,6 +172,34 @@ func (e *Engine) Reading(ctx context.Context, gameID string) (done func(), err e
 	}, nil
 }
 
+// TryReading is Reading without the wait: it holds the save still and says so
+// if nothing is writing it, and otherwise takes nothing. For a check that
+// runs on every change to the folder — the watcher's — where waiting would
+// hold up everything behind it, and the writer's own changes bring the check
+// round again once it has finished.
+func (e *Engine) TryReading(gameID string) (done func(), ok bool) {
+	e.settleMu.Lock()
+	g := e.gateLocked(gameID)
+	if g.writers > 0 || g.waitingWriters > 0 {
+		e.settleMu.Unlock()
+		return func() {}, false
+	}
+	g.readers++
+	e.settleMu.Unlock()
+	var once bool
+	return func() {
+		e.settleMu.Lock()
+		defer e.settleMu.Unlock()
+		if once {
+			return
+		}
+		once = true
+		g := e.gateLocked(gameID)
+		g.readers--
+		e.wakeLocked(gameID, g)
+	}, true
+}
+
 // ReadManifest builds the manifest of one of the game's save folders while
 // holding it still (Reading) — the way every sync reads a save it is not
 // itself writing.

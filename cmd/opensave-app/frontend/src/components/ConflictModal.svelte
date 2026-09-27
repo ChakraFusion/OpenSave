@@ -224,8 +224,9 @@
         </button>
       </div>
       <p class="hint-line">
-        <History size={15} class="inline-icon" /> Nothing is lost whichever you pick. <strong>“Keep both”</strong> (recommended) parks
-        {peerName}'s version on a branch and keeps playing yours. <strong>“Keep mine”</strong> makes your
+        <History size={15} class="inline-icon" /> Nothing is lost whichever you pick. <strong>“Keep both”</strong> (recommended) keeps
+        playing yours — {peerName} receives it too — and keeps {peerName}'s version here on a branch you can switch
+        to. <strong>“Keep mine”</strong> makes your
         version the shared one — {peerName} receives it (their old save is snapshotted first).
         <strong>“Keep theirs”</strong> adopts {peerName}'s version here, snapshotting yours first.
         Restore anything from the game's Snapshots / Branches tabs.

@@ -1,6 +1,7 @@
 package syncengine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -220,6 +221,17 @@ func keysOf[V any](m map[string]V) map[string]struct{} {
 // to start a sync of it — the two differ once the answer was "put them
 // back", while the files are still being fetched.
 func (e *Engine) CheckHold(gameID string, serving bool) (held bool, err error) {
+	// Whether the folder was emptied here is judged only while no sync is
+	// writing it (settle.go). A sync that follows the other device onto a new
+	// branch empties the folder before it fills it again; looked at in
+	// between, that read as every file deleted on this device, and the game
+	// was held back over a switch. Not waited for: this runs on every change
+	// the watcher sees, and the sync's own writes bring it round again.
+	//
+	// Before holdMu, in the order every path keeps: a sync holding its write
+	// takes holdMu (noteEmptiedByPeer).
+	readDone, settled := e.TryReading(gameID)
+	defer readDone()
 	e.holdMu.Lock()
 	defer e.holdMu.Unlock()
 	game, err := e.Store.GetGame(gameID)
@@ -229,6 +241,10 @@ func (e *Engine) CheckHold(gameID string, serving bool) (held bool, err error) {
 	hold, has, err := e.Store.GetDeletionHold(gameID)
 	if err != nil {
 		return false, err
+	}
+	if !settled {
+		// A hold already waiting keeps waiting; nothing new is decided.
+		return has && hold.State != store.HoldConfirmed && (serving || hold.State == store.HoldAsking), nil
 	}
 	x, err := e.emptiedLocations(game)
 	if err != nil {
@@ -308,6 +324,15 @@ func (e *Engine) ConfirmHold(gameID string) error {
 // are all here, the other devices are still shown nothing (see CheckHold).
 // Returns how many files are to be fetched.
 func (e *Engine) PutBack(gameID string) (fetching int, err error) {
+	// What is still missing is read from a save no sync is writing
+	// (settle.go), taken before holdMu as CheckHold explains.
+	ctx, cancel := context.WithTimeout(context.Background(), ServeSettleWait)
+	readDone, err := e.Reading(ctx, gameID)
+	cancel()
+	if err != nil {
+		return 0, fmt.Errorf("a sync of this game is still writing it; try again in a moment")
+	}
+	defer readDone()
 	e.holdMu.Lock()
 	defer e.holdMu.Unlock()
 	hold, has, err := e.Store.GetDeletionHold(gameID)

@@ -57,6 +57,17 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Fixed
 
+- **Answering a conflict with "Keep both" on both devices no longer empties
+  both saves.** Keep both — the recommended answer — moved each device onto
+  the other's version, on a branch named after the other device. The two
+  then followed each other's branches, starting each one empty, and a sync
+  read the empty folder as every file deleted here and deleted them on the
+  other device too. Both versions were still in the history, but both saves
+  were left empty. Keep both now does what it says: your version stays, the
+  other device receives it, and theirs is kept here on a branch you can
+  switch to. And a device following another onto a branch it has not got
+  fetches that device's save rather than reading its own empty folder as a
+  deletion — which switching branches by hand could also set off.
 - **Syncing a game from both devices at once no longer raises a conflict.**
   A device part-way through taking a sync was asked for its files by the
   other a moment later, and described a save half-way between two states —

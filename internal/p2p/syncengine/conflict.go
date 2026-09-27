@@ -70,34 +70,45 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		return "", nil
 
 	case "merge-branch":
+		// Keep both: this device goes on playing its own version, and the
+		// peer's is kept beside it on a branch of its own, there to switch to.
+		//
+		// It used to do the opposite of that: switch this device onto a new
+		// branch and fill it with the peer's version, leaving its own behind on
+		// the old one. The peer, answering the same way, did likewise, so the
+		// two ended on branches with different names; each then followed the
+		// other's branch by creating it empty, and read its empty folder
+		// against their old record of shared files as every file deleted —
+		// which it passed on. Both saves were emptied by the recommended
+		// answer. Now the save folder is never touched, and no branch changes.
 		branchName = fmt.Sprintf("conflict-%s-%s",
 			snapshot.CleanBranchName(peer.Name),
 			lastN(fmt.Sprintf("%d", time.Now().UnixMilli()), 4))
-		e.Log("info", fmt.Sprintf("conflict on %q resolved: keep BOTH — remote goes to branch %q", gameID, branchName))
 		remoteData, err := e.peerStateForResolution(ctx, gameID, peer)
 		if err != nil {
 			return "", err
 		}
-		// The switch empties the save and the overwrite fills it: between
-		// them it holds nobody's version, so both are one write (settle.go).
-		defer e.Writing(gameID)()
-
-		// Not seeded from the current save: this branch exists to hold the
-		// PEER's version, which overwriteLocalWithRemote writes into it a
-		// moment from now. The local version is preserved by the safety
-		// snapshot the switch takes onto the outgoing branch.
-		if _, err := e.Snapshots.CreateBranch(gameID, branchName, false); err != nil {
+		created, err := e.Snapshots.CreateBranch(gameID, branchName, false)
+		if err != nil {
 			return "", err
 		}
-		if err := e.Snapshots.SwitchBranch(gameID, branchName); err != nil {
+		if err := e.keepPeersVersion(ctx, gameID, peer, remoteData, created); err != nil {
+			// Not left behind empty: switching to an empty branch clears the
+			// save folder.
+			_, _ = e.Snapshots.DeleteBranch(gameID, created)
+			return "", fmt.Errorf("keep %s's version: %w", peer.Name, err)
+		}
+		e.Log("info", fmt.Sprintf("conflict on %q resolved: keep BOTH — this device's version stays, and %s's is kept on branch %q",
+			gameID, peer.Name, created))
+		// From here it is "keep mine": this device's version becomes the
+		// shared one, and the peer is asked to take it — which, if it has
+		// changes of its own, asks the person there in turn.
+		if err := e.markResolvedLocal(gameID, peer); err != nil {
 			return "", err
 		}
-		if err := e.overwriteLocalWithRemote(ctx, gameID, peer, remoteData, "Diverged save state from peer: "+peer.Name); err != nil {
-			return "", err
-		}
-		e.markResolvedConverged(gameID, peer)
 		e.clearConflict(gameID)
-		return branchName, nil
+		e.Transport.TriggerPeerPull(peer, gameID)
+		return created, nil
 
 	default:
 		return "", fmt.Errorf("invalid conflict resolution %q", resolution)
@@ -225,6 +236,76 @@ func (e *Engine) peerStateForResolution(ctx context.Context, gameID string, peer
 		return ManifestResponse{}, fmt.Errorf("fetch remote manifest: %w", err)
 	}
 	return remoteData, nil
+}
+
+// keepPeersVersion stores the peer's save, as remoteData describes it, as the
+// first snapshot on branch. It is fetched into a folder of its own and
+// archived from there, so this device's save folder is not touched.
+func (e *Engine) keepPeersVersion(ctx context.Context, gameID string, peer Peer, remoteData ManifestResponse, branch string) error {
+	game, err := e.Store.GetGame(gameID)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "opensave-keep-both-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+
+	files := remoteData.Manifest.Files
+	if len(files) == 0 {
+		return fmt.Errorf("%s holds no save files for this game", peer.Name)
+	}
+	// A save that is one file is archived as that file, under this device's
+	// own name for it, which is what switching to the branch restores to.
+	isFile, _ := delta.ResolveLocalSaveFilePath(game.SavePath)
+	src := tmp
+	if isFile {
+		if len(files) != 1 {
+			return fmt.Errorf("%s holds %d files for a save that is one file here", peer.Name, len(files))
+		}
+		src = filepath.Join(tmp, filepath.Base(game.SavePath))
+	} else {
+		for _, dir := range remoteData.Manifest.Dirs {
+			if delta.IsSafePath(tmp, dir) {
+				_ = os.MkdirAll(filepath.Join(tmp, filepath.FromSlash(dir)), 0o777)
+			}
+		}
+	}
+
+	var total int64
+	for _, f := range files {
+		total += f.Size
+	}
+	tracker := newProgressTracker(total)
+	throttle := e.throttleFor(peer.Wan())
+	for rel, file := range files {
+		if !delta.IsSafePath(tmp, rel) {
+			return fmt.Errorf("path traversal attempt on %s", rel)
+		}
+		if reason := delta.UnrepresentableName(rel); reason != "" {
+			e.Log("warn", fmt.Sprintf("not keeping %q from %s: %s", rel, peer.Name, reason))
+			continue
+		}
+		local := filepath.Join(tmp, filepath.FromSlash(rel))
+		if isFile {
+			local = src
+		}
+		if err := os.MkdirAll(filepath.Dir(local), 0o777); err != nil {
+			return err
+		}
+		ref := FileRef{GameID: gameID, Root: delta.PrimaryRoot, RelPath: rel}
+		if err := e.pullFile(ctx, peer, ref, local, file, DifferentBlockIndices(nil, file), throttle, tracker, func(bool) {}); err != nil {
+			return fmt.Errorf("fetch %s: %w", rel, err)
+		}
+		if file.MtimeMs > 0 {
+			mtime := time.UnixMilli(int64(file.MtimeMs))
+			_ = os.Chtimes(local, mtime, mtime)
+		}
+	}
+	_, err = e.Snapshots.CreateOnBranchFrom(gameID, branch, src,
+		fmt.Sprintf("%s's version, kept when a conflict was resolved", peer.Name))
+	return err
 }
 
 // overwriteLocalWithRemote makes the local save byte-identical to the

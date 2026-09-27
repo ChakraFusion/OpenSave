@@ -29,6 +29,7 @@ import (
 // Restoring one of this device's own snapshots is a different request —
 // "make the folder look like it did" — and still uses Restore.
 func (m *Manager) RestoreKeeping(gameID, snapshotID string, keep ignore.Rules) (store.Snapshot, error) {
+	defer m.writing(gameID)() // as Restore; holds nest
 	if keep.Empty() {
 		return m.Restore(gameID, snapshotID)
 	}

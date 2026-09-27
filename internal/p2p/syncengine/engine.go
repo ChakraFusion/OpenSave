@@ -437,6 +437,22 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	}
 
 	// 2. Branch alignment: local follows the remote's active branch.
+	//
+	// From the switch until the peer's save has been pulled into the branch,
+	// this device's save is a folder emptied for a branch not yet filled —
+	// held throughout, so nothing reads that as the save (settle.go): not the
+	// peer asking for it, and not this device's own check for a save deleted
+	// here. Let go once the pull is done, or on the way out.
+	//
+	// The switch also forgets what the two devices shared of the old branch
+	// (store.SwitchActiveBranch). That is what makes following safe: the folder
+	// is empty, and read against the old record of shared files it said every
+	// file had been deleted here — which this sync then passed on, deleting
+	// them on the device being followed. With no record, what the peer holds is
+	// simply fetched.
+	releaseAligned := func() {}
+	defer func() { releaseAligned() }()
+	aligned := false
 	if remoteData.ActiveBranch != "" && game.ActiveBranch != remoteData.ActiveBranch {
 		e.Log("warn", fmt.Sprintf("branch mismatch on %q: local %q vs remote %q — switching local",
 			game.Name, game.ActiveBranch, remoteData.ActiveBranch))
@@ -447,11 +463,9 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 			!strings.Contains(err.Error(), "already exists") {
 			return Result{}, err
 		}
-		// The switch rewrites the save folder, so it is a write like a pull.
-		switchDone := e.Writing(gameID)
-		err = e.Snapshots.SwitchBranch(gameID, remoteData.ActiveBranch)
-		switchDone()
-		if err != nil {
+		releaseAligned = e.Writing(gameID)
+		aligned = true
+		if err := e.Snapshots.SwitchBranch(gameID, remoteData.ActiveBranch); err != nil {
 			return Result{}, err
 		}
 		game, err = e.Store.GetGame(gameID)
@@ -462,7 +476,14 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 
 	// Nothing is decided on a save part-way through being written here — a
 	// conflict resolution taking the other side's files, say (settle.go).
-	localManifest, err := e.ReadManifest(ctx, gameID, game.SavePath)
+	// Straight from disk after a switch above: this sync is the one writing
+	// it, and waiting on itself would never end.
+	var localManifest delta.Manifest
+	if aligned {
+		localManifest, err = delta.BuildManifest(game.SavePath)
+	} else {
+		localManifest, err = e.ReadManifest(ctx, gameID, game.SavePath)
+	}
 	if err != nil {
 		return Result{}, fmt.Errorf("build local manifest: %w", err)
 	}
@@ -638,7 +659,9 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 			"peerName":     e.deviceName(),
 			"manifestHash": localManifest.ManifestHash(),
 		})
-		// The primary location agreeing says nothing about the others.
+		// The primary location agreeing says nothing about the others, which
+		// are read through the gate — so the branch hold goes first.
+		releaseAligned()
 		e.syncExtraRoots(ctx, gameID, game, peer, remoteData)
 		return Result{Status: "in_sync", Direction: "none"}, nil
 	}
@@ -713,6 +736,8 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		}
 	}
 	applied()
+	// The branch this sync switched to (step 2) now holds the peer's save.
+	releaseAligned()
 
 	// 9. Trigger a reciprocal pull when we hold newer content.
 	//

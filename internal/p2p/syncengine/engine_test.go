@@ -525,27 +525,41 @@ func TestSync_ConflictResolvedMergeBranch(t *testing.T) {
 		t.Fatal("merge-branch should return the new branch name")
 	}
 
-	// Active branch is now the conflict branch holding the REMOTE state.
+	// This device goes on playing its own version, on the branch it was on:
+	// "keeps playing yours", as the dialog says. It used to switch onto the new
+	// branch with the remote's version instead — and with both devices
+	// answering so, each followed the other's differently named branch and
+	// emptied both saves (see e2e/keep_both_test.go).
 	game, err := env.store.GetGame("game1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if game.ActiveBranch != branchName {
-		t.Errorf("active branch = %q, want %q", game.ActiveBranch, branchName)
+	if game.ActiveBranch != "main" {
+		t.Errorf("active branch = %q, want main: Keep both does not move this device", game.ActiveBranch)
 	}
 	local, _ := os.ReadFile(filepath.Join(env.localDir, "save.dat"))
-	if string(local) != "remote version" {
-		t.Errorf("conflict branch should hold remote state, got %q", local)
+	if string(local) != "local version" {
+		t.Errorf("the save here is %q, want this device's own version kept", local)
+	}
+	// This device's version is the shared one now, so the peer is asked to
+	// take it, as with keep-local.
+	if env.transport.pullTriggers != 1 {
+		t.Errorf("peer asked to pull %d times, want 1", env.transport.pullTriggers)
 	}
 
-	// The LOCAL version must be recoverable: switching back to main
-	// restores the pre-switch auto-snapshot of the local state.
+	// The remote's version is on the branch returned: switching to it puts
+	// that version in place, and switching back restores this device's own.
+	if err := env.engine.Snapshots.SwitchBranch("game1", branchName); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(env.localDir, "save.dat")); string(got) != "remote version" {
+		t.Errorf("branch %q holds %q, want the remote version", branchName, got)
+	}
 	if err := env.engine.Snapshots.SwitchBranch("game1", "main"); err != nil {
 		t.Fatal(err)
 	}
-	local, _ = os.ReadFile(filepath.Join(env.localDir, "save.dat"))
-	if string(local) != "local version" {
-		t.Errorf("main branch should restore local version, got %q", local)
+	if got, _ := os.ReadFile(filepath.Join(env.localDir, "save.dat")); string(got) != "local version" {
+		t.Errorf("main branch restores %q, want the local version", got)
 	}
 }
 

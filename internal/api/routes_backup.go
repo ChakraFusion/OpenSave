@@ -812,7 +812,12 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 		if importErr != nil {
 			importRoots = nil
 		}
+		// Written into a game's save folder, so held as any other write to one
+		// is: nothing syncing the game reads it half-restored
+		// (syncengine/settle.go).
+		importDone := s.Daemon.P2P.Sync.Writing(g.ID)
 		unplaced, unzipErr := snapshot.UnzipRoots(tmpPath, target, importRoots)
+		importDone()
 		for _, name := range unplaced {
 			s.Daemon.Log.Log("warn", fmt.Sprintf("%q in this backup includes a %q save location, which this device has no folder for — those files were not restored", g.Name, name))
 		}

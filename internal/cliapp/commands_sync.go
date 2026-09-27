@@ -407,7 +407,7 @@ func cmdResolve(args []string) int {
 const resolveUsage = `usage: opensave resolve <gameId> keep-both|keep-local|keep-remote
        opensave resolve <gameId> keep-local|keep-remote --location <folder>
 
-  keep-both     Keep both saves; the peer's lands on a separate branch (safest)
+  keep-both     Keep yours, and keep the peer's on a separate branch (safest)
   keep-local    This device's save wins
   keep-remote   The other device's save wins
   --location    Settle one of the game's extra save folders (see opensave conflicts)`

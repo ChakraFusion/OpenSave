@@ -158,6 +158,10 @@ func New(opts Options) (*Daemon, error) {
 
 	d.initSessions()
 
+	// A restore or a branch switch rewrites a save folder; nothing syncing it
+	// may read it half-way (syncengine/settle.go).
+	snaps.WriteGate = d.P2P.Sync.Writing
+
 	// A paired peer untracking/re-tracking a game mirrors here.
 	d.P2P.OnUntrackRequest = d.untrackFromPeer
 	d.P2P.OnRetrackRequest = d.retrackFromPeer
