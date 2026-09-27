@@ -31,8 +31,10 @@ func TestCLIPeers_ShowsProtectionPerDevice(t *testing.T) {
 	// A sync, so the relay peer proves it holds the key and the badge can
 	// honestly say "encrypted" rather than "encrypting shortly".
 	a.WriteSave("s.sav", "x")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("CLI Prot Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "CLI Prot Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(30*time.Second, func() bool {
 		p, err := a.Daemon.Store.GetPeer(b.NodeID())

@@ -40,8 +40,10 @@ func TestWireDemo(t *testing.T) {
 	pairOverRelay(t, a, b, relayURL, room)
 
 	a.WriteSave("player.sav", "save data containing "+secret)
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Demo Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Demo Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(60*time.Second, func() bool { return strings.Contains(b.ReadSave("player.sav"), secret) }) {
 		t.Fatal("the save never reached the Deck")

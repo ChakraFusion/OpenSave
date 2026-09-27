@@ -59,8 +59,10 @@ func TestWatchAutoSyncChain(t *testing.T) {
 	a.PairWith(b)
 
 	a.WriteSave("seed.sav", "seed")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Chain Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Chain Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	waitTracked(t, a, gameID)
 
 	// Creation propagates hands-free.
@@ -100,8 +102,10 @@ func TestWatcherNewSubdirectory(t *testing.T) {
 	a.PairWith(b)
 
 	a.WriteSave("root.sav", "root")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Subdir Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Subdir Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	waitTracked(t, a, gameID)
 
 	// Brand-new nested directories, then a file inside them.
@@ -181,8 +185,10 @@ func TestSyncContentIntegrity(t *testing.T) {
 		}
 	}
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Integrity Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Integrity Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	waitTracked(t, a, gameID)
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 
@@ -214,8 +220,10 @@ func TestSyncManyFiles(t *testing.T) {
 	for i := 0; i < n; i++ {
 		a.WriteSave(fmt.Sprintf("chunk%02d/file%03d.sav", i%10, i), fmt.Sprintf("content-%d", i))
 	}
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Many Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Many Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	waitTracked(t, a, gameID)
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 
@@ -239,8 +247,10 @@ func TestReverseDeletionPropagation(t *testing.T) {
 
 	a.WriteSave("kill-me.sav", "here")
 	a.WriteSave("keep-me.sav", "staying")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("RevDel Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "RevDel Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	waitTracked(t, a, gameID)
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 
@@ -279,12 +289,14 @@ func TestSingleFileGameChain(t *testing.T) {
 	var game struct {
 		ID string `json:"id"`
 	}
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	a.API(http.MethodPost, "/api/games", map[string]string{"name": "Solo Game", "savePath": aFile}, &game)
 	bFile := filepath.Join(b.SaveDir, "solo.sav")
 	if err := os.WriteFile(bFile, []byte("v1"), 0o666); err != nil {
 		t.Fatal(err)
 	}
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Solo Game", "savePath": bFile}, nil)
+	restoreSyncOnTrack()
 	waitTracked(t, a, game.ID)
 
 	// Establish lineage with one initial sync (contents are identical, so
@@ -326,8 +338,10 @@ func TestQueuedSyncConsistency(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(a.SaveDir, "big.bin"), big, 0o666); err != nil {
 		t.Fatal(err)
 	}
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Queue Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Queue Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	waitTracked(t, a, gameID)
 
 	// Fire the sync, then immediately land another change behind it.

@@ -253,9 +253,11 @@ func TestJourney_OneDeviceStillOnTheOldBuild(t *testing.T) {
 
 	newDev.WriteSave("save.dat", "v1")
 	newDev.WriteSave("machine.cfg", "new device")
+	restoreSyncOnTrack := suppressSyncOnTrack(newDev, old) // see sync_on_track_test.go
 	gameID := newDev.TrackGame("Fleet")
 	old.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Fleet", "savePath": old.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	cfg := extraDir(t, newDev, "config")
 	writeIn(t, cfg, "settings.ini", "only on the new device")

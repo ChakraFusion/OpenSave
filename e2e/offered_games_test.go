@@ -168,8 +168,10 @@ func TestOfferedGames_AskingDoesNotAffectAlreadyTrackedGames(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(rootA, "slot1.sav"), "from A")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "Both Sides Game", rootA)
 	trackAt(b, "Both Sides Game", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	if !testutil.WaitFor(45*time.Second, func() bool {

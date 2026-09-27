@@ -56,10 +56,12 @@ func TestPeersWithDifferentAccountFoldersConverge(t *testing.T) {
 	var gameA, gameB struct {
 		ID string `json:"id"`
 	}
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	a.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Satisfactory", "savePath": rootA}, &gameA)
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Satisfactory", "savePath": rootB}, &gameB)
+	restoreSyncOnTrack()
 	if gameA.ID == "" || gameB.ID == "" {
 		t.Fatalf("tracking failed: a=%q b=%q", gameA.ID, gameB.ID)
 	}

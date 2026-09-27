@@ -38,10 +38,12 @@ func TestMatching_AppIDLinksDifferentlyNamedGames(t *testing.T) {
 	var gameAResp, gameBResp struct {
 		ID string `json:"id"`
 	}
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	a.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Never Grave", "savePath": a.SaveDir, "appId": "2049740"}, &gameAResp)
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "NeverGrave Portable", "savePath": b.SaveDir, "appId": "2049740"}, &gameBResp)
+	restoreSyncOnTrack()
 	gameA := gameAResp.ID
 	if gameA == "" || gameBResp.ID == "" {
 		t.Fatal("tracking returned no id")

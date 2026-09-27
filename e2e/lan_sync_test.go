@@ -66,6 +66,7 @@ func TestFullSyncFlow(t *testing.T) {
 	// A tracks a game with save data; B doesn't know it yet.
 	a.WriteSave("slot1.sav", "hello from A")
 	a.WriteSave("config/video.ini", "fullscreen=1")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Shared Game")
 
 	// A pushes: manifest request auto-tracks on B, then B is triggered to
@@ -74,6 +75,7 @@ func TestFullSyncFlow(t *testing.T) {
 	// exists on this same machine. To keep the test honest we instead
 	// pre-track the game on B pointing at B's save dir.
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Shared Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 
@@ -114,8 +116,10 @@ func TestConflictFlowOverHTTP(t *testing.T) {
 
 	// Both sides start in sync.
 	a.WriteSave("slot1.sav", "shared start")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Conflict Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Conflict Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 	if !testutil.WaitFor(30*time.Second, func() bool {
 		return b.ReadSave("slot1.sav") == "shared start"
@@ -170,8 +174,10 @@ func TestConflictNeverLosesPeerData(t *testing.T) {
 	a.PairWith(b)
 
 	a.WriteSave("slot1.sav", "shared start")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Conflict Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Conflict Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 	if !testutil.WaitFor(30*time.Second, func() bool { return b.ReadSave("slot1.sav") == "shared start" }) {
 		t.Fatal("initial sync failed")
@@ -239,8 +245,10 @@ func TestPeerInitiatedDetectionOfRemoteChange(t *testing.T) {
 	a.PairWith(b)
 
 	a.WriteSave("slot1.sav", "v1")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Detect Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Detect Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 	if !testutil.WaitFor(30*time.Second, func() bool { return b.ReadSave("slot1.sav") == "v1" }) {
 		t.Fatal("initial sync failed")
@@ -330,8 +338,10 @@ func TestUntrackPropagatesAndRecovers(t *testing.T) {
 	a.PairWith(b)
 
 	a.WriteSave("slot1.sav", "shared save")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Untrack Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Untrack Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 	if !testutil.WaitFor(30*time.Second, func() bool { return b.ReadSave("slot1.sav") == "shared save" }) {
 		t.Fatal("initial sync failed")

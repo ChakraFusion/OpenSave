@@ -69,8 +69,10 @@ func TestDifferingRoots_NestedTreeArrivesIntact(t *testing.T) {
 		mustWrite(t, filepath.Join(rootA, filepath.FromSlash(rel)), content)
 	}
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "Satisfactory", rootA)
 	trackAt(b, "Satisfactory", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	for rel, want := range files {
@@ -119,8 +121,10 @@ func TestDifferingRoots_SpacesAndUnicodeSurvive(t *testing.T) {
 		mustWrite(t, filepath.Join(rootA, filepath.FromSlash(rel)), content)
 	}
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "Unicode Game", rootA)
 	trackAt(b, "Unicode Game", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	for rel, want := range files {
@@ -164,8 +168,10 @@ func TestDifferingRoots_EmptyAndBinaryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "Binary Game", rootA)
 	trackAt(b, "Binary Game", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	if !testutil.WaitFor(45*time.Second, func() bool {
@@ -200,8 +206,10 @@ func TestDifferingRoots_ChangesFlowBothWays(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(rootA, "world.sav"), "turn-1-by-A")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "PassTheSave", rootA)
 	gameB := trackAt(b, "PassTheSave", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	if !testutil.WaitFor(45*time.Second, func() bool {
@@ -246,8 +254,10 @@ func TestDifferingRoots_DeletionPropagatesAndStaysInsideTheRoot(t *testing.T) {
 	bystander := filepath.Join(b.SaveDir, "bystander.txt")
 	mustWrite(t, bystander, "not part of any save")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "DeleteGame", rootA)
 	gameB := trackAt(b, "DeleteGame", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	if !testutil.WaitFor(45*time.Second, func() bool {
@@ -309,8 +319,10 @@ func TestDifferingRoots_SameNameAtDifferentDepthsStayDistinct(t *testing.T) {
 		mustWrite(t, filepath.Join(rootA, filepath.FromSlash(rel)), content)
 	}
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "CollideGame", rootA)
 	trackAt(b, "CollideGame", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	for rel, want := range same {
@@ -353,8 +365,10 @@ func TestDifferingRoots_ManyFilesAcrossManyDirectories(t *testing.T) {
 		}
 	}
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "VolumeGame", rootA)
 	trackAt(b, "VolumeGame", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	// Wait on the whole set, then report precisely what is missing — a

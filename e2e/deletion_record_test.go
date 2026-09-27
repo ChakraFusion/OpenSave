@@ -30,6 +30,7 @@ func TestDeletion_SurvivesTheLineageBeingLost(t *testing.T) {
 
 	a.WriteSave("keep.sav", "keep me")
 	a.WriteSave("drop.sav", "drop me")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("RecordedDeletion")
 
 	var gameB struct {
@@ -37,6 +38,7 @@ func TestDeletion_SurvivesTheLineageBeingLost(t *testing.T) {
 	}
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "RecordedDeletion", "savePath": b.SaveDir}, &gameB)
+	restoreSyncOnTrack()
 
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(45*time.Second, func() bool { return b.ReadSave("drop.sav") == "drop me" }) {
@@ -96,6 +98,7 @@ func TestDeletion_NeverRemovesAnEditThePeerMadeAfterwards(t *testing.T) {
 	// which is held back for an answer (TestEmptiedFolder_*) and never
 	// reaches the rule this test is about.
 	a.WriteSave("other.sav", "stays")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("SafeDeletion")
 
 	var gameB struct {
@@ -103,6 +106,7 @@ func TestDeletion_NeverRemovesAnEditThePeerMadeAfterwards(t *testing.T) {
 	}
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "SafeDeletion", "savePath": b.SaveDir}, &gameB)
+	restoreSyncOnTrack()
 
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(45*time.Second, func() bool { return b.ReadSave("shared.sav") == "original" }) {

@@ -50,9 +50,11 @@ func pairedAndSynced(t *testing.T, relayURL, room string) (a, b *testutil.TestDa
 	pairOverRelay(t, a, b, relayURL, room)
 
 	a.WriteSave("slot1.sav", "data")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID = a.TrackGame("Spoof Game")
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Spoof Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(60*time.Second, func() bool { return b.ReadSave("slot1.sav") == "data" }) {
 		t.Fatal("setup: the sync never landed")

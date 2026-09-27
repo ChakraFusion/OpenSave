@@ -22,8 +22,10 @@ func pairedTracking(t *testing.T, name string) (a, b *testutil.TestDaemon, gameI
 	b = testutil.NewTestDaemon(t, name+"-B")
 	a.PairWith(b)
 	a.WriteSave("slot1.sav", "v1")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID = a.TrackGame("Pause Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Pause Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(60*time.Second, func() bool { return b.ReadSave("slot1.sav") == "v1" }) {
 		t.Fatal("setup: the first sync never landed")

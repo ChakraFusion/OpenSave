@@ -31,9 +31,11 @@ func TestWanPushTriggerLandsPromptly(t *testing.T) {
 	pairOverRelay(t, a, b, relayURL, "trigger-room")
 
 	a.WriteSave("slot1.sav", "first")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Trigger Game")
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Trigger Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(60*time.Second, func() bool { return b.ReadSave("slot1.sav") == "first" }) {
 		t.Fatal("setup: the first sync never landed")

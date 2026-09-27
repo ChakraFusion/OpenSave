@@ -54,8 +54,10 @@ func TestObscure_SingleFileSavesWithDifferentNames(t *testing.T) {
 	mustWrite(t, fileA, "shared start")
 	mustWrite(t, fileB, "shared start")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "EmuGame", fileA)
 	trackAt(b, "EmuGame", fileB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	mustWrite(t, fileA, "A's world")
@@ -112,8 +114,10 @@ func TestObscure_OneSideFileOtherSideDirectory(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(dirB, "existing.sav"), "B had this")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "MixedGame", fileA)
 	gameB := trackAt(b, "MixedGame", dirB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	// Settled rather than polled for an arrival. What this test asserts is
@@ -163,8 +167,10 @@ func TestObscure_NamesDifferingOnlyInCase(t *testing.T) {
 	entries, _ := os.ReadDir(rootA)
 	t.Logf("sender holds %d file(s) differing only in case", len(entries))
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "CaseGame", rootA)
 	trackAt(b, "CaseGame", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	// However many the sender has, the receiver must end up with the same
@@ -208,8 +214,10 @@ func TestObscure_SingleFileSavesWithMatchingNamesDoSync(t *testing.T) {
 	mustWrite(t, fileA, "shared start")
 	mustWrite(t, fileB, "shared start")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "SRMGame", fileA)
 	trackAt(b, "SRMGame", fileB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	mustWrite(t, fileA, "A played a turn")
@@ -363,8 +371,10 @@ func TestObscure_DecomposedAndComposedNamesAreOneFile(t *testing.T) {
 	mustWrite(t, filepath.Join(rootA, nfdCafe), "shared save")
 	mustWrite(t, filepath.Join(rootB, nfcCafe), "shared save")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "AccentGame", rootA)
 	trackAt(b, "AccentGame", rootB)
+	restoreSyncOnTrack()
 	status, _ := syncTo(a, gameA, b.NodeID())
 
 	// The load-bearing assertion. Two devices holding the SAME save must be
@@ -414,8 +424,10 @@ func TestObscure_AnEditReachesTheDifferentlySpelledFile(t *testing.T) {
 	mustWrite(t, filepath.Join(rootA, nfdCafe), "shared save")
 	mustWrite(t, filepath.Join(rootB, nfcCafe), "shared save")
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameA := trackAt(a, "AccentEdit", rootA)
 	trackAt(b, "AccentEdit", rootB)
+	restoreSyncOnTrack()
 	syncTo(a, gameA, b.NodeID())
 
 	mustWrite(t, filepath.Join(rootA, nfdCafe), "edited on the Mac")

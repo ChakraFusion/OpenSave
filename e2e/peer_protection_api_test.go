@@ -24,9 +24,11 @@ func TestPeerProtectionReachesTheApi(t *testing.T) {
 	// Sealing only reports on once the peer has proved it holds the key, and
 	// that happens on the first authenticated request.
 	a.WriteSave("slot1.sav", "data")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Prot Game")
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Prot Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(60*time.Second, func() bool { return b.ReadSave("slot1.sav") == "data" }) {
 		t.Fatal("setup: the sync never landed")

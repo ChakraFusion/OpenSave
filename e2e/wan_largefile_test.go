@@ -106,8 +106,10 @@ func TestWan_LargeMixedFileSyncThroughRelay(t *testing.T) {
 	writeRaw(t, a.SaveDir, "bulk/incompressible.bin", incompressible)
 	writeRaw(t, a.SaveDir, "small.sav", small)
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Big WAN Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Big WAN Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	start := time.Now()
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
@@ -174,8 +176,10 @@ func TestWan_LargeFileDeltaTransfersOnlyChangedBlocks(t *testing.T) {
 	rand.New(rand.NewSource(7)).Read(payload)
 	writeRaw(t, a.SaveDir, "big.sav", payload)
 
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Delta Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Delta Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	// The first transfer is this test's own control: it is the whole file
 	// going across, which is precisely what the delta must not look like.

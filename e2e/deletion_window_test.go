@@ -45,6 +45,7 @@ func TestDeletionImmediatelyAfterArrivalStillPropagates(t *testing.T) {
 
 			a.WriteSave("keep.sav", "keep me")
 			a.WriteSave("drop.sav", "drop me")
+			restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 			gameID := a.TrackGame("DeleteWindowGame")
 
 			var gameB struct {
@@ -52,6 +53,7 @@ func TestDeletionImmediatelyAfterArrivalStillPropagates(t *testing.T) {
 			}
 			b.API(http.MethodPost, "/api/games",
 				map[string]string{"name": "DeleteWindowGame", "savePath": b.SaveDir}, &gameB)
+			restoreSyncOnTrack()
 			if gameB.ID == "" {
 				t.Fatalf("round %d: tracking on the peer failed (%s)", round, b.LastError())
 			}

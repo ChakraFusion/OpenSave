@@ -113,8 +113,10 @@ func TestMultiRoot_OlderPeerGetsThePrimarySaveAndNothingElse(t *testing.T) {
 	a.PairWith(b)
 
 	a.WriteSave("save.sav", "primary data")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("MixedVer")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "MixedVer", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	aConfig := extraDir(t, a, "config")
 	writeIn(t, aConfig, "settings.ini", "fullscreen=1")

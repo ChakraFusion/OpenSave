@@ -35,9 +35,11 @@ func TestLastSynced_PerGamePerPeer(t *testing.T) {
 	setUnknownGamePolicy(t, b, store.UnknownGameAsk)
 
 	// Game one, tracked on both. B first, so A's tracking finds it there.
+	restoreSyncOnTrack := suppressSyncOnTrack(b, a) // see sync_on_track_test.go
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Stamp One", "savePath": b.SaveDir}, nil)
 	a.WriteSave("one.sav", "one")
 	one := a.TrackGame("Stamp One")
+	restoreSyncOnTrack()
 
 	// Game two, tracked on A alone, in a sibling folder since one folder is
 	// one game.
@@ -205,9 +207,11 @@ func TestCLIStatus_SaysWhenEachDeviceLastSyncedEachGame(t *testing.T) {
 	a.PairWith(b)
 	setUnknownGamePolicy(t, b, store.UnknownGameAsk)
 
+	restoreSyncOnTrack := suppressSyncOnTrack(b, a) // see sync_on_track_test.go
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Synced Game", "savePath": b.SaveDir}, nil)
 	a.WriteSave("s.sav", "x")
 	synced := a.TrackGame("Synced Game")
+	restoreSyncOnTrack()
 
 	lonely := filepath.Join(filepath.Dir(a.SaveDir), "save-lonely")
 	if err := os.MkdirAll(lonely, 0o755); err != nil {

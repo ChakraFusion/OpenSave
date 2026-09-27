@@ -27,9 +27,11 @@ func TestUntrackThenRetrack_DoesNotInheritStaleLineage(t *testing.T) {
 
 	a.WriteSave("a.sav", "alpha")
 	a.WriteSave("b.sav", "bravo")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Retrack Game")
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Retrack Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(60*time.Second, func() bool {
 		return b.ReadSave("a.sav") == "alpha" && b.ReadSave("b.sav") == "bravo"

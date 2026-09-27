@@ -185,9 +185,11 @@ func TestRelayEavesdropper_CannotReadASyncedSave(t *testing.T) {
 	content := incompressible(200<<10) + bodyMarker + incompressible(200<<10)
 
 	a.WriteSave(saveName, content)
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("EavesGame")
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "EavesGame", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(90*time.Second, func() bool {
@@ -272,9 +274,11 @@ func TestRelayEavesdropper_CannotReadAnUpdatedSave(t *testing.T) {
 
 	first := incompressible(200 << 10)
 	a.WriteSave("slot1.sav", first)
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("EavesUpdGame")
 	b.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "EavesUpdGame", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	syncTo(a, gameID, b.NodeID())
 	if !testutil.WaitFor(90*time.Second, func() bool { return b.ReadSave("slot1.sav") == first }) {
 		t.Fatal("setup: the first sync never landed")
