@@ -143,13 +143,26 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 
 		// Throttled online-status refresh (10s), with auto-sync on
 		// offline->online transition.
+		//
+		// Decided under onlineMu, on the peer as it is stored now rather than
+		// as the list above read it. A device coming back sends several
+		// requests at once; each read "offline" before any had written
+		// "online", so each started a sync of every game — twenty in a second
+		// for one device (GitHub #15). The lock is taken only when the list
+		// says an update is due, so the ordinary request does not wait on it.
 		const lastSeenLimit = 10_000
 		now := time.Now().UnixMilli()
 		if matched.Status != "online" || now-matched.LastSeenMs > lastSeenLimit {
-			wasOffline := matched.Status != "online"
-			matched.Status = "online"
-			matched.LastSeenMs = now
-			_ = e.Store.UpdatePeer(*matched)
+			e.onlineMu.Lock()
+			wasOffline := false
+			if current, err := e.Store.GetPeer(matched.ID); err == nil &&
+				(current.Status != "online" || now-current.LastSeenMs > lastSeenLimit) {
+				wasOffline = current.Status != "online"
+				current.Status = "online"
+				current.LastSeenMs = now
+				_ = e.Store.UpdatePeer(current)
+			}
+			e.onlineMu.Unlock()
 			if wasOffline {
 				e.Log("info", fmt.Sprintf("peer %q connected; triggering auto-sync for all games", matched.Name))
 				e.GoSync(func(ctx context.Context) { e.SyncAllGames(ctx) })

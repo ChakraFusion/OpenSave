@@ -100,6 +100,11 @@ type Engine struct {
 	farewellMu sync.Mutex
 	farewells  map[string]*farewell
 
+	// Held while a request decides whether its peer has just come online, so
+	// the several requests a returning device sends at once start one sync of
+	// everything between them, not one each (requirePairedPeer).
+	onlineMu sync.Mutex
+
 	// Live per-peer app build info (version + build time) learned from
 	// pings/hellos, powering the "update from this device" flow.
 	buildMu    sync.Mutex
