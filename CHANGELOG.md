@@ -26,6 +26,14 @@ All notable changes to OpenSave are documented here. This project adheres to
   snapshot of the game at all; and until the periodic check came round, a
   change made there was not sent on. It now gets both, as a game tracked by
   hand does (GitHub #16).
+- **A save of a great many files no longer wears the machine down.** A
+  device coming back online started a sync of every game once for each
+  request it sent — some twenty at once — instead of once; a folder was walked
+  again by everything that asked about it at the same moment, where they now
+  share one walk; and hashing allocated a fresh buffer for every file, which
+  for a Project Zomboid save of 238,000 files came to gigabytes per pass.
+  2.4's hash cache had already stopped most of the re-reading behind the
+  report (GitHub #15).
 
 ## [2.4.0] — 2026-09-30
 
