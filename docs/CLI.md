@@ -129,7 +129,27 @@ opensave relay status
 opensave peers                                          # they should find each other
 ```
 
-Then pair and approve exactly as on a LAN.
+The other device appears under **In your relay room** with its id. Pair with
+that id, then approve on the other side exactly as on a LAN:
+
+```bash
+opensave pair node_5e1c…                                # the id from `opensave peers`
+```
+
+### Is it encrypted?
+
+As of v2.4.0, saves sent through a relay are sealed between your two devices.
+`opensave peers` shows each pairing's state in its **PROTECTION** column:
+
+| Shown | Meaning |
+|---|---|
+| `encrypted` | Sealed end to end; the relay and anyone else in the room pass on bytes they cannot read |
+| `encrypting shortly` | The key is in place; encryption starts once that device next checks in |
+| `not encrypted` | Paired over the internet on an earlier version, so there is no key. Unpair and pair again — the output names which devices |
+| `direct` | Reached over your local network; no relay is involved (local traffic is not encrypted) |
+
+Both devices need v2.4.0 or later. `opensave peers --json` includes each
+pairing's fingerprint, which should read the same on both devices.
 
 The room code is the only thing deciding who can find whom, so treat it like a
 password. Somebody who has it can send your devices a pairing request — they
@@ -173,8 +193,9 @@ opensave conflicts                     # anything waiting on a decision
 opensave resolve elden-ring keep-both  # keep-both | keep-local | keep-remote
 ```
 
-`keep-both` is the safe one: the other device's save lands on a separate
-branch, so nothing is discarded while you work out which you wanted.
+`keep-both` is the safe one: yours stays as it is, and the other device's
+save lands on a separate branch, so nothing is discarded while you work out
+which you wanted.
 
 Auto-sync means you rarely need `sync` by hand; it is there for when you want
 to be sure before shutting a machine down.
@@ -303,6 +324,7 @@ opensave config set relay-url wss://relay.example.com
 opensave config set snapshot-limit 20             # automatic snapshots kept per branch
 opensave config set manual-snapshot-limit 0       # 0 = keep yours forever (the default)
 opensave config set match-by-app-id true
+opensave config set unknown-game-from-peer ask    # or track (the default)
 opensave config set update-channel beta
 ```
 

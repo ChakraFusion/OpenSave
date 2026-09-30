@@ -6,6 +6,7 @@ package cliapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -18,7 +19,9 @@ import (
 	"github.com/opensave/opensave/internal/api"
 	"github.com/opensave/opensave/internal/daemon"
 	"github.com/opensave/opensave/internal/presets"
+	"github.com/opensave/opensave/internal/snapshot"
 	"github.com/opensave/opensave/internal/store"
+	"github.com/opensave/opensave/internal/syncpause"
 	"github.com/opensave/opensave/internal/sysintegration/upnp"
 )
 
@@ -62,12 +65,30 @@ func Run(args []string) int {
 		return cmdConflicts(rest)
 	case "resolve":
 		return cmdResolve(rest)
+	case "offers":
+		return cmdOffers(rest)
 	case "backup":
 		return cmdBackup(rest)
 	case "prune":
 		return cmdPrune(rest)
 	case "snapshot-delete":
 		return cmdSnapshotDelete(rest)
+	case "snapshot-pin":
+		return cmdSnapshotPin(rest, true)
+	case "snapshot-unpin":
+		return cmdSnapshotPin(rest, false)
+	case "snapshot-note":
+		return cmdSnapshotNote(rest)
+	case "pause":
+		return cmdPause(rest)
+	case "resume":
+		return cmdResume(rest)
+	case "transfers":
+		return cmdTransfers(rest)
+	case "wrap":
+		return cmdWrap(rest)
+	case "collection", "collections":
+		return cmdCollection(rest)
 	case "branch-delete":
 		return cmdBranchDelete(rest)
 	case "launch":
@@ -140,6 +161,18 @@ func Run(args []string) int {
 		return withWatchReload(cmdRemove(d, rest))
 	case "snapshots":
 		return cmdSnapshots(d, rest)
+	case "storage":
+		return cmdStorage(d, rest)
+	case "sessions":
+		return cmdSessions(d, rest)
+	case "activity":
+		return cmdActivity(d, rest)
+	case "verify":
+		return cmdVerify(d, rest)
+	case "emptied":
+		return cmdEmptied(d, rest)
+	case "snapshot-diff":
+		return cmdSnapshotDiff(d, rest)
 	case "export":
 		return cmdExport(d, rest)
 	case "exclude":
@@ -214,9 +247,12 @@ func runDaemon(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		// A port clash here is nearly always a second OpenSave, and the raw
 		// bind error says nothing about that or about the ways out of it.
-		if isAddrInUse(err) {
+		// Or another program answering on 127.0.0.1 at the port, which the
+		// listen itself does not notice on Windows (api.ErrLoopbackTaken).
+		if isAddrInUse(err) || errors.Is(err, api.ErrLoopbackTaken) {
 			fmt.Fprintf(os.Stderr, `
-Port %d is already taken — usually the desktop app or another `+"`opensave daemon start`"+`.
+Port %d is already taken — usually the desktop app or another `+"`opensave daemon start`"+`,
+sometimes another program.
 
   opensave daemon status          is one already running?
   opensave daemon start --port auto   use any free port, just this once
@@ -292,10 +328,16 @@ func cmdUpnp(args []string) int {
 func cmdScan(d *daemon.Daemon, args []string) int {
 	// Folders holding nothing are hidden by default. They are a fifth of a
 	// real machine's results — Steam makes a userdata folder for every game
-	// you own whether or not saves go there — and a listing where most rows
-	// are places nothing has ever been written is a listing nobody reads.
-	// --all brings them back, for the case of wanting to track a folder
-	// before the game has first saved.
+	// you own whether or not saves go there, and a crack makes one per title
+	// it has ever seen — and a listing where most rows are places nothing has
+	// ever been written is a listing nobody reads.
+	//
+	// Every empty folder, without exception. Keeping a title whose folders are
+	// all empty was tried, to stop it disappearing from the listing — and it
+	// made the filter unpredictable, because some empty rows were hidden and
+	// others were not, with nothing on screen to say why. The count below and
+	// --all are what make them reachable; a filter that behaves is worth more
+	// than one that second-guesses.
 	asJSON, args := jsonFlag(args)
 	showEmpty := false
 	for _, a := range args {
@@ -363,7 +405,7 @@ func cmdScan(d *daemon.Daemon, args []string) int {
 	if len(numbered) == 0 {
 		section("Auto-scan")
 		if emptyCount > 0 {
-			note(fmt.Sprintf("No saved games found. %d detected folder(s) hold no files yet.", emptyCount))
+			note(fmt.Sprintf("No saved games found. %s detected hold no files yet.", plural(emptyCount, "folder", "folders")))
 			hint("opensave scan --all            show them anyway")
 		} else {
 			note("No game saves detected.")
@@ -373,7 +415,7 @@ func cmdScan(d *daemon.Daemon, args []string) int {
 		return 0
 	}
 
-	header := fmt.Sprintf("Auto-scan %s %d save location(s) in %d game(s)", symDot(), len(found), len(groups))
+	header := fmt.Sprintf("Auto-scan %s %s in %s", symDot(), plural(len(found), "save location", "save locations"), plural(len(groups), "game", "games"))
 	if hidden := total - len(found); hidden > 0 {
 		header += fmt.Sprintf(" %s %d empty hidden", symDot(), hidden)
 	}
@@ -411,7 +453,7 @@ func cmdScan(d *daemon.Daemon, args []string) int {
 			"                               join a game's other folders to it")
 	}
 	if !showEmpty && emptyCount > 0 {
-		hints = append(hints, fmt.Sprintf("opensave scan --all            also show %d empty folder(s)", emptyCount))
+		hints = append(hints, fmt.Sprintf("opensave scan --all            also show %s", plural(emptyCount, "empty folder", "empty folders")))
 	}
 	hint(hints...)
 	fmt.Println()
@@ -535,8 +577,17 @@ func cmdAdd(d *daemon.Daemon, args []string) int {
 	if len(args) == 1 {
 		n, err := strconv.Atoi(strings.TrimSpace(args[0]))
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "usage: opensave add <name> <path>\n       opensave add <number>   (from the last `opensave scan`)")
-			return 1
+			// A path on its own: named from the path, as the app does when a
+			// folder is picked.
+			name := ""
+			if d.Scanner != nil {
+				name = d.Scanner.SuggestName(args[0])
+			}
+			if name == "" {
+				fmt.Fprintln(os.Stderr, "error: nothing in that path says which game it is — give a name: opensave add <name> <path>")
+				return 1
+			}
+			return trackGame(d, name, args[0])
 		}
 		choices := loadScanResults(d.Paths.HomeDir)
 		if len(choices) == 0 {
@@ -544,7 +595,7 @@ func cmdAdd(d *daemon.Daemon, args []string) int {
 			return 1
 		}
 		if n < 1 || n > len(choices) {
-			fmt.Fprintf(os.Stderr, "error: %d is out of range — the last scan found %d location(s)\n", n, len(choices))
+			fmt.Fprintf(os.Stderr, "error: %d is out of range — the last scan found %s\n", n, plural(len(choices), "location", "locations"))
 			return 1
 		}
 		pick := choices[n-1]
@@ -552,7 +603,7 @@ func cmdAdd(d *daemon.Daemon, args []string) int {
 	}
 
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: opensave add <name> <path>\n       opensave add <number>   (from the last `opensave scan`)")
+		fmt.Fprintln(os.Stderr, "usage: opensave add <name> <path>\n       opensave add <path>     (named from the path)\n       opensave add <number>   (from the last `opensave scan`)")
 		return 1
 	}
 	return trackGame(d, args[0], args[1])
@@ -585,6 +636,8 @@ type statusReport struct {
 	Device string             `json:"device"`
 	Games  []statusReportGame `json:"games"`
 	Peers  []statusReportPeer `json:"peers"`
+	// SyncPause is the running daemon's pause, when there is a daemon.
+	SyncPause syncpause.Status `json:"syncPause"`
 }
 
 type statusReportGame struct {
@@ -602,6 +655,24 @@ type statusReportGame struct {
 	// headless install has no other way to confirm what it just set.
 	MaxSnapshots       int `json:"maxSnapshots"`
 	MaxManualSnapshots int `json:"maxManualSnapshots"`
+	// When this game was last confirmed the same as each paired device's
+	// copy: peer id to ISO 8601. A device missing here has never finished a
+	// sync of this game.
+	LastSyncedWith map[string]string `json:"lastSyncedWith"`
+	// The save folder is not there: nothing is watched or synced for the
+	// game until it is back, and it is not created again (see
+	// daemon.SaveFolderMissing).
+	SavePathMissing bool `json:"savePathMissing"`
+	// Every save file was deleted here and the game is held back until
+	// someone says whether that was meant (daemon.EmptiedSave).
+	Emptied *daemon.EmptiedSave `json:"emptied,omitempty"`
+	// Play on this device: total time, and when it was last played (ISO
+	// 8601, empty when never). See `opensave sessions`.
+	PlaytimeMs   int64  `json:"playtimeMs"`
+	LastPlayedAt string `json:"lastPlayedAt"`
+	// Whether the game is installed on this device: "found", "not-found",
+	// or empty when there is no telling (daemon.InstallState).
+	Installed string `json:"installed"`
 }
 
 type statusReportPeer struct {
@@ -630,7 +701,7 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 	}
 
 	if asJSON {
-		report := statusReport{Games: []statusReportGame{}, Peers: []statusReportPeer{}}
+		report := statusReport{Games: []statusReportGame{}, Peers: []statusReportPeer{}, SyncPause: runningDaemonPause()}
 		if settings, err := d.Store.GetSettings(); err == nil {
 			report.Device = settings.DeviceName
 		}
@@ -641,11 +712,22 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 				Branches:           map[string]int{},
 				MaxSnapshots:       g.MaxSnapshots,
 				MaxManualSnapshots: g.MaxManualSnapshots,
+				SavePathMissing:    daemon.SaveFolderMissing(g.SavePath),
+				Emptied:            emptiedOrNil(d, g.ID),
+				Installed:          d.InstallState(g),
+			}
+			if st, err := d.Store.PlayStatsFor(g.ID); err == nil && st.Sessions > 0 {
+				entry.PlaytimeMs = st.PlaytimeMs
+				entry.LastPlayedAt = time.UnixMilli(st.LastPlayedMs).UTC().Format(time.RFC3339)
 			}
 			branches, _ := d.Store.ListBranches(g.ID)
 			for _, b := range branches {
 				snaps, _ := d.Store.ListSnapshots(g.ID, b)
 				entry.Branches[b] = len(snaps)
+			}
+			entry.LastSyncedWith, _ = d.Store.GameLastSynced(g.ID)
+			if entry.LastSyncedWith == nil {
+				entry.LastSyncedWith = map[string]string{}
 			}
 			report.Games = append(report.Games, entry)
 		}
@@ -660,6 +742,10 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 		return emitJSON(report)
 	}
 
+	if st := runningDaemonPause(); st.Paused {
+		fmt.Printf("%s syncing is paused %s — %s\n\n", accent("Paused:"), describePause(st), faint("opensave resume"))
+	}
+
 	if len(games) == 0 {
 		section("Tracked games")
 		note("Nothing tracked yet.")
@@ -668,10 +754,31 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 		return 0
 	}
 
+	peers, err := d.Store.ListPeers()
+	if err != nil {
+		peers = nil
+	}
+
+	playing := runningDaemonPlaying()
 	section(fmt.Sprintf("Tracked games %s %d", symDot(), len(games)))
 	for _, g := range games {
 		fmt.Printf("  %s %s  %s\n", symBullet(), bold(g.Name), faint(g.ID))
 		fmt.Printf("      %s\n", faint(g.SavePath))
+		if daemon.SaveFolderMissing(g.SavePath) {
+			fmt.Printf("      %s\n", warnText("save folder missing — nothing is watched or synced for it until it is back"))
+		}
+		if e, held := d.EmptiedSaveOf(g.ID); held && e.State == "held" {
+			fmt.Printf("      %s\n", warnText(fmt.Sprintf("every save file was deleted here — not synced until you answer (opensave emptied %s delete|restore)", g.ID)))
+		}
+		if d.InstallState(g) == daemon.InstallNotFound {
+			fmt.Printf("      %s\n", faint("not found on this device — Steam does not have it, and it is in no folder games are kept in"))
+		}
+		if since, ok := playing[g.ID]; ok {
+			fmt.Printf("      %s\n", accent("playing now")+faint(", since "+since.Local().Format("15:04")))
+		} else if st, err := d.Store.PlayStatsFor(g.ID); err == nil && st.Sessions > 0 {
+			last := timeAgo(time.UnixMilli(st.LastPlayedMs).UTC().Format("2006-01-02T15:04:05.000Z"), time.Now())
+			fmt.Printf("      %s\n", faint(fmt.Sprintf("played %s here, last %s", playLength(st.PlaytimeMs), last)))
+		}
 
 		branches, _ := d.Store.ListBranches(g.ID)
 		for _, b := range branches {
@@ -681,13 +788,25 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 				label = accent(b) + faint(" (active)")
 			}
 			fmt.Printf("      %s %s\n", padRight(label, 28),
-				faint(fmt.Sprintf("%d snapshot(s)", len(snaps))))
+				faint(plural(len(snaps), "snapshot", "snapshots")))
+		}
+		// One line per paired device: is that device up to date with THIS
+		// save? "never" is an answer too — it is the one that explains why
+		// a save is not on the other machine.
+		if len(peers) > 0 {
+			stamps, _ := d.Store.GameLastSynced(g.ID)
+			for _, p := range peers {
+				when := faint("never synced")
+				if ts := stamps[p.ID]; ts != "" {
+					when = "synced " + timeAgo(ts, time.Now())
+				}
+				fmt.Printf("      %s %s\n", padRight(faint(p.Name), 28), when)
+			}
 		}
 		fmt.Println()
 	}
 
-	peers, err := d.Store.ListPeers()
-	if err == nil && len(peers) > 0 {
+	if len(peers) > 0 {
 		section("Paired devices")
 		t := newTable("device", "type", "address", "status")
 		for _, p := range peers {
@@ -706,13 +825,21 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 
 func cmdSnapshot(d *daemon.Daemon, args []string) int {
 	if len(args) < 1 {
-		fmt.Fprintln(os.Stderr, "usage: opensave snapshot <gameId> [comment]")
+		fmt.Fprintln(os.Stderr, "usage: opensave snapshot <gameId> [comment]\n       opensave snapshot --all [comment]")
 		return 1
 	}
-	comment := ""
-	if len(args) > 1 {
-		comment = strings.Join(args[1:], " ")
+	if args[0] == "--all" {
+		return cmdSnapshotAll(d, args[1:])
 	}
+	// The comment is every word after the game, so it needs no quotes. A
+	// leading -m or --message is taken the way git takes it rather than kept
+	// as part of the comment, which is what `snapshot hades -m "before the
+	// boss"` produced before: a snapshot titled "-m before the boss".
+	words := args[1:]
+	if len(words) > 0 && (words[0] == "-m" || words[0] == "--message") {
+		words = words[1:]
+	}
+	comment := strings.Join(words, " ")
 
 	snap, err := d.Snapshots.Create(args[0], comment, false)
 	if err != nil {
@@ -725,9 +852,24 @@ func cmdSnapshot(d *daemon.Daemon, args []string) int {
 }
 
 func cmdRollback(d *daemon.Daemon, args []string) int {
+	asJSON, args := jsonFlag(args)
+	dryRun := false
+	rest := args[:0:0]
+	for _, a := range args {
+		if a == "--dry-run" || a == "--preview" {
+			dryRun = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	args = rest
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: opensave rollback <gameId> <snapshotId>")
+		fmt.Fprintln(os.Stderr, "usage: opensave rollback <gameId> <snapshotId> [--dry-run] [--json]\n\n"+
+			"  --dry-run lists what restoring would change, file by file, and changes nothing.")
 		return 1
+	}
+	if dryRun {
+		return printRestorePreview(d, args[0], args[1], asJSON)
 	}
 	snap, err := d.Snapshots.Restore(args[0], args[1])
 	if err != nil {
@@ -736,6 +878,78 @@ func cmdRollback(d *daemon.Daemon, args []string) int {
 	}
 	success("Restored %s", accent(snap.ID))
 	note("taken " + snap.Timestamp)
+	return 0
+}
+
+// cmdSnapshotAll snapshots every tracked game — the tray's "Snapshot every
+// game now". Exits non-zero when any game could not be snapshotted, so a
+// script taken before something risky knows not to go on.
+func cmdSnapshotAll(d *daemon.Daemon, args []string) int {
+	asJSON, args := jsonFlag(args)
+	words := args
+	if len(words) > 0 && (words[0] == "-m" || words[0] == "--message") {
+		words = words[1:]
+	}
+	comment := strings.Join(words, " ")
+	if comment == "" {
+		comment = "Snapshot of every game"
+	}
+	res := d.SnapshotAll(comment)
+	if asJSON {
+		emitJSON(res)
+	} else {
+		success("Took a snapshot of %s", plural(res.Taken, "game", "games"))
+		for _, f := range res.Failed {
+			fmt.Fprintf(os.Stderr, "  could not snapshot %s: %s\n", f.Name, f.Error)
+		}
+	}
+	if len(res.Failed) > 0 {
+		return 1
+	}
+	return 0
+}
+
+// printRestorePreview shows what `rollback` would do without doing it.
+func printRestorePreview(d *daemon.Daemon, gameID, snapshotID string, asJSON bool) int {
+	preview, err := d.Snapshots.PreviewRestore(gameID, snapshotID)
+	if err != nil {
+		return fail(asJSON, err)
+	}
+	if asJSON {
+		return emitJSON(preview)
+	}
+	if preview.Identical() {
+		success("Your save already matches %s", accent(snapshotID))
+		note("restoring it would change nothing")
+	} else {
+		fmt.Printf("Restoring %s would:\n\n", accent(snapshotID))
+		verbs := map[string]string{
+			snapshot.ChangeModified: "change ",
+			snapshot.ChangeRestored: "restore",
+			snapshot.ChangeRemoved:  "remove ",
+		}
+		for _, c := range preview.Changes {
+			path := c.Path
+			if c.Location != "" {
+				path = c.Location + ": " + c.Path
+			}
+			var sizes string
+			switch c.Change {
+			case snapshot.ChangeModified:
+				sizes = humanBytes(c.CurrentSize) + " -> " + humanBytes(c.SnapshotSize)
+			case snapshot.ChangeRestored:
+				sizes = humanBytes(c.SnapshotSize)
+			default:
+				sizes = humanBytes(c.CurrentSize)
+			}
+			fmt.Printf("  %s  %-40s %s\n", verbs[c.Change], path, faint(sizes))
+		}
+		fmt.Println()
+		note(fmt.Sprintf("%s unchanged. Your current save is snapshotted first, so a restore can be undone.", plural(preview.Unchanged, "file", "files")))
+	}
+	for _, name := range preview.Unplaced {
+		note(fmt.Sprintf("the %q location has no folder on this device; a restore leaves its files out", name))
+	}
 	return 0
 }
 
@@ -809,4 +1023,33 @@ func isAddrInUse(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "address already in use") ||
 		strings.Contains(msg, "only one usage of each socket address")
+}
+
+// runningDaemonPlaying asks the running daemon which games are being played
+// now, and since when; none when there is no daemon to ask.
+func runningDaemonPlaying() map[string]time.Time {
+	out := map[string]time.Time{}
+	raw, err := daemonRequest("GET", "/api/games", nil)
+	if err != nil {
+		return out
+	}
+	var games map[string]struct {
+		PlayingSince string `json:"playingSince"`
+	}
+	if json.Unmarshal(raw, &games) != nil {
+		return out
+	}
+	for id, g := range games {
+		if at, err := time.Parse(time.RFC3339, g.PlayingSince); err == nil {
+			out[id] = at
+		}
+	}
+	return out
+}
+
+func emptiedOrNil(d *daemon.Daemon, gameID string) *daemon.EmptiedSave {
+	if e, held := d.EmptiedSaveOf(gameID); held {
+		return &e
+	}
+	return nil
 }

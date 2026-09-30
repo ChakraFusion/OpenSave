@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/opensave/opensave/internal/p2p/syncengine"
@@ -16,7 +17,21 @@ import (
 
 // lanTransport speaks the /api/p2p/* HTTP protocol directly to a peer.
 // WAN peers get their own relay-tunnel transport in Phase 3.
-type lanTransport struct{}
+//
+// engine is held so requests can be authenticated with the key pinned when
+// the two devices paired. Without it a peer was identified by its source
+// address alone, which a device on the same network can take — by ARP
+// spoofing, or simply by being handed that address after the real peer's DHCP
+// lease expired. The relay path was given proof-of-key; this is the same
+// treatment for the path most syncs actually use.
+type lanTransport struct {
+	engine *Engine
+
+	// Sync-event reports to each peer, in the order they were made. See
+	// ReportSyncEvent.
+	eventsMu sync.Mutex
+	events   map[string]chan func()
+}
 
 var lanClient = &http.Client{Timeout: 30 * time.Second}
 
@@ -41,7 +56,7 @@ func (t *lanTransport) FetchManifest(ctx context.Context, peer syncengine.Peer, 
 	}
 
 	var resp syncengine.ManifestResponse
-	err := t.getJSON(ctx, peerURL(peer, "/manifest/"+gameID)+"?"+params.Encode(), &resp)
+	err := t.getJSON(ctx, peer, peerURL(peer, "/manifest/"+gameID)+"?"+params.Encode(), &resp)
 	return resp, err
 }
 
@@ -52,7 +67,7 @@ func (t *lanTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, re
 	// No encodings advertised: on a LAN the wire is typically faster than the
 	// compressor, so the bytes saved cost more than they're worth. Responses
 	// are still decoded, so a peer that compresses anyway is handled.
-	err := t.postJSON(ctx, peerURL(peer, "/blocks/"+ref.GameID), map[string]any{
+	err := t.postJSON(ctx, peer, peerURL(peer, "/blocks/"+ref.GameID), map[string]any{
 		"relPath": ref.RelPath, "root": ref.Root, "blockIndices": blockIndices, "blockSize": blockSize,
 	}, &resp)
 	if err != nil {
@@ -62,9 +77,18 @@ func (t *lanTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, re
 }
 
 func (t *lanTransport) DeleteRemote(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef) error {
-	return t.postJSON(ctx, peerURL(peer, "/delete-file/"+ref.GameID), map[string]any{"relPath": ref.RelPath, "root": ref.Root}, nil)
+	return t.postJSON(ctx, peer, peerURL(peer, "/delete-file/"+ref.GameID), map[string]any{"relPath": ref.RelPath, "root": ref.Root}, nil)
 }
 
+// TriggerPeerPull tells a peer that this device holds newer content.
+//
+// Signed like every other request, which it was not: being fire-and-forget it
+// built its own http.Request instead of going through getJSON, and so skipped
+// t.sign. The receiving side refuses an unsigned request from a peer that has
+// authenticated before, so this was dropped on arrival and the peer only
+// noticed on its next periodic reconcile — up to a minute later, with nothing
+// reported anywhere. The identical mistake existed on the WAN side; see
+// wanTransport.TriggerPeerPull.
 func (t *lanTransport) TriggerPeerPull(peer syncengine.Peer, gameID string) {
 	// Fire-and-forget, 5s cap, same as the JS fetch().catch(() => {}).
 	go func() {
@@ -75,6 +99,7 @@ func (t *lanTransport) TriggerPeerPull(peer syncengine.Peer, gameID string) {
 		if err != nil {
 			return
 		}
+		t.sign(req, peer, nil)
 		resp, err := lanClient.Do(req)
 		if err == nil {
 			resp.Body.Close()
@@ -82,25 +107,91 @@ func (t *lanTransport) TriggerPeerPull(peer syncengine.Peer, gameID string) {
 	}()
 }
 
+// eventQueueSize bounds the reports waiting to go to one peer. Past it a
+// report is dropped, as a fire-and-forget report could always be.
+const eventQueueSize = 64
+
+// eventQueueIdle is how long a peer's sender waits for another report before
+// it stops, so a peer that has gone away does not keep a goroutine forever.
+const eventQueueIdle = time.Minute
+
+// ReportSyncEvent tells the peer how a sync is going, without waiting for it.
+//
+// In order, through one sender per peer. Each report used to go out on its
+// own goroutine, so for a quick sync the "started" could reach the peer after
+// the "finished": the peer then showed a sync running that was already over —
+// in its transfers list, and on the game's card — until something timed it
+// out.
 func (t *lanTransport) ReportSyncEvent(peer syncengine.Peer, gameID, eventType string, data map[string]any) {
-	go func() {
+	post := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_ = t.postJSON(ctx, peerURL(peer, "/sync-event/"+gameID), map[string]any{
+		err := t.postJSON(ctx, peer, peerURL(peer, "/sync-event/"+gameID), map[string]any{
 			"eventType": eventType, "data": data,
 		}, nil)
-	}()
+		// A lost progress report costs nothing. These two carry state — what
+		// the other device records as synced and agreed — and losing one
+		// was invisible on both sides.
+		if err != nil && (eventType == "in-sync" || eventType == "sync-complete") && t.engine != nil && t.engine.Log != nil {
+			t.engine.Log("info", fmt.Sprintf("could not tell %s that %s is %s: %v",
+				peer.Name, gameID, eventType, err))
+		}
+	}
+	t.eventsMu.Lock()
+	defer t.eventsMu.Unlock()
+	if t.events == nil {
+		t.events = map[string]chan func(){}
+	}
+	q := t.events[peer.ID]
+	if q == nil {
+		q = make(chan func(), eventQueueSize)
+		t.events[peer.ID] = q
+		go t.sendEvents(peer.ID, q)
+	}
+	select {
+	case q <- post:
+	default: // full: dropped, as it always could be
+	}
 }
 
-func (t *lanTransport) getJSON(ctx context.Context, url string, out any) error {
+// sendEvents posts one peer's reports in order, and stops once none has come
+// for a while. It removes itself under the same lock ReportSyncEvent holds,
+// and only when nothing is waiting, so no report is left in a queue nobody
+// is draining.
+func (t *lanTransport) sendEvents(peerID string, q chan func()) {
+	idle := time.NewTimer(eventQueueIdle)
+	defer idle.Stop()
+	for {
+		select {
+		case post := <-q:
+			post()
+			// Reset alone is right: since Go 1.23 a timer's channel holds
+			// nothing stale after Stop or Reset, and draining it here, the
+			// old idiom, would block forever.
+			idle.Reset(eventQueueIdle)
+		case <-idle.C:
+			t.eventsMu.Lock()
+			if len(q) == 0 {
+				delete(t.events, peerID)
+				t.eventsMu.Unlock()
+				return
+			}
+			t.eventsMu.Unlock()
+			idle.Reset(eventQueueIdle)
+		}
+	}
+}
+
+func (t *lanTransport) getJSON(ctx context.Context, peer syncengine.Peer, url string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
+	t.sign(req, peer, nil)
 	return doJSON(req, out)
 }
 
-func (t *lanTransport) postJSON(ctx context.Context, url string, body any, out any) error {
+func (t *lanTransport) postJSON(ctx context.Context, peer syncengine.Peer, url string, body any, out any) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return err
@@ -110,7 +201,26 @@ func (t *lanTransport) postJSON(ctx context.Context, url string, body any, out a
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	t.sign(req, peer, raw)
 	return doJSON(req, out)
+}
+
+// sign attaches proof that this request came from the device it claims to.
+//
+// The body is covered, and it is cheap to cover: LAN request bodies are small
+// — a list of block indices, a path — because the bulk of a sync travels in
+// the RESPONSES. Buffering a request body here costs nothing worth measuring,
+// and leaving it uncovered would let a captured request be replayed with its
+// contents swapped.
+//
+// Silent when the pair has no key, which is a pairing made before key
+// exchange existed. The receiving side knows that and does not demand proof
+// that could never have been sent.
+func (t *lanTransport) sign(req *http.Request, peer syncengine.Peer, body []byte) {
+	if t.engine == nil {
+		return
+	}
+	t.engine.signLANRequest(req, peer.ID, body)
 }
 
 func doJSON(req *http.Request, out any) error {
@@ -121,6 +231,9 @@ func doJSON(req *http.Request, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if isPausedRefusal(resp.StatusCode, raw) {
+			return syncengine.ErrPeerPaused
+		}
 		return fmt.Errorf("peer returned %d: %s", resp.StatusCode, string(raw))
 	}
 	if out == nil {

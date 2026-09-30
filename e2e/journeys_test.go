@@ -253,9 +253,11 @@ func TestJourney_OneDeviceStillOnTheOldBuild(t *testing.T) {
 
 	newDev.WriteSave("save.dat", "v1")
 	newDev.WriteSave("machine.cfg", "new device")
+	restoreSyncOnTrack := suppressSyncOnTrack(newDev, old) // see sync_on_track_test.go
 	gameID := newDev.TrackGame("Fleet")
 	old.API(http.MethodPost, "/api/games",
 		map[string]string{"name": "Fleet", "savePath": old.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	cfg := extraDir(t, newDev, "config")
 	writeIn(t, cfg, "settings.ini", "only on the new device")
@@ -339,6 +341,7 @@ func TestJourney_RestoreOntoAFreshMachineAfterALoss(t *testing.T) {
 	// here is what someone does on a new machine anyway, and it keeps the
 	// restore aimed at this device.
 	fresh := testutil.NewTestDaemon(t, "Loss-Fresh")
+	logOnFailure(t, original, fresh)
 	if id := fresh.TrackGame("Loss"); id != gameID {
 		t.Fatalf("step 2: both devices should derive the id %q, this one got %q", gameID, id)
 	}

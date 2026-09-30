@@ -16,9 +16,11 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/logging"
 	"github.com/opensave/opensave/internal/p2p/pairing"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
 	"github.com/opensave/opensave/internal/store"
+	"github.com/opensave/opensave/internal/switchtitle"
 	"github.com/opensave/opensave/internal/version"
 )
 
@@ -36,12 +38,17 @@ func (e *Engine) RegisterRoutes(r chi.Router) {
 		r.Post("/api/p2p/untrack", e.handlePeerUntrack)
 		r.Post("/api/p2p/retrack", e.handlePeerRetrack)
 		r.Get("/api/p2p/games", e.handlePeerGameList)
-		r.Get("/api/p2p/manifest/{gameId}", e.handleManifest)
-		r.Post("/api/p2p/blocks/{gameId}", e.handleBlocks)
-		r.Post("/api/p2p/delete-file/{gameId}", e.handleDeleteFile)
 		r.Post("/api/p2p/sync-event/{gameId}", e.handleSyncEvent)
-		r.Get("/api/sync/trigger/{gameId}", e.handleSyncTrigger)
 		r.Get("/api/p2p/app-binary", e.handleAppBinary)
+
+		// What moves save data, or starts a sync: refused while paused.
+		r.Group(func(r chi.Router) {
+			r.Use(e.refuseWhilePaused)
+			r.Get("/api/p2p/manifest/{gameId}", e.handleManifest)
+			r.Post("/api/p2p/blocks/{gameId}", e.handleBlocks)
+			r.Post("/api/p2p/delete-file/{gameId}", e.handleDeleteFile)
+			r.Get("/api/sync/trigger/{gameId}", e.handleSyncTrigger)
+		})
 	})
 }
 
@@ -64,7 +71,29 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		if isLoopbackIP(ip) {
+			// The dashboard and the CLI, which do not sign — and, on one
+			// machine, another device's daemon, which does: a second install
+			// for testing, or every device in the e2e suite. That one is still
+			// told apart, so a handler that needs to know which device asked
+			// (lanPeerID) can, as it could over the network. A signature that
+			// fails is not refused here, as nothing on loopback ever was; it
+			// just identifies nobody.
+			if id, _, ok := e.verifyLANRequest(r); ok && id != "" {
+				r = r.WithContext(context.WithValue(r.Context(), lanPeerKey{}, id))
+			}
 			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Proof of key first, source address only as a fallback.
+		//
+		// An address is not an identity on a network somebody else can join:
+		// it can be taken by ARP spoofing, and it is handed out again when a
+		// DHCP lease expires. A device that proves it holds the key pinned at
+		// pairing has said something an address cannot.
+		provenID, _, authOK := e.verifyLANRequest(r)
+		if !authOK {
+			jsonError(w, http.StatusUnauthorized, "Unauthorized: Request failed authentication.")
 			return
 		}
 
@@ -75,6 +104,13 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 		}
 		var matched *store.Peer
 		for i := range peers {
+			if provenID != "" {
+				if peers[i].ID == provenID {
+					matched = &peers[i]
+					break
+				}
+				continue
+			}
 			if peers[i].Address == ip {
 				matched = &peers[i]
 				break
@@ -83,6 +119,25 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 		if matched == nil {
 			e.Log("warn", "blocked unauthorized P2P request from unpaired IP "+ip)
 			jsonError(w, http.StatusUnauthorized, "Unauthorized: Requesting peer is not paired.")
+			return
+		}
+		// A peer that has proved itself before must keep doing so, or an
+		// attacker simply omits the headers and falls back to the address
+		// check this exists to replace.
+		if provenID == "" && matched.AuthVerifiedMs > 0 {
+			// The honest reading of this state is usually not an attack: it is
+			// the same device on an older build after a downgrade or a
+			// reinstall from a backup. Saying so, and saying how to recover,
+			// costs nothing an attacker gains from — they already know
+			// whether their forgery worked — and saves the one person who
+			// would otherwise see syncing stop with no idea why.
+			e.Log("warn", fmt.Sprintf(
+				"refused an unsigned request from %q, which has authenticated before. "+
+					"If that device was downgraded or reinstalled, unpair and pair the two again.",
+				matched.Name))
+			jsonError(w, http.StatusUnauthorized,
+				"Unauthorized: this device has authenticated before and this request was not signed. "+
+					"If it was downgraded or reinstalled, unpair and pair the two devices again.")
 			return
 		}
 
@@ -94,14 +149,17 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 			wasOffline := matched.Status != "online"
 			matched.Status = "online"
 			matched.LastSeenMs = now
-			_ = e.Store.UpsertPeer(*matched)
+			_ = e.Store.UpdatePeer(*matched)
 			if wasOffline {
 				e.Log("info", fmt.Sprintf("peer %q connected; triggering auto-sync for all games", matched.Name))
 				e.GoSync(func(ctx context.Context) { e.SyncAllGames(ctx) })
 				e.notifyPeerUpdate()
 			}
 		}
-		next.ServeHTTP(w, r)
+		// The identity this request was matched to — proven where the peer
+		// signs, address-matched where it cannot yet. Handlers that act on a
+		// peer's behalf act on this, never on an ID in the body.
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), lanPeerKey{}, matched.ID)))
 	})
 }
 
@@ -124,13 +182,22 @@ func (e *Engine) handlePing(w http.ResponseWriter, r *http.Request) {
 	if from != "" {
 		_, err := e.Store.GetPeer(from)
 		paired = err == nil
+		if !paired {
+			// A device checks on the devices it believes it is paired with.
+			// One this device unpaired, still checking, missed its goodbye.
+			e.remindUnpaired(from, clientIP(r))
+		}
 	}
 	jsonOK(w, map[string]any{
-		"status":      "ok",
-		"paired":      paired,
-		"deviceName":  settings.DeviceName,
-		"deviceType":  settings.DeviceType,
-		"games":       e.LocalGamesState(),
+		"status":     "ok",
+		"paired":     paired,
+		"deviceName": settings.DeviceName,
+		"deviceType": settings.DeviceType,
+		// No game list. This route answers ANY caller — it sits outside the
+		// paired-peer group on purpose, so a device can be probed before
+		// pairing — and it used to hand every caller the full tracked
+		// library. Neither caller read it. See wanclient.go for the same
+		// removal from relay presence.
 		"appVersion":  version.Version,
 		"buildTimeMs": version.BuildTimeMs(),
 	})
@@ -218,14 +285,23 @@ func (e *Engine) handleApproveConfirm(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *Engine) handleUnpair(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		PeerID string `json:"peerId"`
+	// The sender is unpairing itself. Which peer that is comes from the
+	// middleware's match, not from the body — a signed request from one
+	// paired device could otherwise unpair a different one by naming it.
+	// The body's peerId is still read for a loopback caller (the dashboard
+	// and CLI), which the middleware lets through without matching a peer.
+	peerID := lanPeerID(r)
+	if peerID == "" {
+		var body struct {
+			PeerID string `json:"peerId"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PeerID == "" {
+			jsonError(w, http.StatusBadRequest, "peerId is required")
+			return
+		}
+		peerID = body.PeerID
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PeerID == "" {
-		jsonError(w, http.StatusBadRequest, "peerId is required")
-		return
-	}
-	_ = e.Store.UnpairPeer(body.PeerID)
+	_ = e.Store.UnpairPeer(peerID)
 	e.notifyPeerUpdate()
 	jsonOK(w, map[string]any{"success": true})
 }
@@ -317,24 +393,26 @@ func (e *Engine) FetchPeerGames(ctx context.Context, peerID string) ([]PeerGame,
 func (e *Engine) handlePeerUntrack(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		GameID string `json:"gameId"`
+		At     int64  `json:"at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.GameID == "" {
 		jsonError(w, http.StatusBadRequest, "gameId is required")
 		return
 	}
-	e.applyPeerUntrack(body.GameID)
+	e.applyPeerUntrack(body.GameID, body.At)
 	jsonOK(w, map[string]any{"success": true})
 }
 
 func (e *Engine) handlePeerRetrack(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		GameID string `json:"gameId"`
+		At     int64  `json:"at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.GameID == "" {
 		jsonError(w, http.StatusBadRequest, "gameId is required")
 		return
 	}
-	e.applyPeerRetrack(body.GameID)
+	e.applyPeerRetrack(body.GameID, body.At)
 	jsonOK(w, map[string]any{"success": true})
 }
 
@@ -380,7 +458,10 @@ func (e *Engine) backfillCover(game store.Game, q manifestGameQuery) store.Game 
 // when still unknown, and backfilling missing cover art on known games.
 // Shared by the LAN route and the WAN relay handler so both paths behave
 // identically.
-func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery) (store.Game, error) {
+// peerID identifies the device asking. It is only needed when this device is
+// set to ask before tracking, to record who is waiting; empty is tolerated
+// (an unidentified caller simply produces an offer with no named device).
+func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID string) (store.Game, error) {
 	if game, err := e.Store.GetGame(gameID); err == nil {
 		return e.backfillCover(game, q), nil
 	}
@@ -396,6 +477,11 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery) (store.G
 		if game, err := e.Store.GetGame(canonical); err == nil {
 			return e.backfillCover(game, q), nil
 		}
+	}
+	// A Switch game's title id next: it is the same game whatever id each
+	// device tracks it under (switchmatch.go).
+	if game, ok := e.matchSwitchTitle(gameID, q.SavePath); ok {
+		return e.backfillCover(game, q), nil
 	}
 
 	settings, sErr := e.Store.GetSettings()
@@ -438,17 +524,46 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery) (store.G
 	if e.Store.IsUntracked(gameID) {
 		return store.Game{}, fmt.Errorf("Game not found.")
 	}
+	// Ask before guessing, when the user has chosen that.
+	//
+	// Everything above still runs first: an exact id match, a user's explicit
+	// link, and App-ID matching all resolve to a real game without ever
+	// consulting the peer's path. This only governs what happens when nothing
+	// matched and the alternative is to invent a folder.
+	//
+	// The offer is recorded rather than a game being created, and the peer is
+	// told plainly that this device is waiting. Saying "not found" here would
+	// be a lie the other device cannot see past: it reports the same thing for
+	// a game deliberately untracked, so the user would be told nothing is
+	// wrong while their save quietly stopped syncing.
+	if settings.ShouldAskBeforeTracking() {
+		if err := e.Store.RecordOfferedGame(store.OfferedGame{
+			GameID: gameID, PeerID: peerID, Name: q.Name,
+			AppID: q.AppID, CoverURL: q.CoverURL, PeerPath: q.SavePath,
+		}); err != nil {
+			e.Log("warn", fmt.Sprintf("could not record %q as an offered game: %v", q.Name, err))
+		} else {
+			e.notifyGamesUpdate()
+		}
+		return store.Game{}, fmt.Errorf("%s: %q", syncengine.AwaitingFolderMessage, q.Name)
+	}
+
 	rules := make([]delta.TranslationRule, len(settings.PathTranslations))
 	for i, tr := range settings.PathTranslations {
 		rules[i] = delta.TranslationRule{FromPattern: tr.FromPattern, ToPattern: tr.ToPattern}
 	}
 	localPath := delta.TranslatePathToLocal(q.SavePath, rules)
+	// A Switch save goes where this device's emulator keeps that game — not
+	// under the other install's profile id, which no emulator here has.
+	if titleID := switchtitle.FromSavePath(q.SavePath); titleID != "" && e.SwitchSaveFolder != nil {
+		localPath = e.SwitchSaveFolder(titleID, localPath)
+	}
 
 	// Never auto-track at a profile/system-level folder: syncing it would
 	// hash the user's whole profile. Send the requester a clear reason
 	// instead of a mysterious walk error.
 	if reason := delta.DangerousSyncRoot(localPath); reason != "" {
-		return store.Game{}, fmt.Errorf("cannot auto-track %q at %q: %s — set the game's save path on this device manually", q.Name, localPath, reason)
+		return store.Game{}, fmt.Errorf("cannot auto-track %q at %s: %s — set the game's save path on this device manually", q.Name, logging.Quote(localPath), reason)
 	}
 
 	game := store.Game{
@@ -478,7 +593,7 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery) (store.G
 	} else {
 		_ = os.MkdirAll(localPath, 0o777)
 	}
-	e.Log("info", fmt.Sprintf("auto-tracked %q at %q from peer manifest request", q.Name, localPath))
+	e.Log("info", fmt.Sprintf("auto-tracked %q at %s from peer manifest request", q.Name, logging.Quote(localPath)))
 	e.notifyGamesUpdate()
 	return game, nil
 }
@@ -489,11 +604,30 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery) (store.G
 func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 	gameID := chi.URLParam(r, "gameId")
 
-	game, err := e.ensureManifestGame(gameID, manifestQueryFromURL(r.URL.Query()))
+	var askingPeer string
+	if peer, ok := e.peerByAddress(clientIP(r)); ok {
+		askingPeer = peer.ID
+	}
+	game, err := e.ensureManifestGame(gameID, manifestQueryFromURL(r.URL.Query()), askingPeer)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
 	}
+	if e.holdingBack(game) {
+		jsonError(w, http.StatusNotFound, syncengine.HeldMessage)
+		return
+	}
+	// Never describe a save a sync here is writing: part-way through, it is a
+	// mixture no device holds, and the asker would judge it as a save that had
+	// moved (syncengine/settle.go). Held still while it is read; a write in
+	// progress is waited out if it ends soon, and otherwise answered as busy,
+	// which the asker takes as "ask again".
+	readDone, ok := e.holdForServing(r.Context(), game.ID)
+	if !ok {
+		jsonError(w, http.StatusServiceUnavailable, syncengine.SettlingMessage)
+		return
+	}
+	defer readDone()
 
 	// Extra save locations are included when this game has any; a game with
 	// none produces exactly the manifest it always did, down to the absent
@@ -512,20 +646,34 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 	for name, failure := range failures {
 		e.Log("warn", fmt.Sprintf("could not read the %q location of %q: %v — it is left out of this sync", name, game.Name, failure))
 	}
+	// Remembered, so the asker found holding exactly this later is known to
+	// hold a state this device had (syncengine/served.go).
+	e.Sync.NoteServed(game.ID, lanPeerID(r), manifest)
 
 	// Proto tells the asking peer this device understands save locations
 	// beyond the primary one, so it is safe to send a root name in a block or
 	// delete request. A peer that predates this answers without it and is
 	// only ever asked about the primary location.
 	resp := syncengine.ManifestResponse{
-		Manifest:     manifest,
-		ActiveBranch: game.ActiveBranch,
-		Proto:        ServedProto(),
+		Manifest:          manifest,
+		ActiveBranch:      game.ActiveBranch,
+		Proto:             ServedProto(),
+		DeletionConfirmed: e.Sync.DeletionConfirmed(game.ID),
 	}
 	if latest, err := e.Snapshots.LatestSnapshot(gameID, ""); err == nil {
 		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
 	}
 	jsonOK(w, resp)
+}
+
+// holdForServing holds the game's save still for a manifest to be served from
+// it, waiting at most syncengine.ServeSettleWait for a sync writing it to
+// finish. ok is false if it did not; otherwise done lets go.
+func (e *Engine) holdForServing(ctx context.Context, gameID string) (done func(), ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, syncengine.ServeSettleWait)
+	defer cancel()
+	done, err := e.Sync.Reading(ctx, gameID)
+	return done, err == nil
 }
 
 func (e *Engine) handleBlocks(w http.ResponseWriter, r *http.Request) {
@@ -560,7 +708,11 @@ func (e *Engine) handleBlocks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fullPath := filepath.Join(base, filepath.FromSlash(body.RelPath))
+	// Resolved, not joined: this device's manifest advertises the agreed
+	// (composed) spelling, while the file on this disk may be stored
+	// decomposed — a macOS save. Joining the key verbatim would fail to
+	// find the very file this device just offered.
+	fullPath := delta.LocalNameFor(base, body.RelPath)
 	if isFile, _ := delta.ResolveLocalSaveFilePath(base); isFile {
 		fullPath = base
 	}
@@ -600,15 +752,31 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	full := filepath.Join(base, filepath.FromSlash(body.RelPath))
+	// Resolved, not joined: this device's manifest advertises the agreed
+	// (composed) spelling, while the file on this disk may be stored
+	// decomposed — a macOS save. Joining the key verbatim would fail to
+	// find the very file this device just offered.
+	full := delta.LocalNameFor(base, body.RelPath)
 	_ = os.Chmod(full, 0o666)
+	deleting := time.Now()
 	if info, statErr := os.Stat(full); statErr == nil {
-		if info.IsDir() {
-			_ = os.Remove(full) // empty dirs only, like rmdirSync
-		} else {
-			_ = os.Remove(full)
+		// What is removed is remembered, so a sync of this device's own that
+		// lands before the rest of the batch does not take it for a change
+		// made here (syncengine/peerdeleted.go).
+		var entry delta.FileEntry
+		if !info.IsDir() {
+			entry, _ = delta.FileEntryFor(full)
+		}
+		// Empty dirs only, for a folder, like rmdirSync.
+		if os.Remove(full) == nil && (info.IsDir() || entry.Hash != "") {
+			e.Sync.NotePeerDeletion(game.ID, body.Root, body.RelPath, entry, info.IsDir())
 		}
 		e.Log("info", fmt.Sprintf("peer-requested deletion applied: %s", body.RelPath))
+		asker := "another device"
+		if peer, ok := e.peerByAddress(clientIP(r)); ok {
+			asker = peer.Name
+		}
+		e.Sync.NoteEmptiedByPeer(gameID, asker, deleting)
 
 		// This side just changed without running a sync, so nothing has
 		// updated its merge-base — it still describes a state that contains
@@ -692,17 +860,8 @@ func (e *Engine) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if e.Sync.Progress.OnSyncComplete != nil {
 			e.Sync.Progress.OnSyncComplete(gameID, ev)
 		}
-		// The peer finished pulling from us: whatever we pushed is now on
-		// both sides, so refresh the shared lineage. Until this runs,
-		// freshly-pushed files deliberately stay out of the lineage (see
-		// persistLineage), so deleting one locally would pull it back
-		// instead of propagating the delete.
 		if peer, ok := e.peerByAddress(clientIP(r)); ok {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				defer cancel()
-				e.Sync.RefreshLineage(ctx, gameID, peer)
-			}()
+			e.peerFinishedPulling(gameID, peer, body.Data)
 		}
 	case "in-sync":
 		// The peer verified both sides hold identical content; confirm on
@@ -745,7 +904,7 @@ func (e *Engine) handleSyncTrigger(w http.ResponseWriter, r *http.Request) {
 	e.GoSync(func(ctx context.Context) {
 		ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
-		if _, err := e.SyncGame(ctx, gameID); err != nil {
+		if _, err := e.SyncGame(ctx, gameID); err != nil && !errors.Is(err, syncengine.ErrHeld) {
 			e.Log("warn", fmt.Sprintf("triggered sync for %s: %v", gameID, err))
 		}
 	})
@@ -812,4 +971,66 @@ func ServedProto() int { return int(servedProto.Load()) }
 // get an older peer into an end-to-end test. Nothing in the product calls it.
 func SetServedProto(v int) int {
 	return int(servedProto.Swap(int64(v)))
+}
+
+// peerFinishedPulling handles a peer's report that it finished pulling from
+// this device, over the LAN or the relay alike: whatever was pushed is now on
+// both sides, so the shared lineage is brought up to date. Until it is,
+// freshly-pushed files deliberately stay out of it (see persistLineage), so
+// deleting one here would pull it back instead of propagating the delete.
+func (e *Engine) peerFinishedPulling(gameID string, peer syncengine.Peer, data map[string]any) {
+	// Recorded first, and synchronously: the peer said exactly which files it
+	// wrote, so the lineage can be updated now rather than after a manifest
+	// round trip. That round trip is what left a window in which deleting a
+	// just-synced file pulled it back instead of propagating the delete.
+	//
+	// Against the location it names. A report without one is from a version
+	// that did not say, and means the main save folder, as it always has.
+	took := stringsFromEventData(data, "pulledFiles")
+	root, _ := data["root"].(string)
+	e.Sync.AddConfirmedLineageForRoot(gameID, peer.ID, root, took)
+	if len(took) > 0 {
+		e.Sync.RecordActivity(store.ActivityEvent{GameID: e.localGameID(gameID), Kind: store.ActivitySent, Device: peer.Name, Files: len(took)})
+	}
+	refreshAfterPull(e, gameID, peer)
+}
+
+// refreshAfterPull re-checks the lineage against the peer's manifest after a
+// report, in the background so the report is answered at once. A variable so
+// a test can run it in line and look at the result without racing it.
+var refreshAfterPull = func(e *Engine, gameID string, peer syncengine.Peer) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		e.Sync.RefreshLineage(ctx, gameID, peer)
+	}()
+}
+
+// stringsFromEventData pulls a []string out of a sync-event payload, which
+// arrives as []any after a JSON round trip.
+func stringsFromEventData(data map[string]any, key string) []string {
+	raw, ok := data[key].([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		if s, ok := v.(string); ok && s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// holdingBack says whether this device holds a game back from its peers
+// because its save was emptied here (syncengine/hold.go). A peer asking for
+// its manifest is exactly the moment an emptied folder would be read as
+// every file deleted, so this is checked here and not only when this device
+// starts a sync.
+func (e *Engine) holdingBack(game store.Game) bool {
+	if e.Sync == nil {
+		return false
+	}
+	held, err := e.Sync.CheckHold(game.ID, true)
+	return err == nil && held
 }

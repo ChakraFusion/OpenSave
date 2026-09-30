@@ -3,6 +3,7 @@ package syncengine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/store"
@@ -95,7 +96,8 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		return nil
 	}
 
-	local, err := delta.BuildManifest(sr.root.Path)
+	// Not read part-way through a write (settle.go).
+	local, err := e.ReadManifest(ctx, gameID, sr.root.Path)
 	if err != nil {
 		return fmt.Errorf("read %s: %w", sr.root.Path, err)
 	}
@@ -150,6 +152,20 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 	// second detector that is nearly right is worse than none, because it
 	// looks like the work has been done.
 	base := e.Store.GetAgreedHashForRoot(gameID, peer.ID, sr.root.Name)
+	// A push is proven once the peer is seen holding exactly what was handed
+	// over, whatever became of its report — the repair the main folder makes
+	// (see SyncWithPeer), and for the same reason. The push was recorded below
+	// and nothing ever read it, so a lost report left this location's base
+	// behind both devices, and the next edit on one of them read as both
+	// having moved: a conflict over a change only one device made.
+	//
+	// Both hashes are of the filtered view, which is what the push recorded.
+	if pushed := e.Store.GetPushedHashForRoot(gameID, peer.ID, sr.root.Name); pushed != "" {
+		if remoteHash := remote.RootHash(delta.PrimaryRoot); base != remoteHash && remoteHash == pushed {
+			_ = e.Store.SetAgreedHashForRoot(gameID, peer.ID, sr.root.Name, remoteHash)
+			base = remoteHash
+		}
+	}
 	// A base recorded before the rules existed was hashed over everything, so
 	// it can equal neither filtered side — and a base matching neither reads
 	// as both having moved, which is a conflict on the first sync after anyone
@@ -164,7 +180,9 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 			base = remote.RootHash(delta.PrimaryRoot)
 		}
 	}
-	if DetectConflict(local, remote, e.lastSyncTimeMs(peer.ID), base) {
+	judged := e.unchangedButForPeerDeletions(gameID, sr.root.Name, local, base)
+	if DetectConflict(judged, remote, e.lastSyncTimeMs(peer.ID), base) &&
+		!OnlyBehind(judged, remote, lineageFiles) {
 		// Neither side is touched. There is no per-location resolution screen
 		// yet, so this location simply stops syncing until the two are made to
 		// agree by hand — which is the safe half of the bargain, and is said
@@ -187,26 +205,47 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		Proto:        remoteData.Proto,
 	}
 
-	e.applyLocalDeletions(sr.root, decision)
+	if emptiedUnconfirmed(remote.Files, decision, remoteData.DeletionConfirmed) {
+		e.Log("info", fmt.Sprintf("%q holds none of the %q save location of %q now, and has not confirmed deleting it — keeping this device's copies",
+			peer.Name, sr.root.Name, game.Name))
+		return nil
+	}
+
+	e.handOverEmptying(gameID, peer, local.Files, &decision)
+
+	// Held across the whole apply, as for the main folder: from the first
+	// deletion to the last pull this location is a mixture nobody holds
+	// (settle.go).
+	applied := e.Writing(gameID)
+	deleting := time.Now()
+	e.applyLocalDeletions(gameID, sr.root, decision)
+	if n := len(decision.FilesToDeleteLocally); n > 0 {
+		e.RecordActivity(store.ActivityEvent{GameID: gameID, Kind: store.ActivityDeleted, Device: peer.Name,
+			Files: n, Detail: locationDetail(sr.root.Name)})
+		e.noteEmptiedByPeer(gameID, deleting)
+	}
 	e.propagateDeletions(ctx, peer, gameID, sr.root, decision)
-	e.createPulledDirsIn(sr.root, decision.DirsToPull)
+	e.createPulledDirsIn(gameID, sr.root, decision.DirsToPull)
 
 	if len(decision.FilesToPull) > 0 {
 		if err := e.pullFiles(ctx, peer, gameID, game, sr.root, local, rootResp, decision.FilesToPull); err != nil {
+			applied()
 			return err
 		}
 	}
+	applied()
 	if decision.HasPush() {
 		e.Transport.TriggerPeerPull(peer, gameID)
 	}
 
-	fresh, freshErr := delta.BuildManifest(sr.root.Path)
+	fresh, freshErr := e.ReadManifest(ctx, gameID, sr.root.Path)
 	if freshErr == nil {
 		// fresh is unfiltered, and does not need to be: persistRootLineage
 		// intersects the two sides, and the remote side passed here has the
 		// excluded paths removed — so they cannot reach the lineage from
 		// either direction. Same arrangement as the main folder.
-		e.persistRootLineage(gameID, peer.ID, sr.root.Name, mergeManifestPaths(fresh, local), remote)
+		e.persistRootLineage(gameID, peer.ID, sr.root.Name,
+			withPulled(mergeManifestPaths(fresh, local), remote, decision.FilesToPull, decision.DirsToPull), remote)
 	}
 
 	// Same ratchet as the primary location, for the same reason: after a pure

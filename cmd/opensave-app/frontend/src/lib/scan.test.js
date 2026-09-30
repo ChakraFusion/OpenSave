@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildGroups,
   contentsLabel,
+  fillMissingAppIds,
   fmtAge,
   fmtBytes,
   isEmptyResult,
@@ -108,7 +109,22 @@ describe('isEmptyResult', () => {
   it('is false when the folder could not be measured', () => {
     expect(isEmptyResult({ measured: false, fileCount: 0 })).toBe(false);
   });
-});
+
+    // Measuring shares one budget across the whole scan, and a walk cut short
+    // by it reports measured with a count of zero. Reported as games that only
+    // appeared after several scans, and titles that vanished between them: a
+    // save with a folder per slot walks hundreds of directories before its
+    // first file, and whether the budget lasts depends on what was measured
+    // before it.
+    it('is false when the measurement ran out of budget', () => {
+      expect(isEmptyResult({ measured: true, truncated: true, fileCount: 0 })).toBe(false);
+    });
+
+    // Truncated with a count is the file cap, not the clock.
+    it('is still false for a folder that hit the file cap', () => {
+      expect(isEmptyResult({ measured: true, truncated: true, fileCount: 20000 })).toBe(false);
+    });
+  });
 
 describe('contentsLabel', () => {
   const now = Date.now();
@@ -201,5 +217,34 @@ describe('plannedGames', () => {
     const plan = plannedGames([row({ id: 'a', role: 'alternative', groupId: 'app:1' })]);
     expect(plan[0].primary.id).toBe('a');
     expect(plan[0].extras).toEqual([]);
+  });
+});
+
+describe('fillMissingAppIds', () => {
+  it('gives an entry without an App ID the one a same-named entry has', () => {
+    const rows = [
+      row({ id: 'a', name: 'Hades', appId: '1145360' }),
+      row({ id: 'b', name: ' hades ', appId: '' }),
+      row({ id: 'c', name: 'Celeste', appId: '' })
+    ];
+    fillMissingAppIds(rows);
+    expect(rows.map((r) => r.appId)).toEqual(['1145360', '1145360', '']);
+  });
+
+  it('keeps an App ID an entry already has, and takes the first one seen', () => {
+    const rows = [
+      row({ id: 'a', name: 'Game', appId: '1' }),
+      row({ id: 'b', name: 'Game', appId: '2' }),
+      row({ id: 'c', name: 'Game' })
+    ];
+    fillMissingAppIds(rows);
+    expect(rows.map((r) => r.appId)).toEqual(['1', '2', '1']);
+  });
+
+  it('does not match on an empty name', () => {
+    const rows = [row({ id: 'a', name: '', appId: '9' }), row({ id: 'b', name: '', appId: '' })];
+    fillMissingAppIds(rows);
+    expect(rows[1].appId).toBe('');
+    expect(() => fillMissingAppIds(null)).not.toThrow();
   });
 });

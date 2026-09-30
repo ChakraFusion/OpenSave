@@ -16,6 +16,7 @@ import (
 	"github.com/opensave/opensave/internal/api"
 	"github.com/opensave/opensave/internal/changelog"
 	"github.com/opensave/opensave/internal/daemon"
+	"github.com/opensave/opensave/internal/sysintegration"
 	"github.com/opensave/opensave/internal/version"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
@@ -36,6 +37,7 @@ type App struct {
 	bootErr     string
 	reallyQuit  bool
 	updatedFrom string // previous version when this run is the first on a new build
+	notifyErr   error  // why desktop notifications cannot be shown, where known (notify_other.go)
 }
 
 // NewApp creates the App shell (daemon boots in startup).
@@ -46,6 +48,14 @@ func NewApp() *App {
 // startup boots the daemon + local API server once the webview exists.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+
+	// Asked to stop a running OpenSave, and we ARE the only one: there is
+	// nothing to stop. Exit without booting a daemon, claiming a port or
+	// opening the database — this process was never meant to be the app.
+	if quitRequested() {
+		a.quitFromTray()
+		return
+	}
 
 	d, err := daemon.New(daemon.Options{})
 	if err != nil {
@@ -117,16 +127,58 @@ func (a *App) startup(ctx context.Context) {
 	a.addr = addr
 	d.Log.Log("info", "desktop app connected to daemon at "+addr)
 
+	a.initNotifications()
 	a.startTray()
+
+	// Repair the autostart entry every launch. The entry written by earlier
+	// versions launched the bare executable, so every boot brought the
+	// window up; and after an update or a move the path it holds can be
+	// stale. SetAutostart writes only when the value differs, so on a
+	// healthy install this reads one registry value and stops.
+	if settings.StartOnBoot {
+		if err := sysintegration.SetAutostart(true); err != nil {
+			d.Log.Log("warn", "could not refresh the start-with-system entry: "+err.Error())
+		}
+	} else if sysintegration.AutostartEnabled() {
+		// The other direction: something outside the app turned it on. The
+		// installer's "start OpenSave when Windows starts" checkbox does
+		// exactly this — it writes the entry, being unable to open the
+		// database the setting lives in. Adopt it, or Settings would show
+		// the switch off while Windows starts the app every morning, and
+		// turning it "on" and off again would be the only way to fix it.
+		settings.StartOnBoot = true
+		if err := d.Store.UpdateSettings(settings); err != nil {
+			d.Log.Log("warn", "could not record that start-with-system is on: "+err.Error())
+		} else {
+			d.Log.Log("info", "start-with-system was switched on outside the app; Settings now agrees")
+		}
+	}
+
+	// Started hidden, but with nowhere to come back from? Show the window.
+	// Not every Linux desktop has a StatusNotifier host, and a hidden window
+	// with no tray icon is an app the person cannot reach — the same reason
+	// closing the window quits outright when the tray never appeared.
+	if launchedHidden() {
+		go a.showIfTrayNeverAppears()
+	}
 }
 
 // onSecondInstanceLaunch fires when OpenSave is launched again while it is
 // already running — commonly because closing the window only hides it to the
 // tray, so the user thinks it's closed. Rather than spawn a second (blank)
 // window, surface the existing one.
-func (a *App) onSecondInstanceLaunch(_ options.SecondInstanceData) {
+func (a *App) onSecondInstanceLaunch(data options.SecondInstanceData) {
 	if a.ctx == nil {
 		return
+	}
+	// Unless it was the installer asking us to get out of the way, in which
+	// case shut down the way the tray's Quit does rather than being killed
+	// with a snapshot half written. See sysintegration.QuitFlag.
+	for _, arg := range data.Args {
+		if arg == sysintegration.QuitFlag {
+			a.quitFromTray()
+			return
+		}
 	}
 	runtime.WindowShow(a.ctx)
 	runtime.WindowUnminimise(a.ctx)
@@ -327,10 +379,23 @@ func (a *App) ShowWindow() {
 }
 
 // Window controls for the custom title bar.
+// UserBusy reports whether a full-screen game or presentation has the screen,
+// for the frontend to hold back a chime and a window raise. See quiet_*.go.
+func (a *App) UserBusy() bool { return userIsBusy() }
+
 func (a *App) WindowMinimise() { runtime.WindowMinimise(a.ctx) }
 func (a *App) WindowToggleMaximise() {
 	runtime.WindowToggleMaximise(a.ctx)
 }
 func (a *App) WindowClose() { runtime.Quit(a.ctx) }
+
+// quitFromTray quits for good rather than hiding to the tray: the tray's
+// Quit, and the installer asking a running copy to get out of the way. Here
+// rather than beside the tray because the second happens on every platform —
+// defined only where there is a tray, it stopped the Mac app compiling.
+func (a *App) quitFromTray() {
+	a.reallyQuit = true
+	runtime.Quit(a.ctx)
+}
 
 var _ = fmt.Sprintf // reserved

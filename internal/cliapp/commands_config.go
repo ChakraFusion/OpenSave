@@ -42,7 +42,7 @@ func cmdExclude(d *daemon.Daemon, args []string) int {
 			fmt.Println("No excluded folders. Auto-scan looks everywhere it knows about.")
 			return 0
 		}
-		fmt.Printf("%d excluded folder(s):\n\n", len(settings.ExcludePaths))
+		fmt.Printf("%s:\n\n", plural(len(settings.ExcludePaths), "excluded folder", "excluded folders"))
 		for _, p := range settings.ExcludePaths {
 			fmt.Printf("  %s\n", p)
 		}
@@ -161,6 +161,13 @@ func cmdLinks(d *daemon.Daemon, args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: opensave links <gameId>")
 		return 1
 	}
+	// Confirm the game exists first. Listing aliases for an id nobody tracks
+	// returns an empty set, which printed as "no other game is linked" and
+	// exited 0 — a typo read back as a confirmed answer, and every sibling
+	// command rejects an unknown id instead.
+	if _, err := d.Store.GetGame(args[0]); err != nil {
+		return fail(asJSON, unknownGameError(d, args[0], err))
+	}
 	aliases, err := d.Store.ListGameAliases(args[0])
 	if err != nil {
 		return fail(asJSON, err)
@@ -200,9 +207,11 @@ func cmdConfig(d *daemon.Daemon, args []string) int {
 		fmt.Printf("relay:            %s\n", settings.RelayURL)
 		fmt.Printf("relay room:       %s\n", orNone(settings.SyncCode))
 		fmt.Printf("match by app id:  %v\n", settings.MatchByAppID)
+		fmt.Printf("unknown game:     %s\n", unknownGameLabel(settings.UnknownGameFromPeer))
 		fmt.Printf("snapshot limit:   %d\n", settings.DefaultMaxSnapshots)
 		fmt.Printf("manual limit:     %s\n", manualLimitLabel(settings.DefaultMaxManualSnapshots))
 		fmt.Printf("update channel:   %s\n", updateChannelLabel(settings.UpdateChannel))
+		fmt.Printf("check snapshots:  %s\n", verifyEveryLabel(settings.VerifyEveryDays))
 		fmt.Printf("data dir:         %s\n", settings.DataDir)
 		fmt.Printf("snapshots dir:    %s\n", settings.BackupsDir)
 		return 0
@@ -219,6 +228,20 @@ func cmdConfig(d *daemon.Daemon, args []string) int {
 		settings.DeviceName = value
 	case "match-by-app-id":
 		settings.MatchByAppID = value == "true" || value == "yes" || value == "1"
+	case "unknown-game-from-peer":
+		// Rejected rather than coerced. The two answers do materially different
+		// things — one starts syncing a game, the other waits for a person —
+		// and quietly reading a typo as "track" would be the wrong way round
+		// for anyone who typed this deliberately to stop guessing.
+		switch value {
+		case store.UnknownGameTrack, store.UnknownGameAsk:
+			settings.UnknownGameFromPeer = value
+		default:
+			return fail(asJSON, fmt.Errorf(
+				"unknown-game-from-peer must be %q (work out a folder and start syncing) "+
+					"or %q (wait for someone to choose one)",
+				store.UnknownGameTrack, store.UnknownGameAsk))
+		}
 	case "snapshot-limit":
 		var n int
 		if _, err := fmt.Sscanf(value, "%d", &n); err != nil || n < 0 {
@@ -258,6 +281,18 @@ func cmdConfig(d *daemon.Daemon, args []string) int {
 			return fail(asJSON, err)
 		}
 		settings.RelayURL = value
+	case "verify-every":
+		// How often every snapshot is read back to check it can be restored.
+		switch strings.ToLower(value) {
+		case "off", "never", "0":
+			settings.VerifyEveryDays = 0
+		default:
+			var n int
+			if _, err := fmt.Sscanf(value, "%d", &n); err != nil || n < 1 || n > 365 {
+				return fail(asJSON, fmt.Errorf("verify-every is a number of days from 1 to 365, or \"off\""))
+			}
+			settings.VerifyEveryDays = n
+		}
 	case "update-channel":
 		switch strings.ToLower(value) {
 		case "stable", "beta":
@@ -286,13 +321,20 @@ const configUsage = `usage:
   opensave config [list]                    Show current settings
   opensave config set device-name <name>    How other devices see this one
   opensave config set match-by-app-id <t/f> Link same-App-ID games across devices
+  opensave config set unknown-game-from-peer <track|ask>
+                                            Another device syncs a game this one
+                                            lacks: work out a folder and start
+                                            (default), or wait to be told where
   opensave config set snapshot-limit <n>    Automatic snapshots kept per branch (0 = all)
   opensave config set manual-snapshot-limit <n>
                                             Manual snapshots kept per branch (0 = keep forever)
   opensave config set port <n>              Local API/peer port (default 8383)
   opensave config set relay-url <url>       Relay server for internet sync
   opensave config set update-channel <stable|beta>
-                                            Whether updates include pre-releases`
+                                            Whether updates include pre-releases
+  opensave config set verify-every <days|off>
+                                            How often every snapshot is checked
+                                            it can be restored (default 7)`
 
 // manualLimitLabel renders the manual-snapshot budget. 0 is the default and
 // means "never pruned", which is worth saying in words — printing a bare 0
@@ -325,3 +367,26 @@ func orNone(s string) string {
 }
 
 var _ = json.Marshal // settings marshal through emitJSON
+
+// unknownGameLabel describes the policy in the words the setting means, rather
+// than echoing a stored token. "track" on its own reads as a noun.
+func unknownGameLabel(v string) string {
+	if (store.Settings{UnknownGameFromPeer: v}).ShouldAskBeforeTracking() {
+		return "ask where to keep it"
+	}
+	return "track it automatically"
+}
+
+// verifyEveryLabel says how often snapshots are checked.
+func verifyEveryLabel(days int) string {
+	switch {
+	case days <= 0:
+		return "never"
+	case days == 1:
+		return "every day"
+	case days == 7:
+		return "every week"
+	default:
+		return fmt.Sprintf("every %d days", days)
+	}
+}

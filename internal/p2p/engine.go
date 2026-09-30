@@ -7,18 +7,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/e2ee"
 	"github.com/opensave/opensave/internal/p2p/discovery"
 	"github.com/opensave/opensave/internal/p2p/pairing"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
 	"github.com/opensave/opensave/internal/snapshot"
 	"github.com/opensave/opensave/internal/store"
+	"github.com/opensave/opensave/internal/syncpause"
 )
 
 // resyncRetryInterval is how often the failsafe re-attempts games whose
@@ -34,15 +36,6 @@ const reconcileEveryNTicks = 3
 // files, short enough that quitting the app still feels immediate.
 const bgSyncShutdownGrace = 5 * time.Second
 
-// GameState is the lightweight per-game summary exchanged in pings/hellos
-// so peers can see what each other has without a full manifest fetch.
-type GameState struct {
-	LatestSnapshotID   string `json:"latestSnapshotId"`
-	LatestSnapshotTime int64  `json:"latestSnapshotTime"`
-	ActiveBranch       string `json:"activeBranch"`
-	ManifestHash       string `json:"manifestHash"`
-}
-
 // Engine owns all P2P state for one daemon.
 type Engine struct {
 	Store     *store.Store
@@ -53,6 +46,8 @@ type Engine struct {
 	Wan       *WanClient
 	RelayHost *RelayHost
 	Log       func(level, msg string)
+	// Pause is whether this device has paused syncing (see pause.go).
+	Pause *syncpause.State
 
 	// OnPeerUpdate fires whenever peer/pairing state changes (dashboard
 	// broadcast hook). May be nil.
@@ -70,18 +65,33 @@ type Engine struct {
 	OnUntrackRequest func(gameID string)
 	OnRetrackRequest func(gameID string)
 
+	// SwitchSaveFolder picks where a Switch save arriving from a peer belongs
+	// on this device (presets.Scanner.SwitchSaveFolder). Wired by the daemon.
+	// May be nil.
+	SwitchSaveFolder func(titleID, translated string) string
+
 	// Failsafe: games whose last sync was interrupted (network error mid-
 	// transfer) are queued here and retried automatically, no prompt, until
 	// they complete.
 	pendingMu     sync.Mutex
 	pendingResync map[string]bool
-	stopRetry     chan struct{}
 
-	// Short-lived manifest-hash cache for ping/hello responses. Every
-	// incoming ping used to re-hash every tracked save from scratch —
-	// constant disk/CPU churn with the 20s retry loop pinging both ways.
-	hashCacheMu sync.Mutex
-	hashCache   map[string]cachedManifestHash
+	// gameOpMu guards gameOpAt and gameOpLocks. gameOpAt is the sender's
+	// stamp of the newest untrack or retrack applied per game; gameOpLocks
+	// serialises the operations themselves per game. See applyPeerUntrack.
+	gameOpMu    sync.Mutex
+	gameOpAt    map[string]int64
+	gameOpLocks map[string]*sync.Mutex
+	stopRetry   chan struct{}
+
+	// Replay protection for authenticated relay requests. Lazily built so a
+	// zero Engine (tests construct several) needs no extra setup.
+	nonceOnce  sync.Once
+	nonceCache *nonceCache
+
+	// Goodbyes still owed to devices this one unpaired; see farewell.go.
+	farewellMu sync.Mutex
+	farewells  map[string]*farewell
 
 	// Live per-peer app build info (version + build time) learned from
 	// pings/hellos, powering the "update from this device" flow.
@@ -133,14 +143,6 @@ func (e *Engine) GoSync(fn func(ctx context.Context)) {
 	}()
 }
 
-type cachedManifestHash struct {
-	hash string
-	at   time.Time
-}
-
-// manifestHashTTL bounds how stale a ping-response manifest hash can be.
-const manifestHashTTL = 20 * time.Second
-
 // StartDiscovery begins UDP LAN presence broadcasting. Paired peers seen
 // on the LAN flip online (triggering auto-sync when they were offline);
 // unseen peers age out to offline.
@@ -168,7 +170,7 @@ func (e *Engine) StartDiscovery() error {
 				peer.DeviceType = d.DeviceType
 				peer.Status = "online"
 				peer.LastSeenMs = d.LastSeen
-				_ = e.Store.UpsertPeer(peer)
+				_ = e.Store.UpdatePeer(peer)
 				if wasOffline {
 					e.Log("info", fmt.Sprintf("paired peer %q appeared on LAN; auto-syncing", peer.Name))
 					e.GoSync(func(ctx context.Context) { e.SyncAllGames(ctx) })
@@ -193,7 +195,7 @@ func (e *Engine) StartDiscovery() error {
 				} else {
 					peer.Status = "offline"
 				}
-				_ = e.Store.UpsertPeer(peer)
+				_ = e.Store.UpdatePeer(peer)
 			}
 			e.notifyPeerUpdate()
 		},
@@ -268,7 +270,7 @@ func New(s *store.Store, snaps *snapshot.Manager, logf func(level, msg string)) 
 	e.Wan = newWanClient(e)
 	e.RelayHost = NewRelayHost(logf)
 	e.Sync = syncengine.New(s, snaps, &routingTransport{
-		lan: &lanTransport{},
+		lan: &lanTransport{engine: e},
 		wan: &wanTransport{wan: e.Wan},
 	})
 	e.Sync.Log = logf
@@ -276,52 +278,40 @@ func New(s *store.Store, snaps *snapshot.Manager, logf func(level, msg string)) 
 	// instead of inheriting the peer list from whichever sync it queued
 	// behind.
 	e.Sync.OnlinePeers = e.OnlinePeers
+	e.Pause = syncpause.New()
+	e.Sync.Paused = e.Pause.Paused
 	return e
 }
 
-// LocalGamesState builds the per-game summary for ping/hello responses.
-func (e *Engine) LocalGamesState() map[string]GameState {
-	out := map[string]GameState{}
-	games, err := e.Store.ListGames()
+// requestAuthKey derives the key this device and one peer use to authenticate
+// requests to each other.
+//
+// Returns an error when the peer has no pinned public key — a pairing made
+// before end-to-end encryption existed, or by a build without it. That is an
+// ordinary state, not a fault: callers treat it as "this pair cannot
+// authenticate yet" and fall back to the behaviour that came before. It is
+// resolved by re-pairing the two devices.
+func (e *Engine) requestAuthKey(peerID string) ([]byte, error) {
+	peer, err := e.Store.GetPeer(peerID)
 	if err != nil {
-		return out
+		return nil, err
 	}
-	for _, g := range games {
-		state := GameState{ActiveBranch: g.ActiveBranch}
-		if latest, err := e.Snapshots.LatestSnapshot(g.ID, ""); err == nil {
-			state.LatestSnapshotID = latest.ID
-			if t, err := time.Parse("2006-01-02T15:04:05.000Z", latest.Timestamp); err == nil {
-				state.LatestSnapshotTime = t.UnixMilli()
-			}
-		}
-		state.ManifestHash = e.manifestHashCached(g.ID, g.SavePath)
-		out[g.ID] = state
-	}
-	return out
+	return e.requestAuthKeyFor(peer)
 }
 
-// manifestHashCached returns the game's manifest hash, re-hashing at most
-// once per manifestHashTTL per game.
-func (e *Engine) manifestHashCached(gameID, savePath string) string {
-	e.hashCacheMu.Lock()
-	if c, ok := e.hashCache[gameID]; ok && time.Since(c.at) < manifestHashTTL {
-		e.hashCacheMu.Unlock()
-		return c.hash
+func (e *Engine) requestAuthKeyFor(peer store.Peer) ([]byte, error) {
+	if strings.TrimSpace(peer.PublicKey) == "" {
+		return nil, fmt.Errorf("peer %s has no pinned public key", peer.ID)
 	}
-	e.hashCacheMu.Unlock()
-
-	hash := ""
-	if m, err := delta.BuildManifest(savePath); err == nil {
-		hash = m.ManifestHash()
+	theirPublic, err := e2ee.DecodeKey(peer.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("peer %s has an unreadable public key: %w", peer.ID, err)
 	}
-
-	e.hashCacheMu.Lock()
-	if e.hashCache == nil {
-		e.hashCache = map[string]cachedManifestHash{}
+	id, err := e.Store.DeviceIdentity()
+	if err != nil {
+		return nil, fmt.Errorf("read this device's key: %w", err)
 	}
-	e.hashCache[gameID] = cachedManifestHash{hash: hash, at: time.Now()}
-	e.hashCacheMu.Unlock()
-	return hash
+	return e2ee.AuthKey(id.Private, theirPublic)
 }
 
 // OnlinePeers returns paired peers currently marked online, as sync-engine
@@ -418,7 +408,7 @@ func (e *Engine) PingPairedPeers(ctx context.Context) {
 		if newStatus != "" && p.Status != newStatus {
 			p.Status = newStatus
 			p.LastSeenMs = time.Now().UnixMilli()
-			_ = e.Store.UpsertPeer(p)
+			_ = e.Store.UpdatePeer(p)
 			changed = true
 		}
 	}
@@ -427,13 +417,21 @@ func (e *Engine) PingPairedPeers(ctx context.Context) {
 	}
 }
 
+// ErrNoPeersOnline is a sync with no other device to sync with: none of the
+// paired devices answered. Not a failure of anything — the save goes over when
+// one is back — which is why it is told apart from errors that are.
+var ErrNoPeersOnline = errors.New("no online peers available")
+
 // SyncGame pings peers and then syncs one game with everyone online.
 func (e *Engine) SyncGame(ctx context.Context, gameID string) (map[string]syncengine.Result, error) {
+	if e.Pause.Paused() {
+		return nil, syncengine.ErrPaused
+	}
 	gameID = e.localGameID(gameID)
 	e.PingPairedPeers(ctx)
 	online := e.OnlinePeers()
 	if len(online) == 0 {
-		return nil, fmt.Errorf("no online peers available")
+		return nil, ErrNoPeersOnline
 	}
 	results, err := e.Sync.SyncGame(ctx, gameID, online)
 	e.trackSyncOutcome(gameID, results)
@@ -451,6 +449,9 @@ func (e *Engine) localGameID(gameID string) string {
 	}
 	if canonical, ok := e.Store.ResolveGameAlias(gameID); ok {
 		return canonical
+	}
+	if game, ok := e.matchSwitchTitle(gameID, ""); ok {
+		return game.ID
 	}
 	return gameID
 }
@@ -473,6 +474,9 @@ func (e *Engine) trackedGameForPeer(gameID string) (store.Game, error) {
 		if aliased, aErr := e.Store.GetGame(canonical); aErr == nil {
 			return aliased, nil
 		}
+	}
+	if game, ok := e.matchSwitchTitle(gameID, ""); ok {
+		return game, nil
 	}
 	return store.Game{}, err
 }
@@ -535,6 +539,12 @@ func (e *Engine) StartResyncLoop() {
 				return
 			case <-ticker.C:
 				ticks++
+				// Paused: nothing to retry or reconcile, and saying so on
+				// every tick for every game would bury the log. Resuming
+				// runs a full catch-up of its own (see daemon.go).
+				if e.Pause.Paused() {
+					continue
+				}
 				e.retryPendingResyncs(ctx)
 				if ticks%reconcileEveryNTicks == 0 {
 					e.reconcileAllGames(ctx)
@@ -591,6 +601,9 @@ func (e *Engine) retryPendingResyncs(ctx context.Context) {
 
 // SyncAllGames syncs every tracked game (used when a peer comes online).
 func (e *Engine) SyncAllGames(ctx context.Context) {
+	if e.Pause.Paused() {
+		return // resuming catches up; see syncpause
+	}
 	games, err := e.Store.ListGames()
 	if err != nil {
 		return
@@ -604,6 +617,9 @@ func (e *Engine) SyncAllGames(ctx context.Context) {
 			continue
 		}
 		results, err := e.Sync.SyncGame(ctx, g.ID, online)
+		if errors.Is(err, syncengine.ErrHeld) {
+			continue // said once, when it was held; asked about on screen
+		}
 		if err != nil {
 			e.Log("warn", fmt.Sprintf("auto-sync %s: %v", g.ID, err))
 			continue
@@ -728,44 +744,86 @@ func (e *Engine) RejectPairing(peerID string) {
 	e.notifyPeerUpdate()
 }
 
-// Unpair removes a paired peer and proactively tells them, so the other
-// device stops treating us as paired immediately instead of ghost-syncing
-// until its next hello gets rejected.
+// Unpair removes a paired peer and tells it, so the other device stops
+// treating this one as paired instead of trying to sync with it and being
+// turned away.
+//
+// For a peer with a pinned key, what is needed to sign the goodbye is kept
+// first and the goodbye is repeated until the other device answers — see
+// farewell.go for why sending it once was not enough.
 func (e *Engine) Unpair(peerID string) error {
 	peer, peerErr := e.Store.GetPeer(peerID)
+
+	// Written before the peer's record goes, so a crash between the two
+	// cannot lose the key the goodbye needs.
+	owed := false
+	var record store.UnpairedPeer
+	if peerErr == nil && strings.TrimSpace(peer.PublicKey) != "" {
+		record = unpairedRecord(peer, time.Now().UnixMilli())
+		if err := e.Store.RememberUnpaired(record); err != nil {
+			e.Log("warn", fmt.Sprintf("could not keep what is needed to repeat the goodbye to %q: %v", peer.Name, err))
+		} else {
+			owed = true
+		}
+	}
+
+	// Otherwise one goodbye, built BEFORE the record goes: if the peer does
+	// have a key, it lives in that record, and a goodbye built after the
+	// delete goes out unsigned — which a peer that has seen this device
+	// authenticate refuses.
+	var once func()
+	if peerErr == nil && !owed {
+		once = e.oneGoodbye(peer)
+	}
 
 	if err := e.Store.UnpairPeer(peerID); err != nil {
 		return err
 	}
 	e.notifyPeerUpdate()
 
-	// Best-effort notification — the peer may be offline, which is fine:
-	// the reactive unpair-notify (on their next hello) still covers them.
-	if peerErr == nil {
-		go func() {
-			settings, err := e.Store.GetSettings()
-			if err != nil {
-				return
-			}
-			if peer.Address == "relay" {
-				e.Wan.SendRelayMessage(RelayMessage{Type: "unpair-notify", To: peerID, From: settings.NodeID})
-				return
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			body, _ := json.Marshal(map[string]string{"peerId": settings.NodeID})
-			url := fmt.Sprintf("http://%s:%d/api/p2p/unpair", peer.Address, peer.Port)
-			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-			if err != nil {
-				return
-			}
-			req.Header.Set("Content-Type", "application/json")
-			if resp, err := http.DefaultClient.Do(req); err == nil {
-				resp.Body.Close()
-			}
-		}()
+	switch {
+	case owed:
+		// Only now, with the peer gone, is the goodbye owed in memory — and
+		// owed afresh, so this first one is not held back by the retry limit.
+		e.oweGoodbye(record)
+		e.remindUnpaired(peerID, "")
+	case once != nil:
+		go once()
 	}
 	return nil
+}
+
+// oneGoodbye builds a single goodbye to peer, to send after its record is
+// deleted, with no second attempt: the path for a peer paired before keys
+// existed, which accepts an unsigned goodbye, and the fallback if the record
+// needed for repeating one could not be written.
+func (e *Engine) oneGoodbye(peer store.Peer) func() {
+	settings, err := e.Store.GetSettings()
+	if err != nil {
+		return nil
+	}
+	payload := map[string]string{"peerId": settings.NodeID}
+	if peer.Address == "relay" {
+		msg, ok := e.Wan.PrepareNotify(peer.ID, "/unpair", "POST", payload)
+		if !ok {
+			return nil
+		}
+		return func() { e.Wan.SendRelayMessage(msg) }
+	}
+	body, _ := json.Marshal(payload)
+	url := fmt.Sprintf("http://%s:%d/api/p2p/unpair", peer.Address, peer.Port)
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Content-Type", "application/json")
+	e.signLANRequest(req, peer.ID, body)
+	return func() {
+		client := &http.Client{Timeout: 5 * time.Second}
+		if resp, err := client.Do(req); err == nil {
+			resp.Body.Close()
+		}
+	}
 }
 
 // ClearPendingResync drops a game from the failsafe retry queue — called
@@ -794,24 +852,37 @@ func (e *Engine) notifyPeersGameOp(op, gameID string) {
 	if err != nil {
 		return
 	}
+	// Signed, on both transports. These used to be bare frames and bare
+	// HTTP posts with no proof of origin. Over a relay that meant anyone
+	// holding the room code could untrack a game on a device, or unpair
+	// two devices, by writing a paired peer's ID into the frame — the room
+	// publishes every device's paired IDs, so there was nothing to guess.
+	// On a LAN it meant the opposite failure: a peer that had authenticated
+	// before correctly refused the unsigned post, and the untrack simply
+	// never registered there.
+	// Stamped once, here, so every peer sees the same ordering between this
+	// operation and the next one for the same game. Nanoseconds, because an
+	// untrack and a retrack can be a single syscall apart and milliseconds
+	// let them tie — and a tie is "neither is older", which applies both.
+	// See applyPeerUntrack.
+	at := time.Now().UnixNano()
 	for _, peer := range peers {
 		peer := peer
 		go func() {
 			if peer.Address == "relay" {
-				e.Wan.SendRelayMessage(RelayMessage{
-					Type: op + "-notify", To: peer.ID, From: settings.NodeID, GameID: gameID,
-				})
+				e.Wan.Notify(peer.ID, "/"+op, "POST", map[string]any{"gameId": gameID, "at": at})
 				return
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			body, _ := json.Marshal(map[string]string{"peerId": settings.NodeID, "gameId": gameID})
+			body, _ := json.Marshal(map[string]any{"peerId": settings.NodeID, "gameId": gameID, "at": at})
 			url := fmt.Sprintf("http://%s:%d/api/p2p/%s", peer.Address, peer.Port, op)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 			if err != nil {
 				return
 			}
 			req.Header.Set("Content-Type", "application/json")
+			e.signLANRequest(req, peer.ID, body)
 			if resp, err := http.DefaultClient.Do(req); err == nil {
 				resp.Body.Close()
 			}
@@ -820,17 +891,95 @@ func (e *Engine) notifyPeersGameOp(op, gameID string) {
 }
 
 // applyPeerUntrack / applyPeerRetrack mirror a peer's game op locally.
-func (e *Engine) applyPeerUntrack(gameID string) {
+// applyPeerUntrack and applyPeerRetrack apply a peer's game operation,
+// unless a newer one for the same game has already been applied — and never
+// at the same time as another operation on the same game.
+//
+// The two are sent as independent requests, and a request is served on its
+// own goroutine, so an untrack and a retrack fired close together are applied
+// concurrently in whichever order they land. Both halves of that went wrong.
+// Landing backwards, an untrack undid the retrack that came after it; the
+// sender's stamp settles which is newer. Landing in the right order but
+// overlapping, the retrack looked for the folder the untrack remembers —
+// while the untrack was still writing it — found nothing, and returned; the
+// untrack then finished, and the device ended with no game and a tombstone
+// that refuses to take it back, while the other device believed it had
+// re-shared it. Reproduced under the race detector, where the two arrive
+// milliseconds apart; by hand they are seconds apart, which is why it was
+// never seen.
+//
+// So the operation is held under a per-game lock from the staleness check
+// through to the end of its side effects. The retrack then either waits for
+// the untrack to finish (and finds the remembered folder), or goes first and
+// leaves the stale untrack to be refused.
+//
+// at is the SENDER's clock at the moment of the operation, in nanoseconds,
+// so the comparison is between two stamps from the same clock and skew does
+// not enter into it. Zero means an older build that sends no stamp; those are
+// applied as they always were.
+func (e *Engine) applyPeerUntrack(gameID string, at int64) {
+	unlock := e.lockGameOp(gameID)
+	defer unlock()
+	if e.staleGameOpLocked(gameID, at, "untrack") {
+		return
+	}
 	if e.OnUntrackRequest != nil {
 		e.OnUntrackRequest(gameID)
 	}
 	e.notifyGamesUpdate()
 }
 
-func (e *Engine) applyPeerRetrack(gameID string) {
+func (e *Engine) applyPeerRetrack(gameID string, at int64) {
+	unlock := e.lockGameOp(gameID)
+	defer unlock()
+	if e.staleGameOpLocked(gameID, at, "retrack") {
+		return
+	}
 	if e.OnRetrackRequest != nil {
 		e.OnRetrackRequest(gameID)
 	}
+}
+
+// lockGameOp takes the per-game operation lock and returns its release.
+//
+// One mutex per game rather than one for all: an untrack of one game must
+// not wait behind a restore of another, and the restore does real work —
+// database writes, a watcher start, a sync.
+func (e *Engine) lockGameOp(gameID string) func() {
+	e.gameOpMu.Lock()
+	if e.gameOpLocks == nil {
+		e.gameOpLocks = map[string]*sync.Mutex{}
+	}
+	mu, ok := e.gameOpLocks[gameID]
+	if !ok {
+		mu = &sync.Mutex{}
+		e.gameOpLocks[gameID] = mu
+	}
+	e.gameOpMu.Unlock()
+	mu.Lock()
+	return mu.Unlock
+}
+
+// staleGameOpLocked records at as the newest operation seen for the game and
+// reports whether it was in fact older than one already applied. The caller
+// holds the game's operation lock.
+func (e *Engine) staleGameOpLocked(gameID string, at int64, op string) bool {
+	if at == 0 {
+		return false
+	}
+	e.gameOpMu.Lock()
+	defer e.gameOpMu.Unlock()
+	if e.gameOpAt == nil {
+		e.gameOpAt = map[string]int64{}
+	}
+	if newest, ok := e.gameOpAt[gameID]; ok && at < newest {
+		if e.Log != nil {
+			e.Log("info", fmt.Sprintf("ignored a %s of %q that arrived after a newer change to it", op, gameID))
+		}
+		return true
+	}
+	e.gameOpAt[gameID] = at
+	return false
 }
 
 func (e *Engine) notifyPeerUpdate() {

@@ -2,6 +2,7 @@ package presets
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -36,42 +37,110 @@ func saveAppCache(cacheFile string, cache map[string]string) {
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(cacheFile, raw, 0o666)
+	_ = writeFileAtomic(cacheFile, raw)
+}
+
+// writeFileAtomic replaces a file whole: the new content goes to a temporary
+// file beside it, which is then renamed over the old one, so a reader sees
+// either the old file or the new one and never half of one.
+//
+// These caches are read by every scan, and scans now also run in the
+// background, beside the one a person starts and the terminal's. Written in
+// place, a scan reading mid-write got broken JSON and threw the cache away.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	_, werr := tmp.Write(data)
+	cerr := tmp.Close()
+	if werr != nil || cerr != nil {
+		os.Remove(tmp.Name())
+		return errors.Join(werr, cerr)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		// On Windows a reader holding the old file open can refuse the
+		// rename. The cache is best-effort; the next write will land.
+		os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 var steamAPIClient = &http.Client{Timeout: 3 * time.Second}
 
-// fetchSteamAppName queries the Steam Store API for an AppID's title.
-// Returns "" on any failure — the caller keeps the placeholder name.
-func fetchSteamAppName(appID string) string {
-	url := fmt.Sprintf("https://store.steampowered.com/api/appdetails?appids=%s&filters=basic", appID)
+// steamStoreAPI is where App IDs are looked up. A variable so a test can stand
+// in for Steam and exercise each of the answers LookupSteamApp gives.
+var steamStoreAPI = "https://store.steampowered.com/api/appdetails"
+
+// ErrSteamAppUnknown means Steam answered and has no such App ID.
+//
+// Kept apart from a failure to reach Steam at all, because the two call for
+// opposite advice: a typo wants "check the number in the store URL", and a
+// blocked network wants "this is not the ID's fault". Collapsing both into an
+// empty string is what left someone who had typed a correct ID staring at a
+// blank cover with no idea which of the two had happened.
+var ErrSteamAppUnknown = errors.New("no Steam app has this App ID")
+
+// LookupSteamApp asks the Steam Store API what an App ID is.
+//
+// Returns the store title on success, ErrSteamAppUnknown when Steam has no
+// such app, and any other error when Steam could not be asked.
+func LookupSteamApp(appID string) (string, error) {
+	url := fmt.Sprintf("%s?appids=%s&filters=basic", steamStoreAPI, appID)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	// The Store API rejects requests without a browser-like User-Agent.
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 	resp, err := steamAPIClient.Do(req)
 	if err != nil {
-		return ""
+		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return ""
+		return "", fmt.Errorf("steam store api: %s", resp.Status)
 	}
 
 	var payload map[string]struct {
 		Success bool `json:"success"`
 		Data    struct {
-			Name string `json:"name"`
+			Name       string      `json:"name"`
+			SteamAppID json.Number `json:"steam_appid"`
 		} `json:"data"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	dec := json.NewDecoder(resp.Body)
+	dec.UseNumber()
+	if err := dec.Decode(&payload); err != nil {
+		return "", err
+	}
+	entry, ok := payload[appID]
+	if !ok {
+		// Steam answers some ids under another key — Elden Ring's 1245620
+		// under 2855530, an edition of it — and names the app it is about
+		// inside. That answer is about this id all the same; an answer about
+		// some other app is not.
+		for _, e := range payload {
+			if e.Data.SteamAppID.String() == appID {
+				entry, ok = e, true
+				break
+			}
+		}
+	}
+	if !ok || !entry.Success || entry.Data.Name == "" {
+		return "", ErrSteamAppUnknown
+	}
+	return entry.Data.Name, nil
+}
+
+// fetchSteamAppName queries the Steam Store API for an AppID's title.
+// Returns "" on any failure — the caller keeps the placeholder name.
+func fetchSteamAppName(appID string) string {
+	name, err := LookupSteamApp(appID)
+	if err != nil {
 		return ""
 	}
-	if entry, ok := payload[appID]; ok && entry.Success {
-		return entry.Data.Name
-	}
-	return ""
+	return name
 }

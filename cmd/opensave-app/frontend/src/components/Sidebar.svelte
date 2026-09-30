@@ -1,19 +1,52 @@
 <script>
-  import { view, navigate, settings, gameList, conflictCount, pairingRequests, syncActivity } from '../lib/stores.js';
+  // Which games' explicit covers are currently revealed. Held per-game rather
+  // than as one "show everything" flag: revealing one cover should not uncover
+  // the rest of the shelf.
+  //
+  // A Set in a plain variable would not re-render — Svelte tracks assignment,
+  // so both helpers reassign.
+  let revealed = new Set();
+  const reveal = (game) => {
+    if (game?.coverExplicit && !revealed.has(game.id)) {
+      revealed = new Set(revealed).add(game.id);
+    }
+  };
+  const unreveal = (game) => {
+    if (game?.coverExplicit && revealed.has(game.id)) {
+      const next = new Set(revealed);
+      next.delete(game.id);
+      revealed = next;
+    }
+  };
+  import { slidingIndicator } from '../lib/motion.js';
+  import { view, navigate, settings, stateLoaded, gameList, conflictCount, pairingRequests, syncActivity } from '../lib/stores.js';
+  import { gameCover } from '../lib/api.js';
+  import CoverImage from './CoverImage.svelte';
+  import { visibleGames } from '../lib/gameactions.js';
+  import { openGameMenu } from '../lib/contextmenu.js';
+  import House from 'lucide-svelte/icons/house';
+  import MonitorSmartphone from 'lucide-svelte/icons/monitor-smartphone';
+  import Cloud from 'lucide-svelte/icons/cloud';
+  import Activity from 'lucide-svelte/icons/activity';
+  import Settings from 'lucide-svelte/icons/settings';
+  import ScrollText from 'lucide-svelte/icons/scroll-text';
+  import Plus from 'lucide-svelte/icons/plus';
+  import Search from 'lucide-svelte/icons/search';
+  import Gamepad2 from 'lucide-svelte/icons/gamepad-2';
 
   let filter = '';
 
   const nav = [
-    { id: 'home', label: 'Home', icon: 'M3 10.5 L10 4 L17 10.5 M5 9 V16 H8.5 V12 H11.5 V16 H15 V9' },
-    { id: 'devices', label: 'Devices', icon: 'M3 6 h9 v7 H3 z M5 15.5 h5 M7.5 13 v2.5 M14 9 h3 v6.5 h-3 z' },
-    { id: 'cloud', label: 'Cloud Backup', icon: 'M6 14 a3.5 3.5 0 0 1 0 -7 a4.5 4.5 0 0 1 8.6 1.2 A3 3 0 0 1 14 14 z' },
-    { id: 'activity', label: 'Activity', icon: 'M3 10 h3 l2 -5 l3 10 l2 -5 h4' },
-    { id: 'settings', label: 'Settings', icon: 'M10 7 a3 3 0 1 0 0 6 a3 3 0 1 0 0 -6 M10 2.5 v2 M10 15.5 v2 M2.5 10 h2 M15.5 10 h2 M4.6 4.6 l1.4 1.4 M14 14 l1.4 1.4 M15.4 4.6 L14 6 M6 14 l-1.4 1.4' },
-    { id: 'changelog', label: 'Changelog', icon: 'M5 3 h7 l3 3 v11 H5 z M12 3 v3 h3 M7.5 10 h5 M7.5 13 h5' }
+    { id: 'home', label: 'Home', icon: House },
+    { id: 'devices', label: 'Devices', icon: MonitorSmartphone },
+    { id: 'cloud', label: 'Cloud Backup', icon: Cloud },
+    { id: 'activity', label: 'Activity', icon: Activity },
+    { id: 'settings', label: 'Settings', icon: Settings },
+    { id: 'changelog', label: 'Changelog', icon: ScrollText }
   ];
 
   $: deviceName = $settings?.deviceName ?? '…';
-  $: filteredGames = $gameList.filter((g) => g.name.toLowerCase().includes(filter.toLowerCase()));
+  $: filteredGames = $visibleGames.filter((g) => g.name.toLowerCase().includes(filter.toLowerCase()));
   $: activeSyncs = Object.values($syncActivity).filter((s) => s.state === 'running').length;
 
   function badgeFor(id) {
@@ -36,12 +69,10 @@
     </div>
   </div>
 
-  <nav>
+  <nav use:slidingIndicator={{ mode: 'fill', className: 'slide-nav' }}>
     {#each nav as item}
       <button class:active={$view.name === item.id} on:click={() => navigate(item.id)}>
-        <svg width="17" height="17" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d={item.icon} />
-        </svg>
+        <svelte:component this={item.icon} size={17} strokeWidth={1.8} />
         <span>{item.label}</span>
         {#if badgeFor(item.id)}
           <span class="nav-badge">{badgeFor(item.id)}</span>
@@ -52,38 +83,57 @@
 
   <div class="library-head">
     <span>MY LIBRARY</span>
-    <button class="add" title="Track a game" on:click={() => navigate('home', { add: true })}>+</button>
+    <button class="add" title="Track a game" aria-label="Track a game" on:click={() => navigate('home', { add: true })}><Plus size={15} /></button>
   </div>
 
-  <input class="filter" placeholder="Filter library" bind:value={filter} />
+  <label class="filter">
+    <Search size={14} />
+    <input placeholder="Filter library" aria-label="Filter library" data-find-fallback bind:value={filter} />
+  </label>
 
   <div class="library">
     {#each filteredGames as game (game.id)}
       <button
         class="game"
         class:active={$view.name === 'game' && $view.params.gameId === game.id}
+        class:insession={!!game.playingSince}
         on:click={() => navigate('game', { gameId: game.id })}
+        on:contextmenu={(e) => openGameMenu(e, game)}
+        on:mouseenter={() => reveal(game)}
+        on:mouseleave={() => unreveal(game)}
+        on:focus={() => reveal(game)}
+        on:blur={() => unreveal(game)}
       >
         <span class="thumb">
           <span class="cover-fallback">{initials(game.name)}</span>
-          {#if game.coverUrl}
-            <img
-              src={game.coverUrl}
-              alt=""
-              on:load={(e) => (e.currentTarget.style.display = '')}
-              on:error={(e) => (e.currentTarget.style.display = 'none')}
-            />
-          {/if}
+          <!--
+            Through the daemon, not the stored URL. game.coverUrl is empty for a
+            game with no App ID, so this rendered no image at all for exactly the
+            titles the name lookup was added to cover; and when it was set it
+            pointed straight at Steam's CDN, which the embedded webview cannot
+            reliably reach. gameCover asks the local daemon, which caches, falls
+            back to an image proxy, and knows whether what it returned is explicit.
+          -->
+          <CoverImage
+            src={gameCover(game)}
+            alt=""
+            revealed={revealed.has(game.id)}
+          />
         </span>
         <span class="game-name">{game.name}</span>
+        {#if game.playingSince}
+          <span class="session" title="In session"><Gamepad2 size={13} /></span>
+        {/if}
         {#if $syncActivity[game.id]?.state === 'running'}
           <span class="spin" title="Syncing"></span>
         {/if}
       </button>
     {:else}
-      <div class="library-empty">
-        {$gameList.length === 0 ? 'No games tracked yet' : 'No matches'}
-      </div>
+      {#if $stateLoaded}
+        <div class="library-empty">
+          {$gameList.length === 0 ? 'No games tracked yet' : 'No matches'}
+        </div>
+      {/if}
     {/each}
   </div>
 
@@ -96,6 +146,13 @@
 </aside>
 
 <style>
+  .thumb {
+    overflow: hidden;
+    border-radius: 6px;
+  }
+  .thumb :global(img) {
+    transition: filter 120ms ease, transform 120ms ease;
+  }
   aside {
     width: var(--sidebar-w);
     background: var(--bg-sidebar);
@@ -116,7 +173,7 @@
     height: 38px;
     border-radius: 10px;
     background: var(--accent-soft);
-    color: var(--accent);
+    color: var(--accent-text);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -160,14 +217,56 @@
     background: var(--bg-hover);
     color: var(--text);
   }
+  nav button {
+    position: relative;
+  }
   nav button.active {
     background: var(--bg-active);
     color: var(--text);
   }
+  nav button.active::before {
+    content: '';
+    position: absolute;
+    left: -10px;
+    top: 9px;
+    bottom: 9px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
+  }
+  /* With the selection sliding (slidingIndicator, lib/motion.js), one marker
+     draws the active fill and its accent bar, and moves between items; the
+     buttons put theirs away and sit over it. */
+  nav:global(.slides) button {
+    z-index: 1;
+  }
+  nav:global(.slides) button.active {
+    background: transparent;
+  }
+  nav:global(.slides) button.active::before {
+    display: none;
+  }
+  nav :global(.slide-nav) {
+    background: var(--bg-active);
+    border-radius: var(--radius);
+  }
+  nav :global(.slide-nav)::before {
+    content: '';
+    position: absolute;
+    left: -10px;
+    top: 9px;
+    bottom: 9px;
+    width: 3px;
+    border-radius: 0 3px 3px 0;
+    background: var(--accent);
+  }
+  nav button.active :global(svg) {
+    color: var(--accent-text);
+  }
   .nav-badge {
     margin-left: auto;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     border-radius: 999px;
     font-size: 0.7rem;
     font-weight: 700;
@@ -185,13 +284,14 @@
     color: var(--text-faint);
   }
   .library-head .add {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
     border: none;
     background: transparent;
     color: var(--text-dim);
-    font-size: 1.1rem;
     cursor: pointer;
-    line-height: 1;
-    padding: 2px 6px;
     border-radius: 6px;
   }
   .library-head .add:hover {
@@ -200,17 +300,30 @@
   }
 
   .filter {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     margin: 0 14px 8px;
-    padding: 7px 11px;
+    padding: 0 11px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
+    color: var(--text-faint);
+    cursor: text;
+  }
+  .filter:focus-within {
+    border-color: var(--border-strong);
+  }
+  .filter input {
+    flex: 1;
+    min-width: 0;
+    padding: 7px 0;
+    border: none;
+    background: transparent;
     color: var(--text);
+    font: inherit;
     font-size: 0.85rem;
     outline: none;
-  }
-  .filter:focus {
-    border-color: var(--border-strong);
   }
 
   .library {
@@ -241,13 +354,20 @@
     background: var(--bg-active);
     color: var(--text);
   }
+  /* Its menu is open (lib/contextmenu.js): outlined, so the menu's game is
+     plain once the pointer has moved onto the menu. */
+  .game:global([data-menu-open]) {
+    background: var(--bg-active);
+    color: var(--text);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
   .thumb {
     position: relative;
     width: 24px;
     height: 24px;
     flex-shrink: 0;
   }
-  .thumb img {
+  .thumb :global(img) {
     position: absolute;
     inset: 0;
     width: 24px;
@@ -271,6 +391,16 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  /* The game being played: its name and a controller, in green. */
+  .game.insession .game-name {
+    color: var(--success);
+  }
+  .session {
+    display: inline-flex;
+    margin-left: auto;
+    flex-shrink: 0;
+    color: var(--success);
   }
   .library-empty {
     padding: 18px 10px;

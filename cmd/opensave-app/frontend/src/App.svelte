@@ -1,7 +1,13 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
+  import { pageOut } from './lib/motion.js';
   import { initApi, connectWS, native } from './lib/api.js';
-  import { applyMessage, wsConnected, view, appUpdate, toast, showAbout } from './lib/stores.js';
+  import { applyMessage, wsConnected, view, appUpdate, toast, showAbout, cloudOffers, newGames, navigate, settings, games, availableUpdate } from './lib/stores.js';
+  import { startController, controllerOn, padUsed, pageStep } from './lib/controller.js';
+  import { appearance } from './lib/appearance.js';
+  import { paletteOpen } from './lib/shortcuts.js';
+  import { newlyEmptied } from './lib/emptied.js';
+  import { demandAttention } from './lib/notify.js';
 
   import logoUrl from './assets/logo.png';
   import TitleBar from './components/TitleBar.svelte';
@@ -11,7 +17,14 @@
   import ConflictModal from './components/ConflictModal.svelte';
   import LocationConflictModal from './components/LocationConflictModal.svelte';
   import PairingBanner from './components/PairingBanner.svelte';
+  import CloudOfferBanner from './components/CloudOfferBanner.svelte';
+  import NewGamesBanner from './components/NewGamesBanner.svelte';
   import ConfirmDialog from './components/ConfirmDialog.svelte';
+  import ContextMenu from './components/ContextMenu.svelte';
+  import Shortcuts from './components/Shortcuts.svelte';
+  import RestoreDialog from './components/RestoreDialog.svelte';
+  import DropOverlay from './components/DropOverlay.svelte';
+  import CollectionsDialog from './components/CollectionsDialog.svelte';
 
   import Home from './views/Home.svelte';
   import GameDetail from './views/GameDetail.svelte';
@@ -21,6 +34,11 @@
   import Changelog from './views/Changelog.svelte';
   import WhatsNewModal from './components/WhatsNewModal.svelte';
   import ActivityLog from './views/ActivityLog.svelte';
+  import Download from 'lucide-svelte/icons/download';
+  import Wrench from 'lucide-svelte/icons/wrench';
+  import RefreshCw from 'lucide-svelte/icons/refresh-cw';
+  import Sparkles from 'lucide-svelte/icons/sparkles';
+  import X from 'lucide-svelte/icons/x';
 
   let ready = false;
   let bootError = '';
@@ -62,7 +80,56 @@
     updatedTo = '';
   }
 
+  // Moving around with a controller, or the arrow keys the same way, when
+  // that is on (lib/controller.js). The focus ring is drawn plainly then:
+  // with no pointer, it is the only way to see where you are.
+  $: controllerActive = controllerOn($appearance.controller, { deviceType: $settings?.deviceType, used: $padUsed });
+  $: document.documentElement.dataset.controller = controllerActive ? 'on' : 'off';
+  onMount(() =>
+    startController({
+      isOn: () => controllerActive,
+      actions: {
+        back: () => $view.name !== 'home' && navigate('home'),
+        menu: (el) => el?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true })),
+        palette: () => paletteOpen.set(true),
+        page: (delta) => navigate(pageStep($view.name, delta))
+      }
+    })
+  );
+
+  // A save emptied here waits on an answer before anything syncs: said once,
+  // loudly, when it starts waiting (lib/emptied.js).
+  let emptiedBefore = null;
+  const stopEmptied = games.subscribe((all) => {
+    const { now, fresh } = newlyEmptied(emptiedBefore, all);
+    emptiedBefore = now;
+    for (const g of fresh) {
+      toast(`Every save file of ${g.name} was deleted here. Your other devices keep theirs until you choose.`, 'warning', {
+        ttl: 15000,
+        action: { label: 'Choose', run: () => navigate('game', { gameId: g.id }) }
+      });
+      demandAttention('emptied', {
+        title: g.name,
+        body: 'Every save file was deleted here. Your other devices keep theirs until you choose.',
+        game: g
+      });
+    }
+  });
+  onDestroy(stopEmptied);
+
   onMount(async () => {
+    // The tray's "Open Activity" and the like: the desktop shell asks for a
+    // page by name. Absent in a browser.
+    globalThis.runtime?.EventsOn?.('navigate', (page) => navigate(page));
+    // A desktop notification clicked: where it was about (lib/notify.js).
+    globalThis.runtime?.EventsOn?.('notification-open', (target) => {
+      try {
+        const { view, params } = JSON.parse(target);
+        if (view) navigate(view, params ?? {});
+      } catch {
+        // Not one of ours.
+      }
+    });
     await boot();
     // First launch after an update (including peer-to-peer, which carries
     // no release notes): announce it and offer the embedded changelog.
@@ -82,7 +149,10 @@
     const check = async () => {
       try {
         const res = await native.checkUpdate();
-        if (res?.available) update = res;
+        if (res?.available) {
+          update = res;
+          availableUpdate.set(res);
+        }
       } catch {}
     };
     await check();
@@ -101,42 +171,54 @@
     changelog: Changelog,
     activity: ActivityLog
   };
+
+  // A new page opens at its top. The page area is one scroller shared by every
+  // page, so without this the next page opened as far down as the last had
+  // been scrolled — Activity half-way down because Settings was. Only a change
+  // of page: something that changes within one (a dialog it opens) keeps its
+  // place.
+  let mainEl;
+  let shownPage = '';
+  $: if (mainEl && $view.name !== shownPage) {
+    if (shownPage) mainEl.scrollTop = 0;
+    shownPage = $view.name;
+  }
 </script>
 
 <div class="shell">
   <TitleBar />
   {#if $appUpdate && $appUpdate.state !== 'error'}
     <div class="update-banner installing">
-      <span>
+      <span class="with-icon">
         {#if $appUpdate.state === 'downloading'}
-          ⬇️ Updating OpenSave — downloading {$appUpdate.percentage ?? 0}%…
+          <Download size={16} /> Updating OpenSave — downloading {$appUpdate.percentage ?? 0}%…
         {:else if $appUpdate.state === 'installing'}
-          🔧 Installing update…
+          <Wrench size={16} /> Installing update…
         {:else}
-          🔄 Restarting with the new version…
+          <RefreshCw size={16} /> Restarting with the new version…
         {/if}
         <em>The app restarts itself when done — your games keep syncing.</em>
       </span>
     </div>
   {:else if update}
     <div class="update-banner">
-      <span>🎉 OpenSave {update.latest} is available — you're on {update.current}.</span>
+      <span class="with-icon"><Sparkles size={16} /> OpenSave {update.latest} is available — you're on {update.current}.</span>
       <div class="update-actions">
         {#if update.notes}
-          <button class="dismiss" on:click={() => (showNotes = !showNotes)}>
+          <button class="btn small ghost" on:click={() => (showNotes = !showNotes)}>
             {showNotes ? 'Hide notes' : "What's new"}
           </button>
         {/if}
         {#if update.assetUrl}
-          <button class="link" disabled={installStarted} on:click={installRelease}>
+          <button class="btn small primary" disabled={installStarted} on:click={installRelease}>
             {installStarted ? 'Starting…' : 'Install & restart'}
           </button>
         {:else if update.flatpak}
-          <button class="link" on:click={() => native.openExternal(update.url)}>Get .flatpak</button>
+          <button class="btn small primary" on:click={() => native.openExternal(update.url)}>Get .flatpak</button>
         {:else}
-          <button class="link" on:click={() => native.openExternal(update.url)}>Download</button>
+          <button class="btn small primary" on:click={() => native.openExternal(update.url)}>Download</button>
         {/if}
-        <button class="dismiss" on:click={() => (update = null)} aria-label="Dismiss">✕</button>
+        <button class="btn small ghost icon" on:click={() => (update = null)} aria-label="Dismiss" title="Dismiss"><X size={15} /></button>
       </div>
     </div>
     {#if showNotes && update.notes}
@@ -144,10 +226,10 @@
     {/if}
   {:else if updatedTo}
     <div class="update-banner">
-      <span>🎉 OpenSave was updated to v{updatedTo}.</span>
+      <span class="with-icon"><Sparkles size={16} /> OpenSave was updated to v{updatedTo}.</span>
       <div class="update-actions">
-        <button class="link" on:click={openWhatsNew}>What's new</button>
-        <button class="dismiss" on:click={() => (updatedTo = '')} aria-label="Dismiss">✕</button>
+        <button class="btn small primary" on:click={openWhatsNew}>What's new</button>
+        <button class="btn small ghost icon" on:click={() => (updatedTo = '')} aria-label="Dismiss" title="Dismiss"><X size={15} /></button>
       </div>
     </div>
   {/if}
@@ -174,8 +256,29 @@
       </div>
     {:else if ready}
       <Sidebar />
-      <main>
-        <svelte:component this={views[$view.name] ?? Home} params={$view.params} />
+      <main bind:this={mainEl}>
+        <!-- At the top of the page rather than floating over it: floating, they
+             sat on the page's own header buttons for as long as they were
+             shown. These wait for an answer; they should not take anything away
+             while they do. -->
+        {#if $cloudOffers.length > 0 || $newGames.length > 0}
+          <div class="notices">
+            <CloudOfferBanner />
+            <NewGamesBanner />
+          </div>
+        {/if}
+        <!-- Keyed by page, so arriving somewhere new plays the short rise in
+             app.css (still, with animations off); moving between two games
+             is the same page and does not. The page being left fades as the
+             next rises, both in one grid cell so neither pushes the other
+             down while they overlap. -->
+        <div class="views">
+          {#key $view.name}
+            <div class="view" out:pageOut>
+              <svelte:component this={views[$view.name] ?? Home} params={$view.params} />
+            </div>
+          {/key}
+        </div>
       </main>
     {:else}
       <div class="boot-loading">
@@ -189,10 +292,22 @@
   <ConflictModal />
   <LocationConflictModal />
   <ConfirmDialog />
+  <ContextMenu />
+  <Shortcuts />
+  <RestoreDialog />
+  <DropOverlay />
+  <CollectionsDialog />
   {#if ready}<PairingBanner />{/if}
 </div>
 
 <style>
+  .notices {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 760px;
+    margin-bottom: 18px;
+  }
   .shell {
     display: flex;
     flex-direction: column;
@@ -208,6 +323,14 @@
     overflow-y: auto;
     padding: 24px 28px;
     min-width: 0;
+  }
+  .views {
+    display: grid;
+  }
+  .view {
+    grid-area: 1 / 1;
+    min-width: 0;
+    animation: arrive 0.2s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
   }
   .boot-loading,
   .boot-error {
@@ -252,32 +375,6 @@
     display: flex;
     align-items: center;
     gap: 6px;
-  }
-  .update-banner .link {
-    border: none;
-    background: var(--accent);
-    color: #fff;
-    font-weight: 600;
-    font-size: 0.82rem;
-    padding: 4px 12px;
-    border-radius: 7px;
-    cursor: pointer;
-  }
-  .update-banner .link:hover {
-    background: var(--accent-hover);
-  }
-  .update-banner .dismiss {
-    border: none;
-    background: transparent;
-    color: var(--text-dim);
-    cursor: pointer;
-    padding: 4px 6px;
-    border-radius: 6px;
-    font-size: 0.8rem;
-  }
-  .update-banner .dismiss:hover {
-    background: var(--bg-hover);
-    color: var(--text);
   }
   .update-banner.installing em {
     color: var(--text-dim);

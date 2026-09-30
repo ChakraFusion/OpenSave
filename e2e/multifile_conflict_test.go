@@ -94,8 +94,10 @@ func pairAndTrack(t *testing.T, name string, files map[string]string) (*testutil
 	for rel, content := range files {
 		a.WriteSave(rel, content)
 	}
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame(name)
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": name, "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 
 	if !testutil.WaitFor(45*time.Second, func() bool {

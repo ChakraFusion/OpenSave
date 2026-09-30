@@ -58,7 +58,10 @@ func cmdBackup(args []string) int {
 		}
 		body := map[string]any{"targetPath": target, "games": games}
 
-		raw, err := daemonRequest("POST", "/api/backup/export", body)
+		// The slow client: an export reads every chosen save, and a large
+		// library took longer than a quick call is given — reported as the
+		// daemon not answering while it carried on writing the file.
+		raw, err := daemonRequestSlow("POST", "/api/backup/export", body)
 		if err != nil {
 			return fail(asJSON, err)
 		}
@@ -79,15 +82,22 @@ func cmdBackup(args []string) int {
 		var res struct {
 			SnapshotCount int `json:"snapshotCount"`
 			Exported      int `json:"exported"`
+			FromSnapshot  []struct {
+				Name     string `json:"name"`
+				Snapshot string `json:"snapshot"`
+			} `json:"fromSnapshot"`
 		}
 		_ = json.Unmarshal(raw, &res)
 		switch {
 		case res.Exported > 0:
-			success("Exported %s.", bold(fmt.Sprintf("%d game(s)", res.Exported)))
+			success("Exported %s.", bold(plural(res.Exported, "game", "games")))
 		case res.SnapshotCount > 0:
-			success("Exported %s.", bold(fmt.Sprintf("%d snapshot(s)", res.SnapshotCount)))
+			success("Exported %s.", bold(plural(res.SnapshotCount, "snapshot", "snapshots")))
 		default:
 			success("Backup written, but it captured nothing.")
+		}
+		for _, g := range res.FromSnapshot {
+			note(fmt.Sprintf("%s: its save folder is empty or missing, so its newest snapshot (%s) went in", g.Name, g.Snapshot))
 		}
 		note(out)
 		if info, statErr := os.Stat(out); statErr == nil {
@@ -123,7 +133,7 @@ func cmdBackup(args []string) int {
 			}
 		}
 
-		raw, err := daemonRequest("POST", "/api/backup/restore", map[string]any{
+		raw, err := daemonRequestSlow("POST", "/api/backup/restore", map[string]any{
 			"sourcePath": source,
 			"mode":       mode,
 		})
@@ -180,12 +190,12 @@ func cmdBackup(args []string) int {
 
 		switch {
 		case mode == "overwrite":
-			success("Restored %s, overwriting current saves.", bold(fmt.Sprintf("%d game(s)", done)))
+			success("Restored %s, overwriting current saves.", bold(plural(done, "game", "games")))
 		case res.Legacy:
-			success("Imported %s.", bold(fmt.Sprintf("%d snapshot(s)", done)))
+			success("Imported %s.", bold(plural(done, "snapshot", "snapshots")))
 		default:
 			success("Imported %s as snapshots — nothing on disk was replaced.",
-				bold(fmt.Sprintf("%d game(s)", done)))
+				bold(plural(done, "game", "games")))
 			hint("opensave snapshots <gameId>", "opensave rollback <gameId> <snapshot>")
 		}
 		if res.Skipped > 0 {

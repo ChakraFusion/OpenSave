@@ -49,6 +49,13 @@ type ManifestResponse struct {
 	// contents over the save folder. Asking only peers that answered with a
 	// proto is what stops that.
 	Proto int `json:"proto,omitempty"`
+
+	// DeletionConfirmed says a save location that is empty on the responder
+	// was emptied on purpose: someone there answered "delete them on the
+	// other devices too", or the emptying came from a device where someone
+	// did (see hold.go). Without it an empty location is not taken as every
+	// file in it deleted — see emptiedUnconfirmed.
+	DeletionConfirmed bool `json:"deletionConfirmed,omitempty"`
 }
 
 // FileRef identifies one file inside one of a game's save locations.
@@ -120,4 +127,9 @@ type ProgressCallbacks struct {
 	OnSyncComplete func(gameID string, ev ProgressEvent)
 	OnSyncError    func(gameID string, ev ProgressEvent)
 	OnConflict     func(gameID string)
+	// OnSyncConfirmed fires when a game's sync state changed without a sync
+	// running here: a peer reported that it finished, and this side verified
+	// it. The dashboard shows a last-synced time per game, and this is the
+	// one path that moves it with no OnSyncComplete to carry the news.
+	OnSyncConfirmed func(gameID string)
 }

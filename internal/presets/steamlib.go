@@ -145,3 +145,29 @@ func dedupePaths(paths []string) []string {
 	}
 	return out
 }
+
+// HasSteam reports whether this machine has a Steam library at all. Without
+// one, a game's App ID not being among the installed apps says nothing about
+// whether the game is installed: there was no Steam to ask.
+func (sc *Scanner) HasSteam() bool {
+	for _, lib := range sc.steamLibraryPaths() {
+		if dirExists(filepath.Join(lib, "steamapps")) {
+			return true
+		}
+	}
+	return false
+}
+
+// InstallDirs says where installed games are on this machine: Steam's by App
+// ID, from their app manifests, and every other launcher's by the lower-cased
+// name of the folder each game is in. Read from disk on each call; a few
+// small files per library.
+func (sc *Scanner) InstallDirs() (byAppID, byFolderName map[string]string) {
+	byAppID = map[string]string{}
+	for _, app := range steamInstalledApps(sc.steamLibraryPaths()) {
+		if app.InstallDir != "" {
+			byAppID[app.AppID] = app.InstallDir
+		}
+	}
+	return byAppID, sc.launcherInstallDirs()
+}

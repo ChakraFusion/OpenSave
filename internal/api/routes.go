@@ -2,14 +2,17 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/opensave/opensave/internal/daemon"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
-	"github.com/opensave/opensave/internal/presets"
+	"github.com/opensave/opensave/internal/snapshot"
 	"github.com/opensave/opensave/internal/store"
 	"github.com/opensave/opensave/internal/sysintegration"
 )
@@ -26,7 +29,14 @@ func (s *Server) routes(r chi.Router) {
 
 	r.Get("/api/games", s.handleListGames)
 	r.Post("/api/games", s.handleTrackGame)
+	r.Get("/api/suggest-name", s.handleSuggestName)
 	r.Post("/api/games/untrack-bulk", s.handleBulkUntrack)
+
+	// Games a peer syncs that this device has no folder for. Only ever
+	// populated when the "ask before tracking" setting is on.
+	r.Get("/api/offered-games", s.handleListOfferedGames)
+	r.Post("/api/offered-games/{gameId}/place", s.handlePlaceOfferedGame)
+	r.Post("/api/offered-games/{gameId}/decline", s.handleDeclineOfferedGame)
 	r.Patch("/api/games/{gameId}", s.handleUpdateGame)
 	r.Delete("/api/games/{gameId}", s.handleUntrackGame)
 
@@ -43,6 +53,13 @@ func (s *Server) routes(r chi.Router) {
 	r.Get("/api/games/{gameId}/snapshot/{snapshotId}/files", s.handleSnapshotFiles)
 	r.Post("/api/games/{gameId}/snapshot/{snapshotId}/restore-file", s.handleRestoreFile)
 	r.Delete("/api/games/{gameId}/snapshot/{snapshotId}", s.handleDeleteSnapshot)
+	r.Patch("/api/games/{gameId}/snapshot/{snapshotId}", s.handleEditSnapshot)
+	r.Get("/api/games/{gameId}/sessions", s.handleGameSessions)
+	r.Get("/api/snapshots/check", s.handleSnapshotChecks)
+	r.Get("/api/games/{gameId}/snapshot/{snapshotId}/compare/{otherId}", s.handleCompareSnapshots)
+	r.Post("/api/snapshots/check", s.handleVerifySnapshots)
+	r.Post("/api/games/{gameId}/session", s.handleMarkSession)
+	r.Get("/api/games/{gameId}/snapshot/{snapshotId}/preview", s.handlePreviewRestore)
 
 	r.Post("/api/games/{gameId}/branch", s.handleCreateBranch)
 	r.Post("/api/games/{gameId}/branch/switch", s.handleSwitchBranch)
@@ -53,9 +70,30 @@ func (s *Server) routes(r chi.Router) {
 	r.Post("/api/backup/restore", s.handleBackupRestore)
 
 	r.Post("/api/snapshots/prune", s.handlePruneSnapshots)
+	r.Post("/api/snapshots/all", s.handleSnapshotAll)
+	r.Get("/api/storage", s.handleStorage)
+	r.Post("/api/storage/compact", s.handleCompact)
+	r.Get("/api/activity", s.handleActivity)
+	r.Post("/api/snapshots/repair", s.handleRepairSnapshots)
+	r.Post("/api/snapshots/forget-damaged", s.handleForgetDamaged)
+	r.Get("/api/emptied", s.handleEmptiedList)
+	r.Post("/api/games/{gameId}/emptied", s.handleEmptiedAnswer)
+
+	r.Get("/api/collections", s.handleListCollections)
+	r.Post("/api/collections", s.handleCreateCollection)
+	r.Patch("/api/collections/{id}", s.handleRenameCollection)
+	r.Delete("/api/collections/{id}", s.handleDeleteCollection)
+	r.Post("/api/collections/{id}/games", s.handleSetInCollection)
+
+	r.Get("/api/transfers", s.handleTransfers)
+	r.Get("/api/sync/pause", s.handleSyncPauseStatus)
+	r.Post("/api/sync/pause", s.handleSyncPause)
+	r.Post("/api/sync/resume", s.handleSyncResume)
 
 	r.Get("/api/presets/scan", s.handlePresetScan)
+	r.Post("/api/presets/new/dismiss", s.handleNewGamesDismiss)
 	r.Get("/api/cover", s.handleCover)
+	r.Get("/api/steam/app", s.handleSteamApp)
 
 	s.peerRoutes(r)
 	s.cloudRoutes(r)
@@ -79,12 +117,22 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if conflicts == nil {
 		conflicts = map[string]syncengine.Conflict{}
 	}
+	// The rest of what waits on someone, for the same clients: a divergence
+	// in one of a game's extra save folders, and a save emptied here.
+	emptied, _ := s.Daemon.EmptiedSaves()
+	if emptied == nil {
+		emptied = []daemon.EmptiedSave{}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"settings":      settings,
-		"gameCount":     len(games),
-		"peerCount":     len(peers),
-		"conflicts":     conflicts,
-		"conflictCount": len(conflicts),
+		"settings":          settings,
+		"gameCount":         len(games),
+		"peerCount":         len(peers),
+		"peersOnline":       len(s.Daemon.P2P.OnlinePeers()),
+		"conflicts":         conflicts,
+		"conflictCount":     len(conflicts),
+		"locationConflicts": s.Daemon.P2P.Sync.ActiveRootConflicts(),
+		"emptied":           emptied,
+		"syncPause":         s.Daemon.SyncPauseStatus(),
 	})
 }
 
@@ -141,14 +189,17 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	prevStartOnBoot := false
 	prevHostRelay := false
 	prevRelayPort := 0
+	prevAutoDelete, prevAutoDeleteDays := false, 0
 	if prev, err := s.Daemon.Store.GetSettings(); err == nil {
 		prevSyncCode, prevRelayURL, prevStartOnBoot = prev.SyncCode, prev.RelayURL, prev.StartOnBoot
 		prevHostRelay, prevRelayPort = prev.HostRelay, prev.RelayPort
+		prevAutoDelete, prevAutoDeleteDays = prev.AutoDeleteBackups, prev.AutoDeleteDays
 	}
 
-	// Refuse a cleartext relay before it is stored, not at the dial: saves
-	// carry no encryption of their own, so ws:// to somewhere public puts the
-	// file itself on the wire in the clear.
+	// Refuse a cleartext relay before it is stored, not at the dial: only
+	// saves between two 2.4 devices are sealed, so ws:// to somewhere public
+	// puts older pairings' files, room codes and pairing requests on the wire
+	// in the clear.
 	//
 	// Only when the address actually changes. This screen saves every field at
 	// once, so validating unconditionally would mean somebody who already has
@@ -182,6 +233,12 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 	// Host-relay toggle / port change starts or stops the in-process relay.
 	if updated.HostRelay != prevHostRelay || updated.RelayPort != prevRelayPort {
 		s.Daemon.P2P.ApplyRelayHosting(updated.HostRelay, updated.RelayPort)
+	}
+	// Switching age-based retention on, or shortening it, sweeps now rather
+	// than at the next scheduled pass, so the person who just chose it sees
+	// the history change while they are looking at it.
+	if updated.AutoDeleteBackups && (!prevAutoDelete || updated.AutoDeleteDays != prevAutoDeleteDays) {
+		go s.Daemon.PruneOldSnapshots()
 	}
 
 	writeJSON(w, http.StatusOK, s.settingsWire())
@@ -321,16 +378,44 @@ func (s *Server) handleUpdateGame(w http.ResponseWriter, r *http.Request) {
 	oldSavePath := game.SavePath
 	oldAutoSync := game.AutoSync
 	oldIgnore := game.SyncIgnore
+	oldAppID := game.AppID
 	if err := readJSON(r, &game); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	game.ID = gameID // id is not client-mutable
+
+	// A changed save path is validated exactly as a fresh track is. This
+	// decoded straight into the stored game and wrote it back, so a path that
+	// tracking would refuse — a profile root, a drive root, one that does not
+	// exist — could be set here instead, and every guard downstream assumes
+	// the paths it is handed came past that check. It is how a game comes to
+	// be tracked at a whole home folder despite the track-time refusal.
+	//
+	// Only when it actually changes: re-validating an unchanged path would
+	// reject the game against itself as a duplicate, and would start failing
+	// edits to a game whose folder went missing.
+	if game.SavePath != oldSavePath {
+		abs, err := s.Daemon.ValidateSavePath(game.SavePath)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		game.SavePath = abs
+	}
 	// Cover art: a user-set custom URL is always kept. An empty cover, or
 	// a previously auto-generated Steam cover, is (re)derived from the
 	// AppID — so changing the AppID refreshes the art.
 	if game.CoverURL == "" || isSteamCover(game.CoverURL) {
 		game.CoverURL = daemon.SteamCoverURL(game.AppID)
+	}
+	// A changed App ID is a request to look the art up again, and the miss
+	// cache must not veto it. A cover that failed to load once — a blip, a
+	// number typed wrong and corrected a minute later — was remembered as
+	// "no art" for six hours, and nothing the person did with the field could
+	// shorten that. Typing a new ID now means the next request actually asks.
+	if game.AppID != oldAppID && game.AppID != "" {
+		forgetCoverMiss(game.AppID)
 	}
 
 	if game.SyncIgnore != oldIgnore {
@@ -547,6 +632,8 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.BroadcastGamesUpdate()
+	s.Daemon.P2P.Sync.RecordActivity(store.ActivityEvent{GameID: gameID, Kind: store.ActivityRestored,
+		Detail: fmt.Sprintf("%s|%s", snap.ID, snap.Timestamp)})
 	writeJSON(w, http.StatusOK, snap)
 }
 
@@ -606,6 +693,294 @@ func (s *Server) handleDeleteSnapshot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"freedBytes": freed})
 }
 
+// handleEditSnapshot pins, unpins or re-notes a snapshot. Fields left out of
+// the body are left as they are: {"pinned": true} does not clear the note.
+func (s *Server) handleEditSnapshot(w http.ResponseWriter, r *http.Request) {
+	gameID := chi.URLParam(r, "gameId")
+	snapshotID := chi.URLParam(r, "snapshotId")
+	var body struct {
+		Pinned *bool   `json:"pinned"`
+		Note   *string `json:"note"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if body.Pinned == nil && body.Note == nil {
+		writeError(w, http.StatusBadRequest, `nothing to change: send "pinned", "note" or both`)
+		return
+	}
+	snap, err := s.Daemon.Snapshots.EditSnapshot(gameID, snapshotID, snapshot.SnapshotEdit{Pinned: body.Pinned, Note: body.Note})
+	if err != nil {
+		status := notFoundToStatus(err)
+		if errors.Is(err, snapshot.ErrInvalidEdit) {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	if body.Pinned != nil {
+		verb := "unpinned"
+		if *body.Pinned {
+			verb = "pinned"
+		}
+		s.Daemon.Log.Log("info", fmt.Sprintf("%s snapshot %s", verb, snapshotID))
+	}
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, snap)
+}
+
+// maxPause bounds a timed pause. Longer than this is "until I resume", which
+// has its own option; a pause of days set by a typo is saves not syncing for
+// days without anyone meaning it.
+const maxPause = 24 * time.Hour
+
+// collectionStatus maps a collection error to its HTTP status.
+func collectionStatus(err error) int {
+	if errors.Is(err, store.ErrInvalidCollection) {
+		return http.StatusBadRequest
+	}
+	return notFoundToStatus(err)
+}
+
+// broadcastCollections sends every collection to the dashboards after a change.
+func (s *Server) broadcastCollections() {
+	if all, err := s.Daemon.Store.ListCollections(); err == nil {
+		s.Hub.Broadcast("collections-update", all)
+	}
+}
+
+func (s *Server) handleListCollections(w http.ResponseWriter, r *http.Request) {
+	all, err := s.Daemon.Store.ListCollections()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, all)
+}
+
+func (s *Server) handleCreateCollection(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, err := s.Daemon.Store.CreateCollection(body.Name)
+	if err != nil {
+		writeError(w, collectionStatus(err), err.Error())
+		return
+	}
+	s.broadcastCollections()
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) handleRenameCollection(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.Daemon.Store.RenameCollection(chi.URLParam(r, "id"), body.Name); err != nil {
+		writeError(w, collectionStatus(err), err.Error())
+		return
+	}
+	s.broadcastCollections()
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func (s *Server) handleDeleteCollection(w http.ResponseWriter, r *http.Request) {
+	if err := s.Daemon.Store.DeleteCollection(chi.URLParam(r, "id")); err != nil {
+		writeError(w, collectionStatus(err), err.Error())
+		return
+	}
+	s.broadcastCollections()
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// handleSetInCollection puts a game in a collection, or takes it out with
+// {"in": false}.
+func (s *Server) handleSetInCollection(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		GameID string `json:"gameId"`
+		In     *bool  `json:"in"`
+	}
+	if err := readJSON(r, &body); err != nil || body.GameID == "" {
+		writeError(w, http.StatusBadRequest, `say which game: {"gameId": "…", "in": true|false}`)
+		return
+	}
+	in := body.In == nil || *body.In
+	if err := s.Daemon.Store.SetInCollection(chi.URLParam(r, "id"), body.GameID, in); err != nil {
+		writeError(w, collectionStatus(err), err.Error())
+		return
+	}
+	s.broadcastCollections()
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// handleStorage reports where snapshot space goes and what clean-up would free.
+func (s *Server) handleStorage(w http.ResponseWriter, r *http.Request) {
+	report, err := s.Daemon.Storage()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+// handleRepairSnapshots puts back, from the cloud, the damaged snapshots
+// that have a whole copy there.
+func (s *Server) handleRepairSnapshots(w http.ResponseWriter, r *http.Request) {
+	report, err := s.Daemon.RepairSnapshots(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, report)
+}
+
+// handleForgetDamaged removes from the history the snapshots that cannot be
+// restored.
+func (s *Server) handleForgetDamaged(w http.ResponseWriter, r *http.Request) {
+	removed, err := s.Daemon.ForgetDamagedSnapshots()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
+}
+
+// handleActivity is the activity page's timeline and each game's standing:
+// ?before=<ms> for older items, ?game=<id> for one game's, ?limit=<n>.
+func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	report, err := s.Daemon.Activity(before, q.Get("game"), limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, report)
+}
+
+// handleEmptiedList lists the games held back because their save was emptied
+// here.
+func (s *Server) handleEmptiedList(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Daemon.EmptiedSaves()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// handleEmptiedAnswer answers for one: {"answer": "delete"} sends the deletion
+// on to the other devices, {"answer": "restore"} puts the files back.
+func (s *Server) handleEmptiedAnswer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Answer string `json:"answer"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	res, err := s.Daemon.AnswerEmptied(chi.URLParam(r, "gameId"), body.Answer)
+	switch {
+	case errors.Is(err, daemon.ErrNotEmptied):
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	case err != nil:
+		writeError(w, notFoundToStatus(err), err.Error())
+		return
+	}
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleCompact has older snapshots share the files they have in common now,
+// rather than at the next pass in the background.
+func (s *Server) handleCompact(w http.ResponseWriter, r *http.Request) {
+	res, err := s.Daemon.CompactSnapshots(r.Context(), 0)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleSnapshotAll takes a snapshot of every tracked game.
+func (s *Server) handleSnapshotAll(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Comment string `json:"comment"`
+	}
+	_ = readJSON(r, &body) // an empty body is fine: the default comment
+	if strings.TrimSpace(body.Comment) == "" {
+		body.Comment = "Snapshot of every game"
+	}
+	writeJSON(w, http.StatusOK, s.Daemon.SnapshotAll(body.Comment))
+}
+
+// handleTransfers lists what is moving between this device and others now,
+// and what moved recently.
+func (s *Server) handleTransfers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.transfers.Now())
+}
+
+func (s *Server) handleSyncPauseStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.Daemon.SyncPauseStatus())
+}
+
+// handleSyncPause pauses syncing: {"minutes": n} for a while, or
+// {"untilRestart": true} until resumed or the app restarts.
+func (s *Server) handleSyncPause(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Minutes      int  `json:"minutes"`
+		UntilRestart bool `json:"untilRestart"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	dur := time.Duration(body.Minutes) * time.Minute
+	switch {
+	case body.UntilRestart && body.Minutes != 0:
+		writeError(w, http.StatusBadRequest, `give "minutes" or "untilRestart", not both`)
+		return
+	case body.UntilRestart:
+		dur = 0
+	case body.Minutes <= 0:
+		writeError(w, http.StatusBadRequest, `say how long: "minutes" (1 to 1440) or "untilRestart": true`)
+		return
+	case dur > maxPause:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("a pause can last at most %d minutes; to pause with no end, use untilRestart", int(maxPause.Minutes())))
+		return
+	}
+	writeJSON(w, http.StatusOK, s.Daemon.PauseSync(dur))
+}
+
+func (s *Server) handleSyncResume(w http.ResponseWriter, r *http.Request) {
+	resumed := s.Daemon.ResumeSync()
+	st := s.Daemon.SyncPauseStatus()
+	writeJSON(w, http.StatusOK, map[string]any{"resumed": resumed, "paused": st.Paused})
+}
+
+// handlePreviewRestore says what restoring a snapshot would change, file by
+// file, without changing anything.
+func (s *Server) handlePreviewRestore(w http.ResponseWriter, r *http.Request) {
+	preview, err := s.Daemon.Snapshots.PreviewRestore(chi.URLParam(r, "gameId"), chi.URLParam(r, "snapshotId"))
+	if err != nil {
+		writeError(w, notFoundToStatus(err), err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, preview)
+}
+
 // handleDeleteBranch removes a branch and all its snapshots. The active
 // branch and "main" can't be deleted.
 func (s *Server) handleDeleteBranch(w http.ResponseWriter, r *http.Request) {
@@ -631,23 +1006,33 @@ func (s *Server) handleDeleteBranch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePresetScan(w http.ResponseWriter, r *http.Request) {
-	settings, err := s.Daemon.Store.GetSettings()
+	// Through the daemon, which runs one scan at a time: the background scan
+	// for newly installed games uses the same scanner, and two at once would
+	// both be rewriting its name cache.
+	found, err := s.Daemon.ScanForSaves()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	found := s.Daemon.Scanner.Scan(settings.CustomScanPaths)
-	found = presets.FilterExcluded(found, settings.ExcludePaths)
-	// Measured after excluding, so the budget is spent only on locations that
-	// will actually be offered. Empty ones are reported, not dropped: the
-	// client hides them behind a toggle, and deciding that here would take
-	// away the only way to reach a folder a game has not written to yet.
-	presets.Measure(found)
-	// After measuring: which folder of a game is the one to track depends on
-	// which of them hold anything and when they were last written.
-	presets.Group(found)
-	if found == nil {
-		found = []presets.DiscoveredSave{} // never null on the wire
-	}
 	writeJSON(w, http.StatusOK, found)
+}
+
+// handleNewGamesDismiss clears the newly installed games waiting to be
+// looked at. They stay remembered, so they are not announced again.
+func (s *Server) handleNewGamesDismiss(w http.ResponseWriter, r *http.Request) {
+	s.Daemon.DismissNewGames()
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// handleSuggestName is a name for a folder or file picked to track, for the
+// person to confirm (presets.Scanner.SuggestName). Never an error: an empty
+// name just leaves the box for them to fill.
+//
+// GET /api/suggest-name?path=<folder or file>
+func (s *Server) handleSuggestName(w http.ResponseWriter, r *http.Request) {
+	name := ""
+	if s.Daemon.Scanner != nil {
+		name = s.Daemon.Scanner.SuggestName(r.URL.Query().Get("path"))
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"name": name})
 }

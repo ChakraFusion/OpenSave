@@ -101,8 +101,10 @@ func TestWanFullSync(t *testing.T) {
 
 	// A has a game with data; B pre-tracks at its own dir.
 	a.WriteSave("slot1.sav", "wan save data")
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Wan Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Wan Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 
@@ -166,8 +168,10 @@ func TestWanLargeFileSync(t *testing.T) {
 		big[i] = byte(rnd >> 24)
 	}
 	a.WriteSave("bigdata.bin", string(big))
+	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
 	gameID := a.TrackGame("Wan Big Game")
 	b.API(http.MethodPost, "/api/games", map[string]string{"name": "Wan Big Game", "savePath": b.SaveDir}, nil)
+	restoreSyncOnTrack()
 
 	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 

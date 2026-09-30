@@ -1,7 +1,15 @@
 <script>
-  import { conflicts, conflictResolution, games, toast } from '../lib/stores.js';
+  import { dialogOut } from '../lib/motion.js';
+  import { conflicts, conflictResolution, games, peers, settings, toast, view } from '../lib/stores.js';
+  import { isHandheld } from '../lib/devices.js';
+  import { visited } from '../lib/later.js';
   import { api } from '../lib/api.js';
   import { demandAttention } from '../lib/notify.js';
+  import Chevron from './ui/Chevron.svelte';
+  import Gamepad2 from 'lucide-svelte/icons/gamepad-2';
+  import Monitor from 'lucide-svelte/icons/monitor';
+  import History from 'lucide-svelte/icons/history';
+  import GitCompareArrows from 'lucide-svelte/icons/git-compare-arrows';
 
   let busy = false;
   let showDiff = false;
@@ -12,8 +20,31 @@
   // relay pull) runs in the background and only clears the conflict once
   // it finishes — but the user already made their choice, so don't keep
   // the modal (or its disabled buttons) on screen.
-  $: entries = Object.entries($conflicts).filter(([gid]) => !applying.has(gid));
+  // Put off: the decision can wait — nothing of that game syncs until it is
+  // made, and Home, its tile and the bell all say it is waiting. It stays out
+  // of the way until that game's page is opened again (from any of those), or
+  // the app starts again. Remembered with the page it was put off from, so
+  // putting it off while on the game's own page does not bring it straight
+  // back.
+  //
+  // A reactive declaration, not a function that assigns it: assigned from
+  // inside a function, `entries` below had already been worked out for that
+  // update and never saw the game come back.
+  let later = new Map(); // gameId → the view it was put off from
+  $: later = visited(later, $view);
+
+  $: pending = Object.entries($conflicts).filter(([gid]) => !applying.has(gid));
+  $: entries = pending.filter(([gid]) => !later.has(gid));
   $: current = entries[0]; // one at a time
+
+  function putOff() {
+    if (!current || busy) return;
+    later = new Map(later).set(current[0], $view);
+    showDiff = false;
+  }
+  const onKey = (e) => {
+    if (e.key === 'Escape' && current) putOff();
+  };
 
   // When a background resolution reports back: on failure the conflict is
   // still active, so un-hide it (the modal reappears with the error toast
@@ -28,15 +59,20 @@
   $: gameName = current ? ($games[current[0]]?.name ?? current[0]) : '';
   $: conflict = current ? current[1] : null;
   $: peerName = conflict ? (conflict.peer.Name ?? conflict.peer.name ?? 'the other device') : '';
+  $: peerType = conflict ? $peers[conflict.peer.ID ?? conflict.peer.id]?.deviceType : '';
+  $: localIcon = isHandheld($settings?.deviceType) ? Gamepad2 : Monitor;
+  $: peerIcon = isHandheld(peerType) ? Gamepad2 : Monitor;
 
   // Announce new conflicts: chime + surface the window + toast, same
   // treatment as incoming pairing requests.
-  $: onConflicts(entries);
+  // Announced once each, whether or not it has been put off.
+  $: onConflicts(pending);
   function onConflicts(list) {
     const fresh = list.filter(([gid]) => !seen.has(gid));
     if (fresh.length > 0) {
-      demandAttention();
-      const name = $games[fresh[0][0]]?.name ?? 'a game';
+      const game = $games[fresh[0][0]];
+      const name = game?.name ?? 'a game';
+      demandAttention('conflicts', { title: name, body: 'Its save changed here and on another device at once — choose which to keep.', game });
       toast(`Save conflict for “${name}” — choose which version to keep`, 'error');
     }
     seen = new Set(list.map(([gid]) => gid));
@@ -132,10 +168,12 @@
     s === 'changed' ? 'differs' : s === 'only-remote' ? `only on ${peerName}` : 'only on this device';
 </script>
 
+<svelte:window on:keydown={onKey} />
+
 {#if current && conflict}
-  <div class="overlay">
+  <div class="overlay" out:dialogOut|global>
     <div class="modal card">
-      <h3>⚔️ Save conflict — {gameName}</h3>
+      <h3 class="with-icon"><GitCompareArrows size={20} /> Save conflict — {gameName}</h3>
       <p class="desc">
         Both this device and <strong>{peerName}</strong> changed this save since the last sync.
         Pick which version to play from.
@@ -144,7 +182,7 @@
       <div class="versions">
         <div class="version" class:newer={newerSide === 'local'}>
           <div class="v-head">
-            <span class="v-title">💻 This device</span>
+            <span class="v-title with-icon"><svelte:component this={localIcon} size={16} /> This device</span>
             {#if newerSide === 'local'}<span class="v-badge">played more recently</span>{/if}
           </div>
           <div class="v-diff">
@@ -162,7 +200,7 @@
         </div>
         <div class="version" class:newer={newerSide === 'remote'}>
           <div class="v-head">
-            <span class="v-title">🖥️ {peerName}</span>
+            <span class="v-title with-icon"><svelte:component this={peerIcon} size={16} /> {peerName}</span>
             {#if newerSide === 'remote'}<span class="v-badge">played more recently</span>{/if}
           </div>
           <div class="v-diff">
@@ -187,7 +225,7 @@
 
       {#if conflict.diffTotal > 0}
         <button class="diff-toggle" on:click={() => (showDiff = !showDiff)}>
-          {showDiff ? '▾' : '▸'} What's different ({conflict.diffTotal} file{conflict.diffTotal === 1 ? '' : 's'})
+          <Chevron open={showDiff} /> What's different ({conflict.diffTotal} file{conflict.diffTotal === 1 ? '' : 's'})
         </button>
         {#if showDiff}
           <div class="diff-list">
@@ -210,6 +248,7 @@
       {/if}
 
       <div class="actions">
+        <button class="btn ghost later" disabled={busy} on:click={putOff} title="Nothing of this game syncs until you decide. Open the game to decide.">Decide later</button>
         <button class="btn" disabled={busy} on:click={() => resolve('keep-local')}>Keep mine</button>
         <button class="btn" disabled={busy} on:click={() => resolve('keep-remote')}>Keep theirs</button>
         <button class="btn primary" disabled={busy} on:click={() => resolve('merge-branch')}>
@@ -217,8 +256,9 @@
         </button>
       </div>
       <p class="hint-line">
-        🛡️ Nothing is lost whichever you pick. <strong>“Keep both”</strong> (recommended) parks
-        {peerName}'s version on a branch and keeps playing yours. <strong>“Keep mine”</strong> makes your
+        <History size={15} class="inline-icon" /> Nothing is lost whichever you pick. <strong>“Keep both”</strong> (recommended) keeps
+        playing yours — {peerName} receives it too — and keeps {peerName}'s version here on a branch you can switch
+        to. <strong>“Keep mine”</strong> makes your
         version the shared one — {peerName} receives it (their old save is snapshotted first).
         <strong>“Keep theirs”</strong> adopts {peerName}'s version here, snapshotting yours first.
         Restore anything from the game's Snapshots / Branches tabs.
@@ -231,7 +271,7 @@
   .overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--overlay);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -264,7 +304,7 @@
     padding: 12px;
   }
   .version.newer {
-    border-color: rgba(74, 222, 128, 0.45);
+    border-color: rgba(var(--success-rgb), 0.45);
   }
   .v-head {
     display: flex;
@@ -281,7 +321,7 @@
     font-size: 0.66rem;
     font-weight: 700;
     color: var(--success);
-    background: rgba(74, 222, 128, 0.12);
+    background: rgba(var(--success-rgb), 0.12);
     padding: 2px 7px;
     border-radius: 999px;
     white-space: nowrap;
@@ -298,7 +338,7 @@
      amber — a count of what differs is information, not a hazard. */
   .v-diff strong {
     font-weight: 700;
-    color: var(--accent);
+    color: var(--accent-text);
   }
   .v-diff-bytes {
     color: var(--text-dim);
@@ -400,6 +440,10 @@
     gap: 8px;
     justify-content: flex-end;
     flex-wrap: wrap;
+  }
+  /* Apart from the three answers: it is not one of them. */
+  .actions .later {
+    margin-right: auto;
   }
   .hint-line {
     margin-top: 12px;

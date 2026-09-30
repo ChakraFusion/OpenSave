@@ -1,7 +1,14 @@
 <script>
+  import { slidingIndicator } from '../lib/motion.js';
   import { peers, discoveredPeers, wanRoom, appUpdate, toast, askConfirm } from '../lib/stores.js';
   import { api, native } from '../lib/api.js';
   import InternetSync from './InternetSync.svelte';
+  import ProtectionBadge from '../components/ProtectionBadge.svelte';
+  import { protectionState } from '../lib/protection.js';
+  import DeviceIcon from '../components/DeviceIcon.svelte';
+  import Globe from 'lucide-svelte/icons/globe';
+  import Network from 'lucide-svelte/icons/network';
+  import Download from 'lucide-svelte/icons/download';
 
   export let params = {};
 
@@ -38,6 +45,24 @@
     run(() => api.del(`/api/peers/${peer.id}`), `Unpaired ${peer.name}`);
   };
 
+  // The only repair for a pairing with no encryption key is to make it again,
+  // and this button can only do the first half of that. Saying "Pair again to
+  // encrypt" on a control that just unpairs would leave someone believing they
+  // had fixed it, with two devices that no longer sync at all.
+  const repairPairing = async (peer) => {
+    const ok = await askConfirm(
+      `Unpair "${peer.name}", then pair the two devices again so they exchange an encryption key. ` +
+        `Their games and saves stay where they are. Nothing syncs between these two devices until ` +
+        `you pair them again.`,
+      { title: 'Unpair, so you can pair again?', confirmText: 'Unpair now' }
+    );
+    if (!ok) return;
+    run(
+      () => api.del(`/api/peers/${peer.id}`),
+      `Unpaired ${peer.name} — pair the two devices again to encrypt what you sync`
+    );
+  };
+
   // Peer-to-peer app update: pull the newer build the peer is running and
   // install it here — no manually copying the exe between machines.
   const updateFromPeer = async (peer) => {
@@ -67,7 +92,7 @@
   <div class="list">
     {#each pairedList as peer (peer.id)}
       <div class="card peer">
-        <div class="peer-icon">{peer.deviceType === 'deck' ? '🎮' : '🖥️'}</div>
+        <DeviceIcon type={peer.deviceType} />
         <div class="peer-info">
           <div class="peer-name">
             {peer.name}
@@ -76,14 +101,24 @@
             </span>
           </div>
           <div class="peer-meta">
-            {peer.address === 'relay' ? '🌐 internet relay' : `🖧 ${peer.address}:${peer.port}`}
+            {peer.address === 'relay' ? 'internet relay' : `${peer.address}:${peer.port}`}
             · last synced {fmtTime(peer.lastSynced)}
             {#if peer.appVersion}· OpenSave {peer.appVersion}{/if}
+          </div>
+          <!-- Per device, next to how it is reached, because that is the
+               context the answer depends on. -->
+          <div class="peer-protection">
+            <ProtectionBadge {peer} compact />
+            {#if protectionState(peer) === 'open'}
+              <button class="linkish" disabled={busy} on:click={() => repairPairing(peer)}>
+                Fix this
+              </button>
+            {/if}
           </div>
         </div>
         {#if peer.hasNewerBuild && peer.status === 'online'}
           <button class="btn small primary" disabled={busy || !!$appUpdate} on:click={() => updateFromPeer(peer)}>
-            ⬆ Update from this device
+            <Download size={14} />Update from this device
           </button>
         {/if}
         <button class="btn small danger" disabled={busy} on:click={() => unpair(peer)}>Unpair</button>
@@ -93,10 +128,10 @@
 {/if}
 
 <h3 class="section">Add a device</h3>
-<div class="pill-tabs connect-tabs">
-  <button class:active={connectTab === 'lan'} on:click={() => (connectTab = 'lan')}>🖧 On this network</button>
+<div class="pill-tabs connect-tabs" use:slidingIndicator={{ inset: 10 }}>
+  <button class:active={connectTab === 'lan'} on:click={() => (connectTab = 'lan')}><Network size={15} />On this network</button>
   <button class:active={connectTab === 'wan'} on:click={() => (connectTab = 'wan')}>
-    🌐 Over the internet
+    <Globe size={15} />Over the internet
     {#if $wanRoom?.connected}<span class="tab-dot"></span>{/if}
   </button>
 </div>
@@ -112,7 +147,7 @@
     <div class="list">
       {#each lanDiscovered as d (d.id)}
         <div class="card peer">
-          <div class="peer-icon">{d.deviceType === 'deck' ? '🎮' : '🖥️'}</div>
+          <DeviceIcon type={d.deviceType} />
           <div class="peer-info">
             <div class="peer-name">{d.deviceName}</div>
             <div class="peer-meta">{d.address}:{d.port}</div>
@@ -159,7 +194,6 @@
     height: 7px;
     border-radius: 50%;
     background: var(--success);
-    box-shadow: 0 0 6px rgba(74, 222, 128, 0.7);
   }
   .lan-intro {
     margin-bottom: 4px;
@@ -175,9 +209,6 @@
     gap: 14px;
     padding: 14px 16px;
   }
-  .peer-icon {
-    font-size: 1.3rem;
-  }
   .peer-info {
     flex: 1;
     min-width: 0;
@@ -187,6 +218,27 @@
     display: flex;
     align-items: center;
     gap: 8px;
+  }
+  .peer-protection {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.35rem;
+    flex-wrap: wrap;
+  }
+  .linkish {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 0.78rem;
+    color: var(--accent-text);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .linkish:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
   .peer-meta {
     font-size: 0.78rem;

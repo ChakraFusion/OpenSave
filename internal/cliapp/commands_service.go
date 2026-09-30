@@ -15,6 +15,7 @@ import (
 
 	"github.com/opensave/opensave/internal/config"
 	"github.com/opensave/opensave/internal/daemon"
+	"github.com/opensave/opensave/internal/logging"
 	"github.com/opensave/opensave/internal/store"
 	"github.com/opensave/opensave/internal/version"
 )
@@ -323,13 +324,20 @@ func cmdSnapshots(d *daemon.Daemon, args []string) int {
 		fmt.Printf("No snapshots for %q on branch %q.\n", game.Name, branch)
 		return 0
 	}
-	fmt.Printf("%s — branch %s, %d snapshot(s), newest first:\n\n", game.Name, branch, len(snaps))
+	fmt.Printf("%s — branch %s, %s, newest first:\n\n", game.Name, branch, plural(len(snaps), "snapshot", "snapshots"))
 	for _, s := range snaps {
 		comment := s.Comment
 		if comment == "" {
 			comment = "(no comment)"
 		}
-		fmt.Printf("  %-22s %s  %s\n", s.ID, s.Timestamp, comment)
+		pin := ""
+		if s.Pinned {
+			pin = "  " + accent("pinned")
+		}
+		fmt.Printf("  %-22s %s  %s%s\n", s.ID, s.Timestamp, comment, pin)
+		if s.Note != "" {
+			fmt.Printf("  %-22s %s\n", "", faint("note: "+s.Note))
+		}
 	}
 	return 0
 }
@@ -392,9 +400,9 @@ func cmdExport(d *daemon.Daemon, args []string) int {
 			"locations": locations, "unmappedLocations": unmapped,
 		})
 	}
-	fmt.Printf("Exported %d file(s), %s, to %s\n", copied, humanBytes(bytes), dest)
+	fmt.Printf("Exported %s, %s, to %s\n", plural(copied, "file", "files"), humanBytes(bytes), dest)
 	for _, loc := range locations {
-		fmt.Printf("  %s: %d file(s) to %s\n", loc.Name, loc.Files, loc.Path)
+		fmt.Printf("  %s: %s to %s\n", loc.Name, plural(loc.Files, "file", "files"), loc.Path)
 	}
 	for _, name := range unmapped {
 		warning("The %q save location has no folder on this device, so it could not be exported.", name)
@@ -407,7 +415,7 @@ func cmdExport(d *daemon.Daemon, args []string) int {
 func copyTree(src, dest string) (files int, total int64, err error) {
 	info, err := os.Stat(src)
 	if err != nil {
-		return 0, 0, fmt.Errorf("save path %q: %w", src, err)
+		return 0, 0, fmt.Errorf("save path %s: %w", logging.Quote(src), err)
 	}
 	if !info.IsDir() {
 		if err := os.MkdirAll(filepath.Dir(dest), 0o777); err != nil {
@@ -474,4 +482,3 @@ func humanBytes(n int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
-

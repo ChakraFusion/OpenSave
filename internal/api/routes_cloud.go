@@ -1,7 +1,9 @@
 package api
 
 import (
+	"errors"
 	"fmt"
+	"github.com/opensave/opensave/internal/ignore"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/opensave/opensave/internal/cloud"
+	"github.com/opensave/opensave/internal/daemon"
 	"github.com/opensave/opensave/internal/snapshot"
 )
 
@@ -32,6 +35,57 @@ func (s *Server) cloudRoutes(r chi.Router) {
 	r.Post("/api/cloud/delete/{gameId}", s.handleCloudDelete)
 	r.Post("/api/cloud/delete-game/{gameId}", s.handleCloudDeleteGame)
 	r.Post("/api/cloud/sync-local/{gameId}", s.handleCloudSyncLocal)
+
+	r.Get("/api/cloud/offers", s.handleCloudOffers)
+	r.Post("/api/cloud/offers/accept", s.handleCloudOfferAnswer(true))
+	r.Post("/api/cloud/offers/dismiss", s.handleCloudOfferAnswer(false))
+	r.Post("/api/cloud/check", s.handleCloudCheck)
+}
+
+// handleCloudOffers lists the saves from other devices waiting for an answer.
+func (s *Server) handleCloudOffers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.Daemon.CloudOffers())
+}
+
+// handleCloudOfferAnswer takes or declines one offered save.
+func (s *Server) handleCloudOfferAnswer(accept bool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			GameID     string `json:"gameId"`
+			SnapshotID string `json:"snapshotId"`
+		}
+		if err := readJSON(r, &body); err != nil || body.GameID == "" || body.SnapshotID == "" {
+			writeError(w, http.StatusBadRequest, "gameId and snapshotId are required")
+			return
+		}
+		var err error
+		if accept {
+			err = s.Daemon.AcceptCloudOffer(body.GameID, body.SnapshotID)
+		} else {
+			err = s.Daemon.DismissCloudOffer(body.GameID, body.SnapshotID)
+		}
+		if errors.Is(err, daemon.ErrCloudOfferGone) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if accept {
+			s.BroadcastGamesUpdate()
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+	}
+}
+
+// handleCloudCheck reads the cloud for newer saves now rather than at the
+// next scheduled check, and answers with what is left waiting once anything
+// that could be taken without asking has been. It waits for the check: the
+// terminal asks this and has nowhere else to hear the answer.
+func (s *Server) handleCloudCheck(w http.ResponseWriter, r *http.Request) {
+	s.Daemon.CheckCloud()
+	writeJSON(w, http.StatusOK, s.Daemon.CloudOffers())
 }
 
 // handleCloudBrowse lists every cloud snapshot the provider holds, grouped
@@ -59,11 +113,32 @@ func (s *Server) handleCloudBrowse(w http.ResponseWriter, r *http.Request) {
 
 	groups := map[string]*gameGroup{}
 	order := []string{}
+	// One entry per game, not per id. Two devices that tracked the same title
+	// under different names upload under different ids, and listing them
+	// separately is what made the provider look like it held two unrelated
+	// games — one of them labelled with a bare slug, because GetGame could not
+	// find it here. Linked ids now fold into the game they were linked to.
+	//
+	// Memoised: a listing has many files and few distinct ids, and resolving
+	// per file would be a query per entry.
+	canonical := map[string]string{}
+	resolve := func(id string) string {
+		if c, done := canonical[id]; done {
+			return c
+		}
+		c := id
+		if ids, err := s.Daemon.Store.LinkedGameIDs(id); err == nil && len(ids) > 0 {
+			c = ids[0] // LinkedGameIDs puts the canonical id first
+		}
+		canonical[id] = c
+		return c
+	}
 	for _, f := range files {
-		gameID, branch, snapID, ok := snapshot.ParseExportEntryName(f.Name)
+		rawID, branch, snapID, ok := snapshot.ParseExportEntryName(f.Name)
 		if !ok {
 			continue
 		}
+		gameID := resolve(rawID)
 		g, exists := groups[gameID]
 		if !exists {
 			name := gameID
@@ -169,15 +244,43 @@ func (s *Server) handleCloudSnapshots(w http.ResponseWriter, r *http.Request) {
 		Branch     string `json:"branch"`
 		SnapshotID string `json:"snapshotId"`
 	}
+	accepted, err := s.linkedIDs(gameID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	matches := []remoteSnap{}
 	for _, f := range files {
 		g, branch, snapID, ok := snapshot.ParseExportEntryName(f.Name)
-		if !ok || g != gameID {
+		if !ok || !accepted[g] {
 			continue
 		}
 		matches = append(matches, remoteSnap{CloudFile: f, Branch: branch, SnapshotID: snapID})
 	}
 	writeJSON(w, http.StatusOK, matches)
+}
+
+// linkedIDs is the set of game ids whose cloud files belong to this game.
+//
+// A backup's name carries the id of the game that uploaded it, and that id is
+// the slug of the display name — so the same title tracked as "Elden Ring" on
+// one device and "ELDEN RING" on another produces two differently named sets
+// in the provider, and neither device recognised the other's. Linking the two
+// in Manage already taught peer-to-peer sync they are the same game; the cloud
+// screens never asked, so half the feature silently did nothing.
+//
+// Computed once per request rather than per file: the listing can hold
+// hundreds of entries and this would otherwise be a query for each one.
+func (s *Server) linkedIDs(gameID string) (map[string]bool, error) {
+	ids, err := s.Daemon.Store.LinkedGameIDs(gameID)
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set, nil
 }
 
 // handleCloudRestore downloads a remote snapshot zip, registers it, and
@@ -193,11 +296,24 @@ func (s *Server) handleCloudRestore(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g, branch, snapID, ok := snapshot.ParseExportEntryName(body.FileName)
-	if !ok || g != gameID {
+	if !ok {
 		writeError(w, http.StatusBadRequest, "fileName does not belong to this game")
 		return
 	}
-	if _, err := s.Daemon.Store.GetGame(gameID); err != nil {
+	accepted, err := s.linkedIDs(gameID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !accepted[g] {
+		// Only ids the user has linked to this game are admitted. An
+		// unlinked id is still refused, so this widens what a game accepts
+		// exactly as far as the links recorded and no further.
+		writeError(w, http.StatusBadRequest, "fileName does not belong to this game")
+		return
+	}
+	game, err := s.Daemon.Store.GetGame(gameID)
+	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -228,10 +344,13 @@ func (s *Server) handleCloudRestore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := s.Daemon.Snapshots.Restore(gameID, snapID); err != nil {
+	// A cloud copy may be another device's: this device's excluded files
+	// stay its own (Manager.RestoreKeeping).
+	if _, err := s.Daemon.Snapshots.RestoreKeeping(gameID, snapID, ignore.Parse(game.SyncIgnore)); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("downloaded but restore failed: %v", err))
 		return
 	}
+	s.Daemon.ForgetCloudOffers(gameID)
 	s.BroadcastGamesUpdate()
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "snapshotId": snapID})
 }
@@ -250,7 +369,16 @@ func (s *Server) handleCloudDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	g, _, snapID, ok := snapshot.ParseExportEntryName(body.FileName)
-	if !ok || g != gameID {
+	if !ok {
+		writeError(w, http.StatusBadRequest, "fileName does not belong to this game")
+		return
+	}
+	accepted, err := s.linkedIDs(gameID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !accepted[g] {
 		writeError(w, http.StatusBadRequest, "fileName does not belong to this game")
 		return
 	}
@@ -273,8 +401,29 @@ func (s *Server) handleCloudDeleteGame(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
+	// Deliberately NOT widened to linked ids, unlike the read paths above.
+	//
+	// This runs when a game is untracked, and a linked id is another device's
+	// name for the same title — one that is very likely still tracked there.
+	// Removing its backups because this device stopped following the game
+	// would be silent data loss on a machine the user was not even looking at.
+	// Leaving them costs some orphaned files, which is recoverable; the other
+	// way round is not.
+	// This device's announcements of which snapshot is its save go too: they
+	// would otherwise sit in the provider for good, describing a game this
+	// device no longer follows. Other devices' are theirs, and stay.
+	ownKey := ""
+	if settings, err := s.Daemon.Store.GetSettings(); err == nil {
+		ownKey = cloud.DeviceKey(settings.NodeID)
+	}
 	deleted, failed := 0, 0
 	for _, f := range files {
+		if g, dev, _, ok := cloud.ParseHeadFileName(f.Name); ok {
+			if g == gameID && ownKey != "" && dev == ownKey {
+				_ = s.Daemon.Cloud.Delete(f)
+			}
+			continue
+		}
 		g, _, _, ok := snapshot.ParseExportEntryName(f.Name)
 		if !ok || g != gameID {
 			continue
@@ -362,7 +511,12 @@ func (s *Server) handleCloudSyncLocal(w http.ResponseWriter, r *http.Request) {
 	uploaded := 0
 	for _, p := range pending {
 		progress(uploaded, p.snapID, false)
-		if err := s.Daemon.Cloud.Upload(p.zipPath, p.remoteName); err != nil {
+		archive, done, err := snapshot.OpenArchive(p.zipPath)
+		if err == nil {
+			err = s.Daemon.Cloud.Upload(archive, p.remoteName)
+			done()
+		}
+		if err != nil {
 			if strings.Contains(err.Error(), "not enabled") {
 				progress(uploaded, "", true)
 				writeError(w, http.StatusBadRequest, err.Error())

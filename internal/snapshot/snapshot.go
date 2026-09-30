@@ -19,8 +19,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
+	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/drain"
 	"github.com/opensave/opensave/internal/store"
+	"github.com/opensave/opensave/internal/winreg"
 )
 
 // UploadHook is called after each snapshot is created, with the local zip
@@ -42,9 +46,25 @@ type UploadHook func(zipPath, remoteFileName string)
 type Manager struct {
 	Store    *store.Store
 	OnUpload UploadHook
+	// OnCreated fires for every snapshot written, before its upload starts.
+	// current is false for a copy kept of a save about to be replaced (see
+	// CreateBeforeReplacing). Optional; runs on the snapshotting goroutine
+	// and must return promptly.
+	OnCreated func(snap store.Snapshot, current bool)
+	// OnRestored fires after a snapshot has been put back in place as the
+	// game's save. Optional; same rules as OnCreated.
+	OnRestored func(snap store.Snapshot)
 	// Log receives operational warnings (skipped unreadable files, …).
 	// Optional; nil disables.
 	Log func(level, msg string)
+	// WriteGate is held around every restore and branch switch this manager
+	// makes. Each rewrites a game's save folder — clears it, then fills it —
+	// and a sync must never read the folder half-way (syncengine/settle.go),
+	// or it takes the half-filled folder for the save and passes that on. The
+	// daemon sets it to the sync engine's Writing. Held here rather than by
+	// each caller, so a restore added later cannot forget it. Optional; nil
+	// holds nothing.
+	WriteGate func(gameID string) (done func())
 	// now is swappable for tests; defaults to time.Now.
 	now func() time.Time
 	// idMu serialises snapshot id selection against insertion; see
@@ -59,21 +79,21 @@ type Manager struct {
 	// each writes an archive into the backups directory and then a row. Left
 	// running past shutdown it wrote into a directory that was being deleted
 	// and recorded against a database that was already closed.
-	inFlight sync.WaitGroup
+	inFlight drain.Group
+	// sharedMu is held by a compaction and by the clean-up of shared files
+	// (shared.go): a compaction names shared files before any list does, and
+	// a clean-up running then would take them for unused. pendingRoots are
+	// clean-ups put off because a compaction was running.
+	sharedMu     sync.Mutex
+	pendingMu    sync.Mutex
+	pendingRoots map[string]bool
 }
 
 // WaitForInFlight blocks until every snapshot being written has finished, or
 // until the timeout. Callers should stop whatever starts snapshots first —
 // otherwise a new one can begin after the wait and before the store closes.
 func (m *Manager) WaitForInFlight(timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() { m.inFlight.Wait(); close(done) }()
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
+	return m.inFlight.Wait(timeout)
 }
 
 // New creates a snapshot Manager.
@@ -118,15 +138,56 @@ func (m *Manager) Create(gameID, comment string, isSystemAuto bool) (store.Snaps
 	if err != nil {
 		return store.Snapshot{}, err
 	}
-	return m.createOnBranch(gameID, game.ActiveBranch, comment, isSystemAuto)
+	return m.createOnBranch(gameID, game.ActiveBranch, comment, isSystemAuto, true)
+}
+
+// CreateBeforeReplacing keeps a copy of a save that is about to be replaced —
+// by a restore, a sync, the other side of a conflict, a branch switch.
+//
+// The archive is the same as Create's. What differs is what it means: the
+// save it holds is on its way out, so it is not "the save this device has",
+// which is what OnCreated's current flag tells the cloud mirror. Taken with
+// Create, the copy was the newest snapshot a device had, and another device
+// reading the mirror would have been offered the old save under a new date.
+func (m *Manager) CreateBeforeReplacing(gameID, comment string) (store.Snapshot, error) {
+	game, err := m.Store.GetGame(gameID)
+	if err != nil {
+		return store.Snapshot{}, err
+	}
+	return m.createOnBranch(gameID, game.ActiveBranch, comment, true, false)
 }
 
 // createOnBranch snapshots the current save state onto a named branch, which
 // is usually the active one. Seeding a freshly created branch is the
 // exception: the state being captured is the one being branched FROM, and it
 // has to land on the new branch for switching to it to restore anything.
-func (m *Manager) createOnBranch(gameID, branch, comment string, isSystemAuto bool) (store.Snapshot, error) {
-	m.inFlight.Add(1)
+//
+// current reports whether the snapshot is of the save as it now stands and
+// will go on standing, as opposed to a copy kept before replacing it.
+func (m *Manager) createOnBranch(gameID, branch, comment string, isSystemAuto, current bool) (store.Snapshot, error) {
+	return m.createOnBranchFrom(gameID, branch, "", comment, isSystemAuto, current)
+}
+
+// CreateOnBranchFrom snapshots a folder that is not the game's save onto one
+// of its branches, as that branch's save: the game's main save location only,
+// with none of its others.
+//
+// It is how the other device's version of a save is kept beside this one's
+// without ever being put in the save folder — answering a conflict with
+// "keep both". Putting it there and snapshotting it meant switching the game
+// to another branch and back, emptying the folder on the way, and a folder
+// emptied by a sync reads to everything else as a save deleted.
+func (m *Manager) CreateOnBranchFrom(gameID, branch, dir, comment string) (store.Snapshot, error) {
+	if dir == "" {
+		return store.Snapshot{}, errors.New("no folder to snapshot")
+	}
+	return m.createOnBranchFrom(gameID, branch, dir, comment, true, false)
+}
+
+// createOnBranchFrom is createOnBranch with the folder to archive given: ""
+// for the game's own save locations, as always.
+func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSystemAuto, current bool) (store.Snapshot, error) {
+	m.inFlight.Add()
 	defer m.inFlight.Done()
 
 	game, err := m.Store.GetGame(gameID)
@@ -160,11 +221,22 @@ func (m *Manager) createOnBranch(gameID, branch, comment string, isSystemAuto bo
 		fmt.Sprintf(".staging-%d-%d.zip", os.Getpid(), m.stagingSeq.Add(1)))
 	// Every save location the game has, not just the main one. A game with
 	// none produces exactly the archive it always did.
-	extraRoots, rootsErr := m.Store.GameRootPaths(gameID)
-	if rootsErr != nil {
-		extraRoots = nil
+	src := game.SavePath
+	var extraRoots map[string]string
+	if from == "" {
+		roots, rootsErr := m.Store.GameRootPaths(gameID)
+		if rootsErr == nil {
+			extraRoots = roots
+		}
+		// Refresh the registry capture before archiving it. The capture is a
+		// file in one of the game's locations, so the zip picks it up with
+		// everything else — but the file is only as current as the last time it
+		// was written, and the registry has changed since the game was played.
+		m.refreshRegistryCapture(game, settings, extraRoots)
+	} else {
+		src = from
 	}
-	skipped, captured, err := ZipRootsCapturing(game.SavePath, extraRoots, stagingPath)
+	skipped, captured, err := ZipRootsCapturing(src, extraRoots, stagingPath)
 	if err != nil {
 		os.Remove(stagingPath)
 		return store.Snapshot{}, fmt.Errorf("zip save data: %w", err)
@@ -203,6 +275,27 @@ func (m *Manager) createOnBranch(gameID, branch, comment string, isSystemAuto bo
 		m.Log("warn", fmt.Sprintf(
 			"snapshot %s of %q was written but its file list was not recorded, so it cannot show what it captured: %v",
 			snapshotID, game.Name, err))
+	}
+
+	// Write down what disappeared since the previous snapshot.
+	//
+	// A deletion has to be recorded when it happens, because it cannot be
+	// recovered afterwards: the shared lineage is rebuilt from the intersection
+	// of two devices' current manifests, so once the file is gone locally the
+	// lineage stops proving it was ever shared. Working it out here costs one
+	// comparison against a list already stored, and it is the only moment when
+	// both the before and after states are in hand.
+	//
+	// Not for a folder that is not the save (CreateOnBranchFrom): what it lacks
+	// was never deleted from this device's save.
+	if from == "" {
+		m.recordDeletionsSince(gameID, branch, snapshotID, captured)
+	}
+
+	// Before the upload hook, so anything the upload does afterwards sees a
+	// record that already names this snapshot.
+	if m.OnCreated != nil {
+		m.OnCreated(snap, current)
 	}
 
 	m.pruneRetention(game)
@@ -366,16 +459,15 @@ func (m *Manager) pruneGameAllBranches(game store.Game) (removed int, freed int6
 		if err != nil {
 			continue
 		}
+		var gone []store.Snapshot
 		for _, snap := range beyond {
 			if err := m.Store.DeleteSnapshot(snap.ID); err != nil {
 				continue
 			}
-			if info, statErr := os.Stat(snap.ZipPath); statErr == nil {
-				freed += info.Size()
-			}
-			os.Remove(snap.ZipPath) // best-effort, same as the JS app
+			gone = append(gone, snap)
 			removed++
 		}
+		freed += m.dropArchives(gone) // best-effort, same as the JS app
 	}
 	return removed, freed
 }
@@ -384,8 +476,9 @@ func (m *Manager) pruneGameAllBranches(game store.Game) (removed int, freed int6
 // branches immediately — the "clean up old snapshots now" action. It also
 // sweeps abandoned conflict-* branches (non-active leftovers, chiefly from
 // resolved "keep both" conflicts), whose snapshots the per-branch limit
-// never touches because each branch stays under it. Returns the total
-// snapshots removed and bytes freed.
+// never touches because each branch stays under it, and, when the setting
+// is on, the age rule (see PruneOlderThan). Returns the total snapshots
+// removed and bytes freed.
 func (m *Manager) PruneAllGames() (removed int, freed int64, err error) {
 	games, err := m.Store.ListGames()
 	if err != nil {
@@ -396,21 +489,193 @@ func (m *Manager) PruneAllGames() (removed int, freed int64, err error) {
 		removed += r
 		freed += f
 
-		branches, bErr := m.Store.ListBranches(game.ID)
-		if bErr != nil {
-			continue
-		}
-		for _, branch := range branches {
-			if branch == game.ActiveBranch || !strings.HasPrefix(branch, "conflict-") {
-				continue
-			}
+		for _, branch := range m.abandonedConflictBranches(game) {
 			r, f := m.DeleteBranch(game.ID, branch)
 			removed += r
 			freed += f
 		}
 	}
+	if settings, sErr := m.Store.GetSettings(); sErr == nil && settings.AutoDeleteBackups && settings.AutoDeleteDays > 0 {
+		r, f, _ := m.PruneOlderThan(settings.AutoDeleteDays)
+		removed += r
+		freed += f
+	}
 	return removed, freed, nil
 }
+
+// PruneOlderThan deletes the automatic snapshots older than the given number
+// of days — the ones OpenSave took on its own: before a sync replaced files,
+// on a save, at a conflict, mirrored from a peer. It is the "auto-delete old
+// backups" setting, which was stored and shown for a long time and enforced
+// by nothing.
+//
+// Three things are never deleted by age. Pinned snapshots, which is what
+// pinning is for. Snapshots a person took themselves:
+// those are budgeted separately everywhere else and a date is no reason to
+// discard a deliberate save point. And the newest snapshot on every branch,
+// whatever its kind and age: a branch with no snapshot at all has nothing to
+// roll back to, and a game that has not been played in months is exactly the
+// one whose only copy must not disappear on a timer.
+//
+// Returns the game ids that lost at least one snapshot, so a caller can tell
+// the dashboard which histories changed.
+func (m *Manager) PruneOlderThan(days int) (removed int, freed int64, touched []string) {
+	gameTouched := map[string]bool{}
+	var gone []store.Snapshot
+	defer func() { freed += m.dropArchives(gone) }()
+	for _, snap := range m.olderThan(days) {
+		if err := m.Store.DeleteSnapshot(snap.ID); err != nil {
+			continue
+		}
+		gone = append(gone, snap)
+		removed++
+		if !gameTouched[snap.GameID] {
+			gameTouched[snap.GameID] = true
+			touched = append(touched, snap.GameID)
+		}
+	}
+	return removed, freed, touched
+}
+
+// olderThan is the age rule's choice, deleting nothing: every automatic,
+// unpinned snapshot past the age that is not the newest on its branch.
+func (m *Manager) olderThan(days int) []store.Snapshot {
+	if days <= 0 {
+		return nil
+	}
+	cutoff := m.now().Add(-time.Duration(days) * 24 * time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
+	games, err := m.Store.ListGames()
+	if err != nil {
+		return nil
+	}
+	var out []store.Snapshot
+	for _, game := range games {
+		branches, err := m.Store.ListBranches(game.ID)
+		if err != nil {
+			continue
+		}
+		for _, branch := range branches {
+			snaps, err := m.Store.ListSnapshots(game.ID, branch) // newest first
+			if err != nil || len(snaps) < 2 {
+				continue
+			}
+			for _, snap := range snaps[1:] { // [0] is the newest: always kept
+				if snap.IsSystemAuto && !snap.Pinned && snap.Timestamp < cutoff {
+					out = append(out, snap)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// abandonedConflictBranches are the branches clean-up deletes whole: left
+// over from a conflict, not the one in play, and holding nothing pinned — a
+// pinned snapshot keeps its whole branch, since deleting the branch would
+// take the pinned one with it.
+func (m *Manager) abandonedConflictBranches(game store.Game) []string {
+	branches, err := m.Store.ListBranches(game.ID)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, branch := range branches {
+		if branch == game.ActiveBranch || !strings.HasPrefix(branch, "conflict-") {
+			continue
+		}
+		if pinned, pErr := m.Store.BranchHasPinned(game.ID, branch); pErr != nil || pinned {
+			continue
+		}
+		out = append(out, branch)
+	}
+	return out
+}
+
+// PrunePlan lists, deleting nothing, every snapshot PruneAllGames would
+// delete now: past a game's limits, on an abandoned conflict branch, or past
+// the age rule when it is on. It is what "Clean up now" would free, shown
+// before anyone presses it — and it is chosen by the same functions the
+// clean-up uses, so the two cannot disagree.
+func (m *Manager) PrunePlan() ([]store.Snapshot, error) {
+	games, err := m.Store.ListGames()
+	if err != nil {
+		return nil, err
+	}
+	var out []store.Snapshot
+	seen := map[string]bool{}
+	add := func(s store.Snapshot) {
+		if !seen[s.ID] {
+			seen[s.ID] = true
+			out = append(out, s)
+		}
+	}
+	for _, game := range games {
+		if game.MaxSnapshots > 0 || game.MaxManualSnapshots > 0 {
+			branches, _ := m.Store.ListBranches(game.ID)
+			for _, branch := range branches {
+				beyond, err := m.Store.SnapshotsBeyondRetentionByKind(game.ID, branch, game.MaxSnapshots, game.MaxManualSnapshots)
+				if err != nil {
+					continue
+				}
+				for _, s := range beyond {
+					add(s)
+				}
+			}
+		}
+		for _, branch := range m.abandonedConflictBranches(game) {
+			snaps, _ := m.Store.ListSnapshots(game.ID, branch)
+			for _, s := range snaps {
+				add(s)
+			}
+		}
+	}
+	if settings, err := m.Store.GetSettings(); err == nil && settings.AutoDeleteBackups && settings.AutoDeleteDays > 0 {
+		for _, s := range m.olderThan(settings.AutoDeleteDays) {
+			add(s)
+		}
+	}
+	return out, nil
+}
+
+// SnapshotEdit is a change to a snapshot's pin or note; nil leaves it as it is.
+type SnapshotEdit struct {
+	Pinned *bool
+	Note   *string
+}
+
+// MaxNoteLength bounds a note, in characters.
+const MaxNoteLength = 500
+
+// EditSnapshot pins, unpins or re-notes one of a game's snapshots and returns
+// it as it now is. The note is trimmed; an empty one removes it.
+func (m *Manager) EditSnapshot(gameID, snapshotID string, edit SnapshotEdit) (store.Snapshot, error) {
+	snap, err := m.Store.GetSnapshot(snapshotID)
+	if err != nil {
+		return store.Snapshot{}, err
+	}
+	if snap.GameID != gameID {
+		return store.Snapshot{}, fmt.Errorf("snapshot %q does not belong to game %q: %w", snapshotID, gameID, store.ErrNotFound)
+	}
+	if edit.Note != nil {
+		note := strings.TrimSpace(*edit.Note)
+		if n := utf8.RuneCountInString(note); n > MaxNoteLength {
+			return store.Snapshot{}, fmt.Errorf("%w: a note can be at most %d characters (this one is %d)", ErrInvalidEdit, MaxNoteLength, n)
+		}
+		if err := m.Store.SetSnapshotNote(snapshotID, note); err != nil {
+			return store.Snapshot{}, err
+		}
+	}
+	if edit.Pinned != nil {
+		if err := m.Store.SetSnapshotPinned(snapshotID, *edit.Pinned); err != nil {
+			return store.Snapshot{}, err
+		}
+	}
+	return m.Store.GetSnapshot(snapshotID)
+}
+
+// ErrInvalidEdit is a snapshot edit refused for what it asked for, not for
+// anything wrong on this side.
+var ErrInvalidEdit = errors.New("invalid snapshot edit")
 
 // DeleteSnapshot removes one snapshot (metadata row + its zip file) for a
 // game. Returns the bytes freed.
@@ -422,14 +687,10 @@ func (m *Manager) DeleteSnapshot(gameID, snapshotID string) (freed int64, err er
 	if snap.GameID != gameID {
 		return 0, fmt.Errorf("snapshot %q does not belong to game %q", snapshotID, gameID)
 	}
-	if info, statErr := os.Stat(snap.ZipPath); statErr == nil {
-		freed = info.Size()
-	}
 	if err := m.Store.DeleteSnapshot(snapshotID); err != nil {
 		return 0, err
 	}
-	os.Remove(snap.ZipPath) // best-effort
-	return freed, nil
+	return m.dropArchives([]store.Snapshot{snap}), nil // best-effort
 }
 
 // DeleteBranch removes a branch entirely — every snapshot (metadata + zip)
@@ -447,18 +708,16 @@ func (m *Manager) DeleteBranch(gameID, branch string) (removed int, freed int64)
 	if err != nil {
 		return 0, 0
 	}
+	var gone []store.Snapshot
 	for _, snap := range snaps {
 		if err := m.Store.DeleteSnapshot(snap.ID); err != nil {
 			continue
 		}
-		if info, statErr := os.Stat(snap.ZipPath); statErr == nil {
-			freed += info.Size()
-		}
-		os.Remove(snap.ZipPath)
+		gone = append(gone, snap)
 		removed++
 	}
 	_ = m.Store.DeleteBranchRow(gameID, branch)
-	return removed, freed
+	return removed, m.dropArchives(gone)
 }
 
 // Restore extracts the given snapshot over the game's save path, taking a
@@ -466,6 +725,7 @@ func (m *Manager) DeleteBranch(gameID, branch string) (removed int, freed int64)
 // save). The snapshot may live on any branch, matching the JS behavior of
 // searching all branches.
 func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
+	defer m.writing(gameID)()
 	game, err := m.Store.GetGame(gameID)
 	if err != nil {
 		return store.Snapshot{}, err
@@ -475,18 +735,38 @@ func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
 		return store.Snapshot{}, fmt.Errorf("snapshot %q not found for game %q", snapshotID, gameID)
 	}
 
+	// The archive whole — rebuilt, if the snapshot shares its files with
+	// others (shared.go) — and read back before anything is touched. The
+	// restore empties the save folder and then extracts; an archive found
+	// damaged part-way through would leave neither the save that was there
+	// nor this one.
+	archive, done, err := OpenArchive(snap.ZipPath)
+	if err == nil {
+		defer done()
+		err = VerifyArchive(archive)
+	} else {
+		err = damagedArchive(snap.ZipPath, err)
+	}
+	if err != nil {
+		_ = m.Store.SetSnapshotCheck(snap.ID, m.now().UnixMilli(), err.Error())
+		return store.Snapshot{}, fmt.Errorf("%w — nothing was changed", err)
+	}
+
 	// The safety snapshot below triggers retention pruning, which — when the
 	// game is at its snapshot limit and this is the oldest snapshot — would
 	// delete this very snapshot's archive before we extract it. Restore from
-	// a temporary copy so the content survives that pruning.
-	restoreZip := snap.ZipPath
+	// a temporary copy so the content survives that pruning. A rebuilt
+	// archive is one already.
+	restoreZip := archive
 	if savePathHasContent(game.SavePath) {
-		if tmp, err := copyToTempZip(snap.ZipPath); err == nil {
-			restoreZip = tmp
-			defer os.Remove(tmp)
+		if archive == snap.ZipPath {
+			if tmp, err := copyToTempZip(archive); err == nil {
+				restoreZip = tmp
+				defer os.Remove(tmp)
+			}
 		}
 		safetyComment := fmt.Sprintf("Pre-rollback safety restore point (before restoring %s)", snapshotID)
-		if _, err := m.Create(gameID, safetyComment, true); err != nil {
+		if _, err := m.CreateBeforeReplacing(gameID, safetyComment); err != nil {
 			// Non-fatal, same as JS: warn and continue the restore.
 			fmt.Fprintf(os.Stderr, "[snapshot] safety snapshot before restore failed: %v\n", err)
 		}
@@ -507,6 +787,25 @@ func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
 	}
 	if err != nil {
 		return store.Snapshot{}, fmt.Errorf("restore snapshot %s: %w", snapshotID, err)
+	}
+
+	// The registry half, after the files. The capture arrived as a file in the
+	// game's registry location — unzipping put it back on disk, and this reads
+	// it and writes the values into the registry itself. Restoring the file
+	// alone would leave the game reading whatever the registry still held.
+	//
+	// Warnings, not failure: the files are already back, and a save restored
+	// without its registry half is worth more than an error that leaves the
+	// caller unsure whether anything happened at all.
+	if dir := restoreRoots[winreg.LocationName]; dir != "" {
+		for _, w := range RestoreRegistryCapture(game.Name, dir) {
+			if m.Log != nil {
+				m.Log("warn", w)
+			}
+		}
+	}
+	if m.OnRestored != nil {
+		m.OnRestored(snap)
 	}
 	return snap, nil
 }
@@ -572,7 +871,7 @@ func (m *Manager) CreateBranch(gameID, branchName string, copyCurrentSave bool) 
 	// reported, reasonably, as branches being broken.
 	if copyCurrentSave && savePathHasContent(gameOf(m, gameID).SavePath) {
 		comment := fmt.Sprintf("Branch %q created from %q", clean, gameOf(m, gameID).ActiveBranch)
-		if _, err := m.createOnBranch(gameID, clean, comment, true); err != nil {
+		if _, err := m.createOnBranch(gameID, clean, comment, true, false); err != nil {
 			// The branch exists but has nothing in it, which is the state that
 			// loses saves on the first switch. Undo it rather than leave that
 			// trap set.
@@ -581,6 +880,14 @@ func (m *Manager) CreateBranch(gameID, branchName string, copyCurrentSave bool) 
 		}
 	}
 	return clean, nil
+}
+
+// writing holds WriteGate for a game, when there is one.
+func (m *Manager) writing(gameID string) (done func()) {
+	if m.WriteGate == nil {
+		return func() {}
+	}
+	return m.WriteGate(gameID)
 }
 
 // gameOf is a small helper for the places that need a game's fields and have
@@ -595,6 +902,7 @@ func gameOf(m *Manager, gameID string) store.Game {
 // active branch pointer, then restore the target branch's latest snapshot
 // (if it has one — switching to a fresh branch leaves the save cleared).
 func (m *Manager) SwitchBranch(gameID, targetBranch string) error {
+	defer m.writing(gameID)()
 	game, err := m.Store.GetGame(gameID)
 	if err != nil {
 		return err
@@ -643,7 +951,7 @@ func (m *Manager) SwitchBranch(gameID, targetBranch string) error {
 	}
 	if hasContent {
 		comment := fmt.Sprintf("Auto backup before switching to branch %q", targetBranch)
-		if _, err := m.Create(gameID, comment, true); err != nil {
+		if _, err := m.CreateBeforeReplacing(gameID, comment); err != nil {
 			return fmt.Errorf("could not back up the current save before switching, so nothing was changed: %w", err)
 		}
 	}
@@ -658,11 +966,11 @@ func (m *Manager) SwitchBranch(gameID, targetBranch string) error {
 	if pathsErr != nil {
 		return fmt.Errorf("read the game's save locations: %w", pathsErr)
 	}
-	if err := clearSavePath(game.SavePath); err != nil {
+	if err := clearSavePathGuarded(game.SavePath); err != nil {
 		return fmt.Errorf("clear save path: %w", err)
 	}
 	for name, path := range switchPaths {
-		if err := clearSavePath(path); err != nil {
+		if err := clearSavePathGuarded(path); err != nil {
 			return fmt.Errorf("clear the %q save location: %w", name, err)
 		}
 	}
@@ -684,10 +992,26 @@ func (m *Manager) SwitchBranch(gameID, targetBranch string) error {
 		if rootsErr != nil {
 			switchRoots = nil
 		}
-		if _, err := UnzipRoots(latest.ZipPath, game.SavePath, switchRoots); err != nil {
+		archive, done, err := OpenArchive(latest.ZipPath)
+		if err == nil {
+			_, err = UnzipRoots(archive, game.SavePath, switchRoots)
+			done()
+		}
+		if err != nil {
 			// Same as JS: a failed restore of the incoming branch is logged
 			// but the switch itself stands (branch pointer already moved).
 			fmt.Fprintf(os.Stderr, "[snapshot] failed to restore branch snapshot: %v\n", err)
+		}
+		// The registry half comes with the files. Restoring one without the
+		// other pairs this branch's files with the registry state of the branch
+		// being left — a save the game never had, and one nothing in the
+		// listing would show as wrong.
+		if dir := switchRoots[winreg.LocationName]; dir != "" {
+			for _, w := range RestoreRegistryCapture(game.Name, dir) {
+				if m.Log != nil {
+					m.Log("warn", w)
+				}
+			}
 		}
 	}
 	return nil
@@ -740,9 +1064,40 @@ func savePathHasContent(savePath string) bool {
 	return err == nil && len(entries) > 0
 }
 
+// clearSavePath is the most destructive thing in the app: it empties a folder
+// outright. Everything that restores state calls it first — rollback, restoring
+// one snapshot, switching branches — because a restore has to put the save back
+// as it was rather than merge into whatever is there.
+//
+// So it refuses a path that is not a save folder. delta.DangerousSyncRoot names
+// the profile and system roots, and its comment records why it exists: a game
+// really did end up tracked at a profile root in the wild.
+//
+// The guard was only ever wired into BuildManifest, which is the READING side.
+// That produces the worst possible arrangement: a mis-tracked game fails to
+// sync, and the user's natural response to "sync is broken" is to roll back or
+// switch branches — the one action that would empty their profile. The check
+// belongs here most of all, where the deletion happens.
+//
+// Refusing rather than skipping. A restore that quietly declined to clear
+// would unzip a snapshot on top of whatever was already there and call it
+// restored, which is a different kind of wrong.
+func clearSavePathGuarded(savePath string) error {
+	if reason := delta.DangerousSyncRoot(savePath); reason != "" {
+		return fmt.Errorf(
+			"refusing to empty %q before restoring: %s. This game's save path is not a save "+
+				"folder — correct it in the game's configuration, and nothing here is touched",
+			savePath, reason)
+	}
+	return clearSavePath(savePath)
+}
+
 // clearSavePath removes a single save file, or empties a save directory
 // while keeping the directory itself.
 func clearSavePath(savePath string) error {
+	// Whatever this removes, no cached hash under it is true afterwards.
+	defer delta.InvalidateRoot(savePath)
+
 	info, err := os.Stat(savePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -763,4 +1118,99 @@ func clearSavePath(savePath string) error {
 		}
 	}
 	return nil
+}
+
+// recordDeletionsSince compares what this snapshot captured against the
+// previous one and writes down the paths that vanished.
+//
+// Nothing here may fail a snapshot: the archive is already on disk and the row
+// already written, so a bookkeeping problem must not turn a good backup into an
+// error. A missing record only means a deletion falls back to the old
+// lineage-based inference, which is where it was before.
+func (m *Manager) recordDeletionsSince(gameID, branch, snapshotID string, captured []store.CapturedFile) {
+	snaps, err := m.Store.ListSnapshots(gameID, branch)
+	if err != nil {
+		return
+	}
+	// Newest first, so the previous snapshot is the first that is not this one.
+	var previousID string
+	for _, s := range snaps {
+		if s.ID != snapshotID {
+			previousID = s.ID
+			break
+		}
+	}
+	if previousID == "" {
+		return // first snapshot of this branch: nothing existed before it
+	}
+	before, err := m.Store.SnapshotFiles(previousID)
+	if err != nil || len(before) == 0 {
+		return
+	}
+
+	type key struct{ root, path string }
+	now := make(map[key]struct{}, len(captured))
+	for _, f := range captured {
+		now[key{f.Root, f.Path}] = struct{}{}
+	}
+
+	var gone []store.DeletedFile
+	for _, f := range before {
+		if _, still := now[key{f.Root, f.Path}]; still {
+			continue
+		}
+		gone = append(gone, store.DeletedFile{
+			Root: f.Root, Path: f.Path, Hash: f.Hash,
+		})
+	}
+	if len(gone) > 0 {
+		if err := m.Store.RecordDeletedFiles(gameID, gone); err != nil && m.Log != nil {
+			m.Log("warn", fmt.Sprintf(
+				"could not record %d deletion(s) in %s; they will fall back to being "+
+					"inferred, which is what lets a deleted save come back: %v",
+				len(gone), gameID, err))
+		}
+	}
+
+	// A file that is present again must stop being remembered as deleted, or a
+	// later sync would remove the peer's copy of something this device now has.
+	//
+	// Done by reading the records once per root and clearing only the paths
+	// that actually have one. Calling the store for every captured file would
+	// mean hundreds of statements on a large save to delete rows that almost
+	// never exist.
+	roots := map[string]struct{}{}
+	for _, f := range captured {
+		roots[f.Root] = struct{}{}
+	}
+	for root := range roots {
+		records, err := m.Store.DeletedFiles(gameID, root)
+		if err != nil || len(records) == 0 {
+			continue
+		}
+		for _, f := range captured {
+			if f.Root != root {
+				continue
+			}
+			if _, remembered := records[f.Path]; remembered {
+				_ = m.Store.ClearDeletedFile(gameID, root, f.Path)
+			}
+		}
+	}
+}
+
+// ArchiveFileCount is the number of files (not folders) a snapshot archive
+// holds.
+func ArchiveFileCount(zipPath string) (int, error) {
+	entries, err := ArchiveEntries(zipPath)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, e := range entries {
+		if !e.IsDir {
+			n++
+		}
+	}
+	return n, nil
 }

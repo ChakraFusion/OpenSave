@@ -4,10 +4,12 @@ import (
 	"compress/gzip"
 	"embed"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,7 +46,10 @@ type manifestFileEntry struct {
 }
 
 type manifestGame struct {
-	Files      map[string]manifestFileEntry `yaml:"files"`
+	Files map[string]manifestFileEntry `yaml:"files"`
+	// Registry keys holding save data, in the same shape as Files. 2,810 games
+	// declare one, and for 619 of them it is the only place a save exists.
+	Registry   map[string]manifestFileEntry `yaml:"registry"`
 	InstallDir map[string]struct{}          `yaml:"installDir"`
 	Steam      struct {
 		ID int64 `yaml:"id"`
@@ -58,14 +63,33 @@ type indexedGame struct {
 	SteamID  string   `json:"s,omitempty"`
 	Installs []string `json:"i,omitempty"` // installDir folder names
 	Paths    []string `json:"p"`           // Windows-relevant save path templates
+	// Registry keys holding this game's save data, full hive names with
+	// forward slashes exactly as the manifest writes them. Absent from an
+	// index built by an older release, which reads as "none" — the field is
+	// additive, so an index on disk from a previous version still loads.
+	Registry []string `json:"r,omitempty"`
 }
 
 // manifestPaths derives the manifest + index locations from the scanner's
 // cache file directory (~/.opensave).
 func (sc *Scanner) manifestPaths() (yamlPath, indexPath string) {
 	dir := filepath.Dir(sc.CacheFile)
-	return filepath.Join(dir, "ludusavi-manifest.yaml"), filepath.Join(dir, "ludusavi-index.json")
+	return filepath.Join(dir, "ludusavi-manifest.yaml"), filepath.Join(dir, indexFileName)
 }
+
+// indexFileName carries the index's format in its name.
+//
+// The index is rebuilt only when it is older than the manifest it came from,
+// which is the right rule for content and the wrong one for shape: adding
+// registry keys to the format left every existing install reading a file that
+// had none, and no manifest update was due to trigger a rebuild. Games whose
+// save is in the registry would simply never have been found.
+//
+// A new name rather than a version field inside the file. An older build keeps
+// reading the file it knows and a newer one builds its own, so a user moving
+// between the two is never handed an index whose shape their code predates.
+// Bump this whenever indexedGame gains or loses a field that a scan depends on.
+const indexFileName = "ludusavi-index-v2.json"
 
 // scanLudusavi expands the manifest's save-path templates and returns the
 // locations that actually exist on this machine.
@@ -74,6 +98,10 @@ func (sc *Scanner) scanLudusavi(seen map[string]bool) []DiscoveredSave {
 		return nil
 	}
 	games := sc.loadManifestIndex()
+	// Naming and cover art match against whatever manifest this scan loaded,
+	// rather than only the copy compiled into the binary. See
+	// adoptManifestForNaming.
+	adoptManifestForNaming(games)
 	if len(games) == 0 {
 		return nil
 	}
@@ -328,9 +356,21 @@ func windowsPathVars() map[string]string {
 // ludusaviVarSets returns the placeholder→path maps to try for one game on
 // the scanner's target OS.
 func (sc *Scanner) ludusaviVarSets(g indexedGame, protonIdx map[string][]string) []map[string]string {
-	if sc.goos() == "windows" {
+	switch sc.goos() {
+	case "windows":
 		if v := windowsPathVars(); v != nil {
 			return []map[string]string{v}
+		}
+		return nil
+	case "darwin":
+		// The manifest has no dedicated macOS placeholder — its ~2,800
+		// mac-only entries write paths as "<home>/Library/Application
+		// Support/…" directly, which <home> alone resolves. There is
+		// nothing here for Proton: Wine prefixes are a Linux-only
+		// mechanism, so a Windows-only template genuinely has no
+		// counterpart to try on a Mac.
+		if home := sc.linuxHome(); home != "" {
+			return []map[string]string{{"<home>": home}}
 		}
 		return nil
 	}
@@ -349,25 +389,55 @@ func (sc *Scanner) ludusaviVarSets(g indexedGame, protonIdx map[string][]string)
 // placeholders are intentionally absent so win-only templates don't
 // resolve to bogus native paths (they resolve under Proton instead).
 func linuxNativeVars(home string) map[string]string {
-	dataHome := os.Getenv("XDG_DATA_HOME")
-	if dataHome == "" {
-		dataHome = filepath.Join(home, ".local", "share")
+	// $XDG_DATA_HOME, $XDG_CONFIG_HOME and $USER describe the account this
+	// PROCESS is running as. They describe `home` only when `home` IS that
+	// account's home directory, and taking them when it is not sends the scan
+	// looking somewhere else entirely — for a home that was passed in
+	// precisely because it is not the default one.
+	//
+	// That is not hypothetical. It is why a scan of a supplied home directory
+	// found nothing on any machine where XDG_CONFIG_HOME happened to be set,
+	// while passing everywhere it was not: the caller said which home to look
+	// in, and this quietly used a different one.
+	//
+	// When the two do agree, the environment still wins, because a user who
+	// has moved their config directory keeps their saves there and the whole
+	// point of the variable is to say so.
+	forThisUser := ownHome(home)
+
+	dataHome := filepath.Join(home, ".local", "share")
+	if v := os.Getenv("XDG_DATA_HOME"); v != "" && forThisUser {
+		dataHome = v
 	}
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
+	configHome := filepath.Join(home, ".config")
+	if v := os.Getenv("XDG_CONFIG_HOME"); v != "" && forThisUser {
+		configHome = v
 	}
 	return map[string]string{
 		"<home>":      home,
 		"<xdgData>":   dataHome,
 		"<xdgConfig>": configHome,
 		"<osUserName>": func() string {
-			if u := os.Getenv("USER"); u != "" {
+			if u := os.Getenv("USER"); u != "" && forThisUser {
 				return u
 			}
 			return filepath.Base(home)
 		}(),
 	}
+}
+
+// ownHome reports whether home is the home directory of the account this
+// process is running as.
+//
+// Unknown counts as "no": with nothing to compare against, the home the caller
+// named is the better answer than an environment variable that may describe
+// somebody else.
+func ownHome(home string) bool {
+	own := os.Getenv("HOME")
+	if own == "" || home == "" {
+		return false
+	}
+	return filepath.Clean(own) == filepath.Clean(home)
 }
 
 // protonWinVars maps Windows placeholders to their location inside a Proton
@@ -476,6 +546,12 @@ func blockedRoots(vars map[string]string) map[string]bool {
 func (sc *Scanner) installBaseCandidates() func([]string) []string {
 	libs := sc.steamLibraryPaths()
 	installed := map[string]string{}
+	// Non-Steam launchers first, so a game present in both is resolved
+	// against its Steam install — that is the copy whose userdata folder the
+	// rest of the scan is already looking at.
+	for name, dir := range sc.launcherInstallDirs() {
+		installed[name] = dir
+	}
 	for _, a := range steamInstalledApps(libs) {
 		installed[strings.ToLower(filepath.Base(a.InstallDir))] = a.InstallDir
 	}
@@ -575,7 +651,7 @@ func (sc *Scanner) loadManifestIndex() []indexedGame {
 	games := buildManifestIndex(yamlPath)
 	if len(games) > 0 {
 		if raw, err := json.Marshal(games); err == nil {
-			_ = os.WriteFile(indexPath, raw, 0o666)
+			_ = writeFileAtomic(indexPath, raw)
 		}
 		return games
 	}
@@ -659,13 +735,35 @@ func buildManifestIndex(yamlPath string) []indexedGame {
 			}
 			paths = append(paths, tpl)
 		}
-		if len(paths) == 0 {
+		var regKeys []string
+		for key, entry := range mg.Registry {
+			if !registryEntryIsSave(key, entry) {
+				continue
+			}
+			regKeys = append(regKeys, key)
+		}
+		// A game whose save lives only in the registry used to be dropped here
+		// for having no file paths — 619 of them, invisible to every scan.
+		//
+		// A game with neither is kept too, when the manifest knows its Steam
+		// id. It has nothing for a scan to look for — its saves are Steam
+		// Cloud's business, which is why the manifest declares no paths — but
+		// its name still maps to an App ID, and that mapping is what gets a
+		// game its cover art. Dropping it cost 29,246 of the manifest's 48,946
+		// Steam ids, so a game like Killer Bean was found by another pass,
+		// correctly named, and left blank on the shelf.
+		//
+		// These carry no paths and no registry keys, so every scan pass skips
+		// them by the checks it already makes.
+		steamID := ""
+		if mg.Steam.ID > 0 {
+			steamID = strconv.FormatInt(mg.Steam.ID, 10)
+		}
+		if len(paths) == 0 && len(regKeys) == 0 && steamID == "" {
 			continue
 		}
-		g := indexedGame{Name: name, Paths: paths}
-		if mg.Steam.ID > 0 {
-			g.SteamID = strconv.FormatInt(mg.Steam.ID, 10)
-		}
+		sort.Strings(regKeys) // stable index across rebuilds
+		g := indexedGame{Name: name, Paths: paths, Registry: regKeys, SteamID: steamID}
 		for dir := range mg.InstallDir {
 			g.Installs = append(g.Installs, dir)
 		}
@@ -679,6 +777,27 @@ func buildManifestIndex(yamlPath string) []indexedGame {
 // Windows paths that resolve inside a Proton prefix). Per-OS filtering of
 // the survivors happens at scan time — templates with placeholders the
 // current platform can't resolve are dropped there.
+// registryEntryIsSave reports whether a manifest registry key holds save data.
+//
+// Unlike a file template there is no placeholder to resolve — a registry path
+// is already absolute — so only the tags decide, by the same rule the file side
+// uses: an entry tagged at all must be tagged "save", and an untagged entry
+// counts.
+func registryEntryIsSave(key string, entry manifestFileEntry) bool {
+	if strings.TrimSpace(key) == "" {
+		return false
+	}
+	if len(entry.Tags) == 0 {
+		return true
+	}
+	for _, t := range entry.Tags {
+		if t == "save" {
+			return true
+		}
+	}
+	return false
+}
+
 func entryIsSaveEntry(tpl string, entry manifestFileEntry) bool {
 	// Placeholders no supported platform can resolve.
 	if strings.Contains(tpl, "<winDir>") || strings.Contains(tpl, "<dataDrive>") {
@@ -709,10 +828,32 @@ func entryIsSaveEntry(tpl string, entry manifestFileEntry) bool {
 	if len(entry.When) == 0 {
 		return true
 	}
+	// "mac" was missing here, which dropped every entry restricted to it at
+	// index build time — before ludusaviVarSets, the runtime resolver, ever
+	// got a chance to run. 3,181 file templates in the manifest are mac-only,
+	// and every one of them was invisible on every platform, Windows and
+	// Linux included, because the index simply never carried them.
 	for _, w := range entry.When {
-		if w.OS == "" || w.OS == "windows" || w.OS == "linux" {
+		if w.OS == "" || w.OS == "windows" || w.OS == "linux" || w.OS == "mac" {
 			return true
 		}
 	}
 	return false
+}
+
+// BuildEmbeddedIndexJSON builds the compact index from a manifest and returns
+// it as JSON, for regenerating the copy embedded in the binary.
+//
+// The embedded index is what a fresh install scans against before any manifest
+// download has finished, so it has to carry every field a scan reads. It fell
+// behind once already: registry save keys were added to indexedGame and the
+// embedded copy still held none, which left registry-only games undetectable
+// until the first background refresh rebuilt the index.
+func BuildEmbeddedIndexJSON(yamlPath string) ([]byte, error) {
+	games := buildManifestIndex(yamlPath)
+	if len(games) == 0 {
+		return nil, fmt.Errorf("no games parsed from %s", yamlPath)
+	}
+	sort.Slice(games, func(i, j int) bool { return games[i].Name < games[j].Name })
+	return json.Marshal(games)
 }

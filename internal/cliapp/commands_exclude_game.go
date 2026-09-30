@@ -140,7 +140,7 @@ func saveIgnore(d *daemon.Daemon, asJSON bool, gameID, gameName string, lines []
 		}
 		return emitJSON(lines)
 	}
-	success("exclusions updated for %q (%d pattern(s))", gameName, len(lines))
+	success("exclusions updated for %q (%s)", gameName, plural(len(lines), "pattern", "patterns"))
 	note("Set the same patterns on your other devices — each one applies its own.")
 	return 0
 }

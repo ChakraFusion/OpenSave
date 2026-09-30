@@ -18,24 +18,78 @@ package watcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/ignore"
+	"github.com/opensave/opensave/internal/logging"
 )
 
 const (
+	// watchBufferBytes is the per-directory event buffer fsnotify allocates.
+	//
+	// Its default is 64 KB, and the allocation is per WATCHED DIRECTORY, not
+	// per game — addRecursive registers every subfolder of every save
+	// location. Someone tracking 350 games across a few folders each was
+	// therefore holding hundreds of megabytes in buffers alone before a
+	// single save was read, which is most of what "OpenSave is using 760 MB
+	// while idle" turned out to be.
+	//
+	// 8 KB is still around a hundred events in flight for one folder. Save
+	// folders are not high-event places: a game writes a handful of files
+	// when it saves, not thousands per second. The cost of getting this wrong
+	// is a dropped-event overflow, which is now noticed and recovered from
+	// rather than ignored — see ErrEventOverflow below.
+	watchBufferBytes = 8 * 1024
+
 	debounceDelay      = 2 * time.Second
 	guardPollInterval  = 5 * time.Second
 	snapshotMaxRetries = 5
 	snapshotRetryDelay = 1500 * time.Millisecond
 )
+
+// reconcileInterval is how often every watched game is checked against the
+// state the watcher believes it is in.
+//
+// A watch reports changes; it does not guarantee it saw them all. Events are
+// dropped when a burst overruns the buffer, a folder created during one can
+// end up watched by nobody, and a change landing between the last event and
+// the debounce firing raises nothing further. All of those leave a live watch
+// whose baseline no longer describes the folder — and because every correction
+// was itself driven by an event, nothing will ever fix it. Measured at four
+// minutes with no sign of recovering; the only reason it was not four hours is
+// that the test gave up.
+//
+// That baseline decides whether a save holds changes a pull might overwrite,
+// so a stale one is wrong in the direction that costs someone a save.
+//
+// The cost is real and worth stating plainly, because it is the same cost this
+// package spent a release removing. Every pass walks each watched tree; with
+// the hash cache that walk stats files rather than reading them, but the cache
+// also forces a genuine re-read of anything it has held for cacheMaxAge (an
+// hour), so a reconcile running forever guarantees one full read of every
+// tracked save per hour. Before this, an idle game with no events was never
+// walked at all.
+//
+// Fifteen minutes is the compromise. It turns "wrong until something else
+// happens to touch this folder" into "wrong for at most a quarter of an hour",
+// which is the difference that matters, while keeping the walk rare enough not
+// to reinstate the constant disk activity people reported. Shorten it and the
+// walking becomes noticeable on a large library; lengthen it and a dropped
+// event costs more time holding a baseline that is wrong.
+//
+// A variable rather than a constant so tests can drive it; nothing else writes
+// to it.
+var reconcileInterval = 15 * time.Minute
 
 // Callbacks connect the watcher to the rest of the daemon without import
 // cycles. All are required.
@@ -73,6 +127,31 @@ type Engine struct {
 	mu     sync.Mutex
 	games  map[string]*gameWatch
 	closed bool
+
+	// catchUp carries games that have just come under watch and need checking
+	// against their last recorded snapshot. See catchUpWorker.
+	catchUp    chan catchUpJob
+	catchUpCtx context.Context
+	stopCatch  context.CancelFunc
+
+	// reconcileEvery is this engine's copy of reconcileInterval, read once
+	// when it is built.
+	//
+	// A field rather than the package variable read from inside the worker,
+	// because that read would happen on the new goroutine while whoever set
+	// the variable carries on — a test restoring the real interval after
+	// starting an engine writes it concurrently with that read. Starting a
+	// goroutine orders the writes that came BEFORE it and nothing after, so
+	// that is a data race, and one only the race detector would ever show.
+	reconcileEvery time.Duration
+}
+
+// catchUpJob is one game to check after its watch starts.
+type catchUpJob struct {
+	gameID   string
+	savePath string
+	extra    map[string]string
+	isFile   bool
 }
 
 type gameWatch struct {
@@ -85,15 +164,182 @@ type gameWatch struct {
 	// pressed the button.
 	extra  map[string]string
 	isFile bool
-	fsw      *fsnotify.Watcher
-	cancel   context.CancelFunc
-	done     chan struct{}
+	fsw    *fsnotify.Watcher
+	cancel context.CancelFunc
+	done   chan struct{}
+	// log is the engine's logger, held here so stop() can report a watch
+	// that refused to exit. Nil in tests that build a gameWatch directly.
+	log func(level, msg string)
+	// closeFS stands in for fsw.Close when set: a test's way of having a
+	// close that never returns.
+	closeFS func() error
+
+	// rewatch records that some folder under this game is known NOT to be
+	// watched, so the next pass re-registers everything.
+	//
+	// Registering a new subfolder happens once, on its Create event, and
+	// nothing repeated it: if that Add failed — a permission, a race with
+	// shutdown, a limit — the folder stayed unwatched for the life of the
+	// process, silently, because the error was discarded. A watch that is
+	// missing raises no events to tell you it is missing, which is what makes
+	// this class of failure invisible.
+	//
+	// Atomic because two goroutines set it: the event loop, and
+	// registerFolders when an Add fails.
+	rewatch atomic.Bool
+
+	// folders carries directories to put under watch to registerFolders. See
+	// there for why the event loop does not register them itself.
+	folders chan string
+	// rescan asks the event loop to read the tree again once things are
+	// quiet: sent when a batch of folders has come under watch, and when a
+	// watch starts on a folder that was busy while it was being registered.
+	// Buffered by one, and sent without waiting — one pending request covers
+	// any number more.
+	rescan chan struct{}
 }
+
+// folderQueueSize bounds the directories waiting to be registered. A burst
+// that creates more than this at once is not lost: the overflow sets rewatch,
+// and the next pass re-registers the whole tree.
+const folderQueueSize = 1024
 
 // New creates a watcher Engine.
 func New(cb Callbacks) *Engine {
-	return &Engine{cb: cb, games: map[string]*gameWatch{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &Engine{
+		cb:    cb,
+		games: map[string]*gameWatch{},
+		// Buffered so starting a large library never blocks on the worker.
+		// Dropping a catch-up when the queue is full is safe: the next change
+		// to that game snapshots it anyway, and the periodic watch reconcile
+		// re-queues it.
+		catchUp:    make(chan catchUpJob, 256),
+		catchUpCtx: ctx,
+		stopCatch:  cancel,
+		// Read here, on the caller's goroutine, not inside the worker.
+		reconcileEvery: reconcileInterval,
+	}
+	go e.catchUpWorker()
+	go e.reconcileWorker()
+	return e
 }
+
+// reconcileWorker re-checks every watched game on a timer.
+//
+// It queues the same job a starting watch queues, so everything catchUpOne is
+// careful about applies unchanged: games with no baseline are left alone, the
+// checks run one at a time rather than reading every save at once, and a game
+// whose folder still matches its baseline produces nothing at all. The only
+// difference is what prompts it.
+func (e *Engine) reconcileWorker() {
+	ticker := time.NewTicker(e.reconcileEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-e.catchUpCtx.Done():
+			return
+		case <-ticker.C:
+			for _, job := range e.watchedJobs() {
+				e.queueCatchUp(job)
+			}
+		}
+	}
+}
+
+// watchedJobs describes every live watch, for the reconcile.
+//
+// Collected under the lock and queued outside it: queueCatchUp never blocks,
+// but holding the engine lock across a loop over every game is how Watch and
+// Unwatch end up waiting on unrelated work.
+func (e *Engine) watchedJobs() []catchUpJob {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	jobs := make([]catchUpJob, 0, len(e.games))
+	for _, gw := range e.games {
+		jobs = append(jobs, catchUpJob{
+			gameID:   gw.gameID,
+			savePath: gw.savePath,
+			extra:    gw.extra,
+			isFile:   gw.isFile,
+		})
+	}
+	return jobs
+}
+
+// catchUpWorker snapshots games that changed while nobody was watching.
+//
+// Starting a watch is not retroactive: it reports what happens next, and says
+// nothing about what happened while it was not running. A game saved while
+// OpenSave was closed, or while its watch was down after a failed start, was
+// therefore left with no snapshot of that state — the change sat on disk, and
+// the local history skipped it until the game happened to save again. The
+// peer reconcile would still carry the files to another device, so this was
+// never lost data; what was missing was the snapshot you would restore from,
+// which is the thing people reach for when something goes wrong.
+//
+// The check is the same one a change triggers: build the manifest, compare it
+// to the hash recorded at the last auto-snapshot, and take one if they differ.
+// Unchanged games cost a walk and nothing else.
+//
+// Deliberately one at a time. Three hundred games catching up at once would
+// read every save at once, on a machine that has just started — exactly the
+// disk storm this program has been trying to stop making.
+func (e *Engine) catchUpWorker() {
+	for {
+		select {
+		case <-e.catchUpCtx.Done():
+			return
+		case job := <-e.catchUp:
+			e.catchUpOne(job)
+		}
+	}
+}
+
+// catchUpOne checks one game against the hash recorded at its last
+// auto-snapshot, and snapshots it if the folder has moved on.
+//
+// Only for games that already have a recorded hash. Writing a baseline for one
+// that has none looks harmless and is not: the write happens on this worker,
+// concurrently with whatever the user is doing, so a save made in that instant
+// would be recorded as the baseline and the change it represents would never
+// be snapshotted. Suppressing a real snapshot to gain a nominal one is the
+// wrong trade in a program whose job is keeping copies — so a game with no
+// baseline is left alone, and gets one from its first ordinary change.
+func (e *Engine) catchUpOne(job catchUpJob) {
+	if e.cb.GetLastManifestHash == nil {
+		return
+	}
+	last, err := e.cb.GetLastManifestHash(job.gameID)
+	if err != nil || last == "" {
+		return
+	}
+	// A baseline exists, so the ordinary change path answers the question: it
+	// compares against that hash and snapshots only if they differ. Worst case
+	// it races a real change and takes one snapshot too many, which is the
+	// harmless direction.
+	e.handleChange(e.catchUpCtx, &gameWatch{
+		gameID:   job.gameID,
+		savePath: job.savePath,
+		extra:    job.extra,
+		isFile:   job.isFile,
+		log:      e.cb.Log,
+	})
+}
+
+// queueCatchUp asks for a game to be checked, without blocking.
+func (e *Engine) queueCatchUp(job catchUpJob) {
+	select {
+	case e.catchUp <- job:
+	default:
+		// Queue full: skipped rather than waited on. The next change to this
+		// game snapshots it, and the reconcile will offer it again.
+	}
+}
+
+// ErrStopped is returned by a watch started on an engine that has already
+// been stopped — the process is shutting down, and not watching is correct.
+var ErrStopped = errors.New("watcher engine is stopped")
 
 // Watch starts (or restarts) watching a game's save location.
 //
@@ -121,22 +367,35 @@ func (e *Engine) WatchWithLocations(gameID, savePath string, extra map[string]st
 	if err != nil {
 		return fmt.Errorf("create fs watcher: %w", err)
 	}
+	// Something must take events while the folders are added, or adding them
+	// can wait forever. See drainWhileRegistering.
+	registering := drainWhileRegistering(fsw)
 
 	// Single-file saves: watch the parent directory (survives the file
 	// being unlinked+recreated by safe-write); directory saves: watch the
 	// tree recursively (fsnotify is non-recursive by itself).
 	if isFile {
 		if err := fsw.Add(filepath.Dir(savePath)); err != nil {
-			fsw.Close()
+			closeWatcher(fsw, fsw.Close, watchStopTimeout)
 			return fmt.Errorf("watch parent dir: %w", err)
 		}
 	} else {
-		if err := os.MkdirAll(savePath, 0o777); err != nil {
-			fsw.Close()
-			return fmt.Errorf("create save dir: %w", err)
+		// A save folder that is not there is not created here. Tracking
+		// refuses a folder that does not exist, so a missing one went —
+		// deleted, moved by a reinstall, on a drive or card not plugged in.
+		// Creating it put an empty folder where the save had been, and the
+		// next sync read every file as deleted and deleted them on the other
+		// devices too: the copies left. See e2e/missing_folder_test.go. The
+		// daemon watches it again once it is back (ResyncWatchers).
+		if _, statErr := os.Stat(savePath); statErr != nil {
+			closeWatcher(fsw, fsw.Close, watchStopTimeout)
+			if errors.Is(statErr, fs.ErrNotExist) {
+				return fmt.Errorf("%w: %s", ErrSaveFolderMissing, savePath)
+			}
+			return fmt.Errorf("inspect save dir: %w", statErr)
 		}
-		if err := addRecursive(fsw, savePath); err != nil {
-			fsw.Close()
+		if err := addRecursive(context.Background(), fsw, savePath); err != nil {
+			closeWatcher(fsw, fsw.Close, watchStopTimeout)
 			return fmt.Errorf("watch save dir tree: %w", err)
 		}
 	}
@@ -149,22 +408,25 @@ func (e *Engine) WatchWithLocations(gameID, savePath string, extra map[string]st
 		if path == "" {
 			continue
 		}
-		if err := os.MkdirAll(path, 0o777); err != nil {
-			e.log("warn", fmt.Sprintf("cannot watch the %q save location of %s: %v", name, gameID, err))
+		// Not created either, for the same reason as the main folder.
+		if _, statErr := os.Stat(path); statErr != nil {
+			e.log("warn", fmt.Sprintf("the %q save location of %s is not there (%s), so it is not watched — "+
+				"it will not be created, since an empty folder in its place would read as its files deleted", name, gameID, path))
 			continue
 		}
-		if err := addRecursive(fsw, path); err != nil {
+		if err := addRecursive(context.Background(), fsw, path); err != nil {
 			e.log("warn", fmt.Sprintf("cannot watch the %q save location of %s: %v", name, gameID, err))
 			continue
 		}
 		watched[name] = path
 	}
+	busy := registering()
 
 	e.mu.Lock()
 	if e.closed {
 		e.mu.Unlock()
-		fsw.Close()
-		return fmt.Errorf("watcher engine is stopped")
+		closeWatcher(fsw, fsw.Close, watchStopTimeout)
+		return ErrStopped
 	}
 	if existing, ok := e.games[gameID]; ok {
 		delete(e.games, gameID)
@@ -182,12 +444,25 @@ func (e *Engine) WatchWithLocations(gameID, savePath string, extra map[string]st
 		fsw:      fsw,
 		cancel:   cancel,
 		done:     make(chan struct{}),
+		log:      e.log,
+		folders:  make(chan string, folderQueueSize),
+		rescan:   make(chan struct{}, 1),
+	}
+	if busy {
+		gw.rewatch.Store(true)
+		gw.rescan <- struct{}{} // buffered and empty: cannot block
 	}
 	e.games[gameID] = gw
 	e.mu.Unlock()
 	go e.run(ctx, gw)
 
-	e.log("info", fmt.Sprintf("watching %q (%s mode)", savePath, map[bool]string{true: "single-file", false: "directory"}[isFile]))
+	e.log("info", fmt.Sprintf("watching %s (%s mode)", logging.Quote(savePath), map[bool]string{true: "single-file", false: "directory"}[isFile]))
+
+	// A watch reports what happens next, not what already happened. Check
+	// whether this folder changed while nobody was watching it — after a
+	// restart, or after a watch that failed to start earlier and has just
+	// been retried — and snapshot it if so.
+	e.queueCatchUp(catchUpJob{gameID: gameID, savePath: savePath, extra: watched, isFile: isFile})
 	return nil
 }
 
@@ -234,6 +509,9 @@ func (e *Engine) Unwatch(gameID string) {
 
 // Stop shuts down every watch goroutine.
 func (e *Engine) Stop() {
+	if e.stopCatch != nil {
+		e.stopCatch()
+	}
 	e.mu.Lock()
 	e.closed = true
 	stopping := make([]*gameWatch, 0, len(e.games))
@@ -247,10 +525,120 @@ func (e *Engine) Stop() {
 	}
 }
 
+// ErrSaveFolderMissing is a watch refused because the save folder is not
+// there. The folder is not created; see WatchWithLocations.
+var ErrSaveFolderMissing = errors.New("the save folder is not there")
+
+// watchStopTimeout bounds how long stopping one watch may wait for its run
+// loop to exit. Generous next to the work the loop does between select turns,
+// and short enough that a user quitting the app does not sit looking at a
+// window that will not close.
+const watchStopTimeout = 5 * time.Second
+
 func (gw *gameWatch) stop() {
+	// Cancel BEFORE closing, so the guard in addRecursive sees the cancelled
+	// context and stops issuing new Adds. Closing is what actually wakes the
+	// loop — it closes the Events channel, which the select treats as "the
+	// watcher is gone, return" — so it cannot simply be dropped: without it
+	// the loop keeps grinding through its event backlog and takes far longer
+	// to notice it should stop.
 	gw.cancel()
-	gw.fsw.Close()
-	<-gw.done
+	deadline := time.Now().Add(watchStopTimeout)
+	closeFS := gw.fsw.Close
+	if gw.closeFS != nil {
+		closeFS = gw.closeFS
+	}
+	closed := closeWatcher(gw.fsw, closeFS, watchStopTimeout)
+
+	// Bounded regardless. The ordering above removes the known way to wedge
+	// this, but it cannot make the window vanish: cancel() can still land
+	// between addRecursive's check and the Add it guards. stop() is on the
+	// path that quits the application, where a wait that never ends is a
+	// window that never closes — so this guarantee is worth holding on its
+	// own, independently of the bug that prompted it.
+	//
+	// Giving up leaks a goroutine and a watcher handle. Against a process that
+	// never exits that is the right trade: the leak lasts only as long as the
+	// process, and stopping is nearly always the last thing it does.
+	exited := true
+	select {
+	case <-gw.done:
+	case <-time.After(time.Until(deadline)):
+		exited = false
+	}
+	if (!closed || !exited) && gw.log != nil {
+		gw.log("warn", fmt.Sprintf(
+			"the watcher for %s did not stop within %s and was abandoned — "+
+				"its goroutine is left running; this is a bug, but shutting down "+
+				"matters more than waiting for it", gw.gameID, watchStopTimeout))
+	}
+}
+
+// closeWatcher closes fsw with closeFS — its Close, bar tests — waiting at
+// most timeout, and reports whether the close finished.
+//
+// fsnotify's Close can wait forever on Windows (v1.10.1). It asks the
+// backend's reader goroutine to stop by leaving a request on a channel, and a
+// reader that is waiting to hand over an error takes that request as its cue
+// to give up the error — and consumes it. The request is gone; the reader goes
+// back to waiting for file activity, and Close waits for an answer that never
+// comes. The error it is holding is typically an overflow, which is what a
+// burst of writes produces, and nothing reads errors once the run loop has
+// been cancelled. Captured from a 45-minute test timeout: stop() inside Close,
+// the reader in GetQueuedCompletionStatus. It reproduces every time: overflow
+// a folder, leave the error unread, close.
+//
+// So anything the reader is waiting to hand over is taken first, which means
+// it is not waiting when the request arrives, and taking continues while it
+// closes. What that leaves is an error raised in the instant between the two,
+// and the bound is for that.
+//
+// The taking beforehand is not what the test shows. Taking while closing
+// alone passed it too: it starts at once, while the close waits for its
+// goroutine to be scheduled, so it usually gets there first. Usually is the
+// word — the hang was only ever seen under a fully loaded suite, where the
+// order goroutines run in is least predictable — and taking first removes the
+// dependence on that order for the error already waiting.
+func closeWatcher(fsw *fsnotify.Watcher, closeFS func() error, timeout time.Duration) bool {
+	events, errs := fsw.Events, fsw.Errors
+	for pending := true; pending; {
+		select {
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		default:
+			pending = false
+		}
+	}
+
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		_ = closeFS()
+	}()
+	give := time.NewTimer(timeout)
+	defer give.Stop()
+	for {
+		select {
+		case <-closed:
+			return true
+		case _, ok := <-events:
+			if !ok {
+				events = nil
+			}
+		case _, ok := <-errs:
+			if !ok {
+				errs = nil
+			}
+		case <-give.C:
+			return false
+		}
+	}
 }
 
 // run is the per-game event loop: filter -> debounce -> guard -> snapshot.
@@ -259,6 +647,22 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 
 	var debounce *time.Timer
 	var debounceC <-chan time.Time
+	resetDebounce := func() {
+		if debounce == nil {
+			debounce = time.NewTimer(debounceDelay)
+			debounceC = debounce.C
+			return
+		}
+		if !debounce.Stop() {
+			select {
+			case <-debounce.C:
+			default:
+			}
+		}
+		debounce.Reset(debounceDelay)
+	}
+
+	go e.registerFolders(ctx, gw)
 
 	for {
 		select {
@@ -272,33 +676,88 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 			if !gw.eventRelevant(event) {
 				continue
 			}
-			// New subdirectory in directory mode: extend the watch.
+			// New subdirectory in directory mode: extend the watch — on
+			// registerFolders, never here. See registerFolders.
 			if !gw.isFile && event.Has(fsnotify.Create) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
-					_ = addRecursive(gw.fsw, event.Name)
+					gw.queueFolder(event.Name)
 				}
 			}
-			if debounce == nil {
-				debounce = time.NewTimer(debounceDelay)
-				debounceC = debounce.C
-			} else {
-				if !debounce.Stop() {
-					select {
-					case <-debounce.C:
-					default:
-					}
-				}
-				debounce.Reset(debounceDelay)
-			}
+			resetDebounce()
 
-		case _, ok := <-gw.fsw.Errors:
+		case <-gw.rescan:
+			// Folders just came under watch, or the watch started on a folder
+			// that was busy. Anything written into a folder before its watch
+			// existed raised no event of its own, so read the tree again once
+			// things are quiet.
+			resetDebounce()
+
+		case err, ok := <-gw.fsw.Errors:
 			if !ok {
 				return
 			}
+			// Errors were being discarded entirely, which mattered most for
+			// the one that means "events were dropped": after an overflow we
+			// know something changed and not what, so ignoring it loses the
+			// change silently. Treat it as a change and let the debounced
+			// handler rescan — the manifest comparison then finds whatever
+			// the missed events would have told us.
+			if errors.Is(err, fsnotify.ErrEventOverflow) {
+				e.log("warn", fmt.Sprintf(
+					"file events overflowed for %q — rescanning to find what changed", gw.gameID))
+				// Re-register the folders as well as rescanning them.
+				//
+				// Almost everything the loop does with an event is to use it
+				// as a trigger — handleChange reads the folder from disk, so
+				// which event arrived does not matter. The exception is above:
+				// a Create for a new subdirectory is what puts that
+				// subdirectory under watch. Lose that one event and the folder
+				// is never watched, so nothing inside it ever raises another —
+				// a rescan would find today's contents and then go quiet
+				// again. Re-adding is idempotent: fsnotify keeps one watch per
+				// directory and allocates no second buffer for one it already
+				// has.
+				gw.rewatch.Store(true)
+			} else {
+				e.log("warn", fmt.Sprintf("watching %q: %v", gw.gameID, err))
+				continue
+			}
+			resetDebounce()
 
 		case <-debounceC:
 			debounce = nil
 			debounceC = nil
+			// Re-register, so a folder that went unwatched is watched from
+			// here on, and read the tree below, so it is found now. Doing only
+			// one of those leaves it correct today and silent tomorrow.
+			//
+			// The registering is handed to registerFolders rather than done
+			// here, so it may finish after the read below. That leaves no gap:
+			// registerFolders asks for another read once the folders are in
+			// place, which covers anything written between the two.
+			if gw.rewatch.Swap(false) {
+				gw.queueFolder(gw.savePath)
+				for _, extra := range gw.extra {
+					gw.queueFolder(extra)
+				}
+			}
+			// The filesystem said these folders changed, which is better
+			// evidence than any stamp comparison — so drop their cached
+			// hashes and let handleChange read what is actually on disk.
+			//
+			// The whole root, not just the paths named in the events: a
+			// rename moves a subtree, and a delete-then-recreate can land on
+			// the same size and modification time.
+			//
+			// Here rather than on each event, because one burst of writes
+			// fires many events and each invalidation scans the cache. Once
+			// per burst is the same guarantee for a fraction of the work, and
+			// it still lands before anything reads. Idle folders produce no
+			// events at all, so a quiet game keeps its cache.
+			delta.InvalidateRoot(gw.savePath)
+			for _, path := range gw.extra {
+				delta.InvalidateRoot(path)
+			}
 			e.handleChange(ctx, gw)
 		}
 	}
@@ -351,12 +810,11 @@ func (e *Engine) handleChange(ctx context.Context, gw *gameWatch) {
 	// change", which has to cover every one of its folders. For a game with
 	// one folder the two are the same value, so nothing already recorded is
 	// invalidated by the upgrade.
+	ignoreText := ""
 	if e.cb.IgnoreRules != nil {
-		if rules := ignore.Parse(e.cb.IgnoreRules(gw.gameID)); !rules.Empty() {
-			manifest = filterForHash(manifest, rules)
-		}
+		ignoreText = e.cb.IgnoreRules(gw.gameID)
 	}
-	currentHash := manifest.ContentHash()
+	currentHash := ContentHash(manifest, ignoreText)
 
 	lastHash, err := e.cb.GetLastManifestHash(gw.gameID)
 	if err == nil && lastHash == currentHash {
@@ -394,6 +852,13 @@ func (e *Engine) handleChange(ctx context.Context, gw *gameWatch) {
 // anyFileLocked walks the save location and reports whether any file in it
 // is currently held with an incompatible sharing mode.
 func anyFileLocked(savePath string) bool {
+	return AnyFileLocked(savePath)
+}
+
+// AnyFileLocked reports whether the game still has a save file open in a way
+// that would stop it being read or replaced — the gameplay guard, for callers
+// outside the watcher that must not write under a running game either.
+func AnyFileLocked(savePath string) bool {
 	info, err := os.Stat(savePath)
 	if err != nil {
 		return false
@@ -415,9 +880,132 @@ func anyFileLocked(savePath string) bool {
 	return locked
 }
 
+// registerFolders puts directories under watch on behalf of the event loop.
+//
+// It has to be a goroutine of its own. fsnotify's Windows backend serves Add
+// from the goroutine that delivers events, and only between deliveries: an Add
+// waits for that goroutine to be free, and that goroutine waits for someone to
+// take the event it is holding. The event loop used to register new subfolders
+// itself, so when a folder was created with more events right behind it — a
+// new profile folder and the files written into it — the loop sat in Add
+// waiting on a reader that was waiting on the loop. Neither ever moved again.
+// The game's watch was dead from then on: no events, no automatic snapshots,
+// nothing sent to other devices until the fifteen-minute reconcile or a
+// restart. Four hundred new folders at once did it about two runs in five,
+// and a goroutine dump showed exactly those two, each waiting on the other.
+//
+// Here the loop keeps taking events while this waits, so the wait ends.
+func (e *Engine) registerFolders(ctx context.Context, gw *gameWatch) {
+	added := false
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case dir := <-gw.folders:
+			if err := addRecursive(ctx, gw.fsw, dir); err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				// Not fatal, and not ignorable either: this folder is now
+				// invisible to the watcher. Re-register on the next pass rather
+				// than discovering it never again.
+				gw.rewatch.Store(true)
+				e.log("warn", fmt.Sprintf(
+					"could not watch folder %q for %q (%v) — will retry", dir, gw.gameID, err))
+			} else {
+				added = true
+			}
+			// Once the queue is empty, not per folder: a burst of new folders
+			// costs one more read of the tree, not hundreds. And not after a
+			// failure alone — the retry waits for the next real change, as it
+			// always has, rather than rescanning every two seconds against a
+			// folder that cannot be watched.
+			if added && len(gw.folders) == 0 {
+				added = false
+				select {
+				case gw.rescan <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
+}
+
+// queueFolder hands a directory to registerFolders without waiting. When the
+// queue is full it asks for the whole tree to be registered on the next pass
+// instead: waiting here is the very thing registerFolders exists to avoid.
+func (gw *gameWatch) queueFolder(dir string) {
+	select {
+	case gw.folders <- dir:
+	default:
+		gw.rewatch.Store(true)
+	}
+}
+
+// drainWhileRegistering takes a new watcher's events while its folders are
+// being added, and reports whether any arrived.
+//
+// Watch registers the whole tree before the event loop exists, and the same
+// wait described at registerFolders applies: the walk adds the top folder
+// first, so a folder that is busy while its watch starts — a game running as
+// OpenSave launches — has events queued long before a big tree is done, and
+// an Add made while nobody takes them never returns. Watch hung there, and the
+// daemon starts its watches one after another, so everything after that game
+// hung with it.
+//
+// What arrives here is noted, not acted on. The loop that starts next treats
+// it as a burst whose events were lost: it registers the tree again and reads
+// it, because a subfolder created mid-walk may have been missed by the walk,
+// and its Create is among what was just discarded.
+func drainWhileRegistering(fsw *fsnotify.Watcher) (finish func() (sawActivity bool)) {
+	stop := make(chan struct{})
+	result := make(chan bool, 1)
+	go func() {
+		saw := false
+		defer func() { result <- saw }()
+		for {
+			select {
+			case <-stop:
+				return
+			case _, ok := <-fsw.Events:
+				if !ok {
+					return
+				}
+				saw = true
+			case _, ok := <-fsw.Errors:
+				if !ok {
+					return
+				}
+				saw = true
+			}
+		}
+	}()
+	return func() bool {
+		close(stop)
+		return <-result
+	}
+}
+
 // addRecursive registers root and every subdirectory with the fs watcher.
-func addRecursive(fsw *fsnotify.Watcher, root string) error {
+//
+// Never call it where fsw's events are not being taken — see registerFolders.
+//
+// ctx is the watch's own context, and the walk abandons itself once that
+// context is cancelled, so a shutdown does not keep queueing new work.
+//
+// This is defence in depth, not the fix for the shutdown hang — stating that
+// plainly because the comment is otherwise easy to trust too far. It narrows
+// the window in which an Add can be issued after Close (fsnotify's Windows
+// backend serves Add from a goroutine Close tears down, and an Add that
+// arrives afterwards waits for a reply that never comes). But cancel() can
+// still land between this check and the Add it guards, and removing this guard
+// could not be shown to change the outcome under realistic load. What actually
+// guarantees shutdown is the bounded wait in stop().
+func addRecursive(ctx context.Context, fsw *fsnotify.Watcher, root string) error {
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if ctx.Err() != nil {
+			return filepath.SkipAll
+		}
 		if err != nil {
 			return nil // unreadable subdir: skip, don't fail the whole watch
 		}
@@ -425,7 +1013,8 @@ func addRecursive(fsw *fsnotify.Watcher, root string) error {
 			if strings.HasPrefix(filepath.Base(path), ".") && path != root {
 				return filepath.SkipDir
 			}
-			return fsw.Add(path)
+			// AddWith rather than Add, to size the per-directory buffer.
+			return fsw.AddWith(path, fsnotify.WithBufferSize(watchBufferBytes))
 		}
 		return nil
 	})
@@ -435,6 +1024,18 @@ func (e *Engine) log(level, msg string) {
 	if e.cb.Log != nil {
 		e.cb.Log(level, msg)
 	}
+}
+
+// ContentHash is the value recorded at each automatic snapshot: the game's
+// content across all its locations, less what its ignore rules exclude.
+// Anything asking "has this save changed since its last snapshot" compares
+// against that recorded value, so it has to compute it this way — one
+// definition, or the question gets two answers.
+func ContentHash(m delta.Manifest, ignoreRules string) string {
+	if rules := ignore.Parse(ignoreRules); !rules.Empty() {
+		m = filterForHash(m, rules)
+	}
+	return m.ContentHash()
 }
 
 // filterForHash drops excluded paths before the content hash is taken, so the

@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,10 +19,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	cloudsvc "github.com/opensave/opensave/internal/cloud"
 	"github.com/opensave/opensave/internal/daemon"
 	"github.com/opensave/opensave/internal/logging"
+	"github.com/opensave/opensave/internal/p2p"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
 	"github.com/opensave/opensave/internal/store"
+	"github.com/opensave/opensave/internal/syncpause"
+	"github.com/opensave/opensave/internal/transfers"
 	"github.com/opensave/opensave/internal/version"
 )
 
@@ -31,11 +37,20 @@ type Server struct {
 
 	httpServer *http.Server
 	listener   net.Listener
+	// instance marks every response from this process (instanceHeader), so
+	// Start can tell whether 127.0.0.1 at its port is really answered by it.
+	instance string
+	// transfers remembers what moved between this device and others; fed
+	// by the same progress reports the dashboard gets. See wireSyncProgress.
+	transfers *transfers.Log
+	// SteamCacheDirs overrides where Steam's already-downloaded library art is
+	// looked for when non-nil. Tests only.
+	SteamCacheDirs []string
 }
 
 // New assembles the router and hub around a daemon.
 func New(d *daemon.Daemon) *Server {
-	s := &Server{Daemon: d, Hub: NewHub()}
+	s := &Server{Daemon: d, Hub: NewHub(), transfers: transfers.New(), instance: newInstanceID()}
 	s.Hub.InitPayload = s.initPayload
 
 	// Live-forward activity log entries to connected dashboards.
@@ -46,6 +61,17 @@ func New(d *daemon.Daemon) *Server {
 	// Watcher auto-snapshots and async initial snapshots update the games
 	// state outside any HTTP handler — push those to dashboards too.
 	d.OnGameChanged = func(string) { s.BroadcastGamesUpdate() }
+
+	// Saves in the cloud from other devices: the ones waiting for an answer,
+	// and the ones taken without asking.
+	d.OnCloudOffers = func(offers []daemon.CloudOffer) { s.Hub.Broadcast("cloud-offers", offers) }
+	d.OnCloudPulled = func(p daemon.CloudPulled) { s.Hub.Broadcast("cloud-pulled", p) }
+
+	// Newly installed games the background scan found.
+	d.OnNewGames = func(games []daemon.NewGame) { s.Hub.Broadcast("new-games", games) }
+
+	// Syncing paused or resumed — from here, the CLI, the tray, or a timer.
+	d.P2P.Pause.OnChange(func(st syncpause.Status) { s.Hub.Broadcast("sync-pause", st) })
 	return s
 }
 
@@ -72,7 +98,12 @@ func (s *Server) peersPayload() map[string]any {
 			AppVersion    string `json:"appVersion,omitempty"`
 			BuildTimeMs   int64  `json:"buildTimeMs,omitempty"`
 			HasNewerBuild bool   `json:"hasNewerBuild,omitempty"`
-		}{Peer: p}
+			// What actually protects traffic with this device. Sent per peer
+			// rather than described once in the interface, because the answer
+			// differs per pairing and the reader cannot work out which case
+			// they are in from a general statement.
+			p2p.PeerProtection
+		}{Peer: p, PeerProtection: s.Daemon.P2P.PeerProtection(p)}
 		if b, ok := builds[p.ID]; ok {
 			entry.AppVersion = b.AppVersion
 			entry.BuildTimeMs = b.BuildTimeMs
@@ -105,20 +136,54 @@ func (s *Server) peersPayload() map[string]any {
 func (s *Server) wireSyncProgress() {
 	sync := s.Daemon.P2P.Sync
 	sync.Progress.OnSyncStart = func(gameID string, ev syncengine.ProgressEvent) {
+		s.transfers.Started(gameID, transferEvent(ev))
 		s.Hub.Broadcast("sync-start", map[string]any{"gameId": gameID, "data": ev})
 	}
 	sync.Progress.OnSyncProgress = func(gameID string, ev syncengine.ProgressEvent) {
+		s.transfers.Progressed(gameID, transferEvent(ev))
 		s.Hub.Broadcast("sync-progress", map[string]any{"gameId": gameID, "data": ev})
 	}
 	sync.Progress.OnSyncComplete = func(gameID string, ev syncengine.ProgressEvent) {
+		s.transfers.Finished(gameID, transferEvent(ev))
 		s.Hub.Broadcast("sync-complete", map[string]any{"gameId": gameID, "data": ev})
 		s.BroadcastGamesUpdate()
 	}
 	sync.Progress.OnSyncError = func(gameID string, ev syncengine.ProgressEvent) {
+		if ev.Error == "" {
+			ev.Error = "the sync failed"
+		}
+		s.transfers.Finished(gameID, transferEvent(ev))
 		s.Hub.Broadcast("sync-error", map[string]any{"gameId": gameID, "data": ev})
 	}
 	sync.Progress.OnConflict = func(gameID string) {
 		s.BroadcastPeersUpdate()
+	}
+	// A save emptied here is held back, or let go (syncengine/hold.go).
+	sync.OnHoldChanged = func(gameID string) {
+		s.BroadcastGamesUpdate()
+	}
+	// Something kept in the activity history: the activity page and the
+	// notifications list it as it happens.
+	sync.OnActivity = func(ev store.ActivityEvent) {
+		s.Hub.Broadcast("activity", ev)
+	}
+	// A peer finished pulling from us, or confirmed we match: the game's
+	// last-synced time moved with no sync running here to announce it.
+	sync.Progress.OnSyncConfirmed = func(gameID string) {
+		s.BroadcastGamesUpdate()
+	}
+}
+
+// Transfers reports what is moving between this device and others, for the
+// tray, which runs in the same process.
+func (s *Server) Transfers() transfers.Snapshot { return s.transfers.Now() }
+
+func transferEvent(ev syncengine.ProgressEvent) transfers.Event {
+	return transfers.Event{
+		Peer: ev.PeerName, Direction: ev.Direction,
+		BytesTransferred: ev.BytesTransferred, TotalBytes: ev.TotalBytes,
+		SpeedBytesPerSec: ev.SpeedBytesPerSec, Percentage: ev.Percentage,
+		Error: ev.Error,
 	}
 }
 
@@ -128,6 +193,14 @@ func (s *Server) wireSyncProgress() {
 // guard. Returns the bound address.
 func (s *Server) Start(port int) (string, error) {
 	r := chi.NewRouter()
+
+	// First, so that every answer carries it — a 404, a refusal, a preflight.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set(instanceHeader, s.instance)
+			next.ServeHTTP(w, req)
+		})
+	})
 
 	// CORS + preflight handling must be a TOP-LEVEL middleware: chi answers
 	// an unmatched method (the browser's OPTIONS preflight) with 405 before
@@ -163,9 +236,69 @@ func (s *Server) Start(port int) (string, error) {
 			s.Daemon.Log.Log("error", fmt.Sprintf("api server: %v", err))
 		}
 	}()
+	if err := s.answersLoopback(ln.Addr()); err != nil {
+		_ = s.httpServer.Close()
+		s.httpServer, s.listener = nil, nil
+		s.Daemon.Log.Log("warn", err.Error())
+		return "", err
+	}
 	s.writeAddrFile(ln.Addr().String())
 	s.recordBoundPort(ln.Addr().String())
 	return ln.Addr().String(), nil
+}
+
+// ErrLoopbackTaken is Start's answer when another program is what answers on
+// 127.0.0.1 at the port: the listen on 0.0.0.0 succeeded, but nothing local
+// would ever reach this daemon there. Callers try another port.
+var ErrLoopbackTaken = errors.New("another program answers on this port")
+
+// instanceHeader carries Server.instance on every response.
+const instanceHeader = "X-OpenSave-Instance"
+
+func newInstanceID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// answersLoopback asks 127.0.0.1 at the port just bound whether it is this
+// server, by the instance it marks its answers with.
+//
+// The daemon listens on 0.0.0.0, and on Windows that succeeds even while
+// another program holds 127.0.0.1 at the same port — the more specific
+// address then wins every local connection. The desktop app, the CLI and the
+// port check all dial 127.0.0.1, so all of them reached the other program;
+// the app took its web page for an empty OpenSave (no games, first-run
+// settings, a blank device name, and "i is not iterable" from a scan). A
+// BIOS update that installed a vendor utility serving on localhost was
+// enough.
+//
+// Only a connection that fails outright is let through: a firewall that
+// blocks loopback is reported by the desktop app's own check, which says what
+// to do about it. Anything that accepts the connection and does not answer as
+// this server — a page, a hang, a different OpenSave — is another program.
+func (s *Server) answersLoopback(addr net.Addr) error {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return nil
+	}
+	client := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+	}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/instance", tcp.Port))
+	if err != nil {
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			return nil
+		}
+		return fmt.Errorf("%w: 127.0.0.1:%d does not answer as OpenSave (%v)", ErrLoopbackTaken, tcp.Port, err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get(instanceHeader) != s.instance {
+		return fmt.Errorf("%w: 127.0.0.1:%d is answered by another program", ErrLoopbackTaken, tcp.Port)
+	}
+	return nil
 }
 
 // recordBoundPort stores the port actually listening in settings.
@@ -241,11 +374,49 @@ func (s *Server) Stop() {
 // own origin (http://wails.localhost), so without this the browser blocks
 // every non-simple request. Runs at the top level so the OPTIONS preflight
 // is handled before chi's per-route method matching returns 405.
+// allowedBrowserOrigins are the only web origins that may call this API.
+//
+// The app's own window is a browser: Wails serves the interface from these
+// origins and it fetches the API cross-origin, so they need CORS headers. No
+// other page does. The API used to answer every loopback request with
+// Access-Control-Allow-Origin: *, and loopback is not a boundary a browser
+// respects — a page on any website the user has open runs on this machine
+// too, and could read the settings (node ID, room code, relay URL), untrack
+// games, restore an old snapshot over a current save, or point the relay
+// setting at a server of its choosing. The default port is 8383, so there
+// was nothing to find first.
+//
+// The Steam Deck plugin and the CLI are not browsers: they send no Origin
+// header at all, and requests without one pass untouched.
+var allowedBrowserOrigins = map[string]bool{
+	"http://wails.localhost": true, // Windows: WebView2 cannot use a custom scheme
+	"wails://wails":          true, // macOS and Linux
+	"http://localhost:34115": true, // `wails dev`
+}
+
+// corsLocalhost handles browser cross-origin rules for the API.
+//
+// A request carrying an Origin this API does not recognise is REFUSED, not
+// merely denied CORS headers. Withholding the headers only stops the page
+// reading the reply; a "simple" request — a POST with no custom headers —
+// has already executed on the server by then, and several routes here act
+// on a bare POST. Refusing at the door is the only version that holds.
 func corsLocalhost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err == nil && isLoopback(host) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+		// On every response, including the ones to a request with no Origin.
+		// The headers below depend on the Origin, so a cached copy made without
+		// one must not be handed to a request that has one. Covers are cached
+		// for a week, and the app loads each one both as an <img> (no Origin)
+		// and with fetch (Origin): the <img>'s copy, reused for the fetch,
+		// fails the fetch's CORS check, and every retry after it.
+		w.Header().Add("Vary", "Origin")
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if !allowedBrowserOrigins[origin] {
+				writeError(w, http.StatusForbidden, "cross-origin access denied")
+				return
+			}
+			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		}
@@ -282,6 +453,12 @@ func (s *Server) initPayload() any {
 	payload["settings"] = s.settingsWire()
 	payload["games"] = s.gamesPayload()
 	payload["logHistory"] = s.Daemon.Log.History()
+	payload["cloudOffers"] = s.Daemon.CloudOffers()
+	payload["newGames"] = s.Daemon.NewGames()
+	payload["syncPause"] = s.Daemon.SyncPauseStatus()
+	if collections, err := s.Daemon.Store.ListCollections(); err == nil {
+		payload["collections"] = collections
+	}
 	return payload
 }
 
@@ -299,8 +476,11 @@ func (s *Server) settingsWire() map[string]any {
 
 	cloud, err := s.Daemon.Store.GetCloudConfig()
 	if err == nil {
+		// "ready" is on and with somewhere to send to (cloud.Ready). The UI
+		// says cloud backup is set up only when it is true.
 		out["cloudSync"] = map[string]any{
 			"enabled":             cloud.Enabled,
+			"ready":               cloudsvc.Ready(cloud),
 			"provider":            cloud.Provider,
 			"url":                 cloud.URL,
 			"username":            cloud.Username,
@@ -347,6 +527,24 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		}
 		branches[name] = map[string]any{"name": name, "snapshots": wireSnaps}
 	}
+	// When this game was last confirmed the same as each paired device's
+	// copy: peer id to ISO 8601. Never an error to the client — a game with
+	// nothing recorded and a game whose lookup failed both show "never",
+	// which is the honest answer in both cases.
+	lastSyncedWith, _ := s.Daemon.Store.GameLastSynced(g.ID)
+	if lastSyncedWith == nil {
+		lastSyncedWith = map[string]string{}
+	}
+	// Play: when it was last played here and for how long in all, and
+	// whether it is being played now (see daemon/sessions.go).
+	play, _ := s.Daemon.Store.PlayStatsFor(g.ID)
+	lastPlayed, playingSince := "", ""
+	if play.LastPlayedMs > 0 {
+		lastPlayed = time.UnixMilli(play.LastPlayedMs).UTC().Format(time.RFC3339)
+	}
+	if since := s.Daemon.PlayingSince(g.ID); !since.IsZero() {
+		playingSince = since.UTC().Format(time.RFC3339)
+	}
 	return map[string]any{
 		"id":                 g.ID,
 		"name":               g.Name,
@@ -358,10 +556,36 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		"appId":              g.AppID,
 		"exePath":            g.ExePath,
 		"coverUrl":           g.CoverURL,
-		"syncIgnore":         g.SyncIgnore,
-		"branches":           branches,
-		"createdAt":          g.CreatedAt,
+		// Whether the art cached for this game is explicit, so the client can
+		// blur it until someone asks to see it. An <img src> cannot read a
+		// response header, so it travels with the game rather than the image.
+		"coverExplicit":  s.CoverIsExplicit(coverKeyFor(g)),
+		"syncIgnore":     g.SyncIgnore,
+		"branches":       branches,
+		"createdAt":      g.CreatedAt,
+		"lastSyncedWith": lastSyncedWith,
+		// The save folder is not there — gone, moved, or on a drive not
+		// plugged in. Nothing is watched or synced for it until it is back.
+		"savePathMissing": daemon.SaveFolderMissing(g.SavePath),
+		"lastPlayedAt":    lastPlayed,
+		"playingSince":    playingSince,
+		"playtimeMs":      play.PlaytimeMs,
+		"playSessions":    play.Sessions,
+		// Whether the game is installed on this device: "found", "not-found",
+		// or "" when there is no telling (daemon.InstallState). A game that is
+		// not here is one nobody plays here, which is why it shows no play.
+		"installed": s.Daemon.InstallState(g),
+		// Every save file went at once here, and the game is held back from
+		// the other devices until someone says whether that was meant.
+		"emptied": emptiedOf(s.Daemon, g.ID),
 	}
+}
+
+func emptiedOf(d *daemon.Daemon, gameID string) any {
+	if e, held := d.EmptiedSaveOf(gameID); held {
+		return e
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/store"
 )
 
@@ -66,7 +67,7 @@ func ZipRootsCapturing(primary string, extra map[string]string, outPath string) 
 		return nil, nil, err
 	}
 	defer f.Close()
-	w := zip.NewWriter(f)
+	w := newSnapshotWriter(f)
 
 	primarySkipped, primaryFiles, err := archiveInto(w, primary, "", "")
 	skipped = append(skipped, primarySkipped...)
@@ -195,6 +196,16 @@ func rootOfEntry(entry string) (string, bool) {
 // restore — the operation someone reaches for when things have already gone
 // wrong.
 func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []string, err error) {
+	// Every location this can write into, dropped from the hash cache. See
+	// UnzipTo for why this is defence in depth rather than the guard that is
+	// currently doing the work.
+	defer func() {
+		delta.InvalidateRoot(primary)
+		for _, path := range extra {
+			delta.InvalidateRoot(path)
+		}
+	}()
+
 	roots, err := ArchivedRoots(zipPath)
 	if err != nil {
 		return nil, err
@@ -230,7 +241,7 @@ func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []st
 		if err := os.MkdirAll(primary, 0o777); err != nil {
 			return nil, err
 		}
-		if err := clearSavePath(primary); err != nil {
+		if err := clearSavePathGuarded(primary); err != nil {
 			return nil, fmt.Errorf("clear %s: %w", primary, err)
 		}
 	}
@@ -258,7 +269,7 @@ func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []st
 				if err := os.MkdirAll(target, 0o777); err != nil {
 					return nil, err
 				}
-				if err := clearSavePath(target); err != nil {
+				if err := clearSavePathGuarded(target); err != nil {
 					return nil, fmt.Errorf("clear %s: %w", target, err)
 				}
 				cleared[name] = true

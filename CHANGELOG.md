@@ -3,6 +3,1535 @@
 All notable changes to OpenSave are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.4.0] — 2026-09-30
+
+Everything from the four 2.4 betas below, now stable. Coming from 2.3.1, it
+is the biggest update OpenSave has had.
+
+Saves that travel between your devices over the internet are sealed so that
+only those two devices can read them — not the relay, and not anyone else who
+has your room code — and each device shows, pairing by pairing, whether that
+protection is on. Both devices need 2.4 for it, and an internet pairing made
+on an earlier version has to be made again; the app tells you which.
+
+Your saves are safer in ways that were hard to see from the outside. A deleted
+save no longer comes back, an emptied save folder no longer empties your other
+devices, "Keep both" keeps both, a conflict that was never there is no longer
+raised, and snapshots are checked in the background and put back from their
+cloud copies when they are damaged.
+
+Around that, the app is new: a Home that says where your saves stand, an
+Activity timeline, notifications, a library you can lay out and sort, a pause
+button, keyboard and controller navigation, a light theme and accent colours,
+Switch games named from your emulators, and a new Windows installer. There is
+a Mac app for the first time.
+
+Since the last beta: a cloud backup that fails is sent again, OpenSave notices
+when another program answers on its port, and the relay's certificate error
+names the likely cause.
+
+One thing to know before you update: 2.3.1 cannot read what 2.4 writes. If
+you might want to go back, copy the `.opensave` folder in your home folder
+first.
+
+### Fixed
+
+- **A cloud backup that fails is sent again.** A snapshot whose upload failed
+  — the network down, a name that would not resolve, a connection that
+  stalled — was logged and forgotten, so the backup went without every
+  snapshot taken while the network was out, unless someone pressed "Upload
+  local snapshots" by hand. Failed uploads are now kept, and sent again once
+  the cloud can be reached, a few at a time.
+- **The relay's certificate error names the likely cause.** "Certificate
+  signed by unknown authority" means something on the network is answering
+  in the relay's place — a sign-in page, or a filter that inspects secure
+  connections. The log used to suggest checking the clock, which fails
+  differently.
+- **OpenSave notices when another program is answering on its port.** On
+  Windows, a program listening on 127.0.0.1 at OpenSave's port — often a
+  hardware or vendor utility that comes with a driver or BIOS update — took
+  every local connection meant for OpenSave, while OpenSave itself still
+  started without complaint. The window then showed that program's answers as
+  an OpenSave with nothing in it: no games, first-run settings, a blank device
+  name, and "i is not iterable" from a scan, however often it was reinstalled.
+  Nothing was lost; the window was simply not talking to OpenSave. It now
+  checks that the port answers as itself and moves to a free one if not, and
+  the window says plainly when something else answers rather than showing an
+  empty library.
+
+## [2.4.0-beta.4] — 2026-09-27
+
+A beta mostly about conflicts, and one of them serious: if you sync between
+devices and have ever answered a conflict with "Keep both", update.
+
+Keep both no longer empties your saves. Answered on both devices, it moved
+each onto the other's version, on a branch of its own; the two then followed
+each other's branches, read the empty folders as every file deleted, and
+passed that on. Both saves were left empty, their versions only in the
+history. Keep both now does what it says: yours stays, and the other device's
+is kept beside it on a branch. Two devices syncing a game at the same moment,
+or a save read while the game was still writing it, no longer raise a
+conflict that was never there. And a conflict can wait: "Decide later" puts
+the question aside until you open the game.
+
+A new install no longer calls cloud backup on when it has nowhere to send
+anything, and the setup guide asks for it. Steam has changed how it answers
+some App IDs, and OpenSave had begun calling well-known games — Elden Ring
+among them — "not a Steam game"; it reads the answer properly again.
+
+The game you are playing is marked on Home and in the sidebar, Launch starts
+the program you set, and there are eighteen accent colours, with some
+movement to go with them — which Settings → Appearance → Animations switches
+off.
+
+### Added
+
+- **The game you are playing shows it.** While a tracked game is running,
+  its tile on Home is outlined in green and says "In session" — and for how
+  long, once it has been a minute — its name is green in the sidebar with
+  a controller beside it, and its page says when the session began. It
+  used to say "Playing now" in the colour of a sync, with a spinning sync
+  icon, though nothing was syncing.
+- **Eighteen accent colours.** Settings → Appearance adds red, amber, gold,
+  yellow, lime, emerald, cyan, sky, indigo, purple, pink and slate to the
+  six there were. The text on a light accent — a primary button, a badge,
+  the tick in a checkbox — is drawn dark where white would not read, and
+  the accent used as text on the page is deepened in the light theme and
+  lifted in the dark one until it reads. The six there were look exactly
+  as they did.
+- **Movement that says what happened.** Buttons give a little when pressed.
+  The notifications panel unfolds from the bell and folds back into it, its
+  items arriving one after another, and the badge pops when its count
+  changes. Dialogs and messages leave the way they came instead of
+  vanishing, and the messages left close up rather than jumping. Pages
+  cross-fade. The sidebar, the tab bars and the two- and three-way switches
+  slide their mark to what you pick. And a game's tile shows a tick for a
+  moment when a sync of it has finished. All of it follows Settings →
+  Appearance → Animations, and the system's setting to reduce motion.
+
+### Changed
+
+- **A conflict can wait.** The question used to fill the window until it
+  was answered, so nothing else could be looked at first — not even the
+  game's own snapshots. "Decide later" (or Esc) puts it aside; nothing of
+  that game syncs meanwhile, Home and the bell say it is waiting, and it
+  comes back when the game is opened. The two sides are shown with the right
+  device icons, a handheld as a handheld.
+- **`opensave` says whether cloud backup is working.** The overview gains a
+  `cloud` line: backing up, and to where; not set up; or off. `--json`
+  carries `cloudEnabled`, `cloudReady` and `cloudProvider`.
+- **Counts read as English.** "1 snapshot", "3 games" — no more
+  "snapshot(s)", in the app or the command line. The status bar counts
+  devices online rather than peers, as the rest of the app does.
+- **A handheld looks like one.** A device set to "Handheld (ROG Ally / Legion
+  Go)" showed as a computer on the Devices page; only a Steam Deck showed as
+  a handheld.
+- **Settings → Appearance lines its labels up across the top.**
+- **Launch starts the program you set.** A game with an executable set is
+  started with it, even when it also has a Steam App ID — which is often
+  there only for its name and cover, and launched a different copy through
+  Steam, or asked to install one. It starts in its own folder, where games
+  look for their files, and a shortcut or batch file opens as a double-click
+  would. Games with no program set still launch through Steam.
+- **A game kept outside Steam learns how it is started.** Played once from
+  its own folder — a copy in `D:\Games`, say — it remembers the program that
+  ran, and Launch starts that from then on. The program is the one that ran
+  for most of the session, not the small one that started it or the crash
+  reporter beside it. Games Steam has installed are left to Steam, and a
+  program you set yourself is never replaced.
+- **Launch says when Steam does not have the game.** It used to open Steam,
+  which offered to install it. Now it says the game is not installed in
+  Steam here, and where it was found instead if it was. A program that has
+  gone — uninstalled, a drive unplugged — is said to be gone.
+- **"Not found on this PC".** A game with a Steam App ID that Steam here
+  does not have, and that is in no folder games are kept in, says so on its
+  page and in Activity — which is why it shows no play here — and offers no
+  Launch. Only said when it is certain: a game with no App ID, or on a
+  machine with no Steam, is never reported missing. `opensave status` says
+  it too, and `--json` carries `installed`.
+
+### Fixed
+
+- **Answering a conflict with "Keep both" on both devices no longer empties
+  both saves.** Keep both — the recommended answer — moved each device onto
+  the other's version, on a branch named after the other device. The two
+  then followed each other's branches, starting each one empty, and a sync
+  read the empty folder as every file deleted here and deleted them on the
+  other device too. Both versions were still in the history, but both saves
+  were left empty. Keep both now does what it says: your version stays, the
+  other device receives it, and theirs is kept here on a branch you can
+  switch to. And a device following another onto a branch it has not got
+  fetches that device's save rather than reading its own empty folder as a
+  deletion — which switching branches by hand could also set off.
+- **A save deleted the moment it arrives stays deleted.** A file that came
+  from another device and was deleted here before that sync had finished was
+  missing from the record of what the two devices share, so the next sync
+  took the other device's copy for a new file and brought it back, instead
+  of deleting it there. It showed up as a rare failure in the test suite
+  under load.
+- **Well-known games are no longer called "not a Steam game".** Steam has
+  begun answering some App IDs under the id of an edition — Elden Ring's
+  1245620 comes back as 2855530 — and OpenSave read only the id it asked
+  about. The App ID field told people a correct number was wrong, and a scan
+  could lose those games' names. The answer is now read by the app it says
+  it is about.
+- **Cloud backup is only called set up when it is.** A new install has cloud
+  backup switched on with no folder or account chosen. Home showed it as
+  "Local Folder", the setup guide counted it as done and never asked, and
+  every snapshot was logged as "uploading" and then went nowhere. Home now
+  says "Not set up" until a folder is chosen or an account signed in, the
+  setup guide asks, and nothing claims to upload until there is somewhere to
+  upload to.
+- **Quitting as a game is tracked or a snapshot starts waits for it
+  properly.** Shutdown waits for snapshots and cloud copies still being
+  written, and one that started just as it began waiting was counted in a
+  way that could be missed, or could crash the app on its way out.
+- **Syncing a game from both devices at once no longer raises a conflict.**
+  A device part-way through taking a sync was asked for its files by the
+  other a moment later, and described a save half-way between two states —
+  some files new, some old. The other device read that as the save having
+  changed on both sides and asked which to keep, over a save only one of
+  them had touched. It needed the two syncs to cross, which a new device's
+  first sync meeting the other's own does. A device now finishes writing a
+  save before it describes it; one still writing says so, and is asked
+  again when it has finished (`opensave sync` counts it as queued).
+- **A save taken while the game was still writing it no longer causes a
+  conflict.** The other device pulled the half-written save; the game
+  finished; and the next sync saw both sides changed. A device now
+  remembers what it handed over, so the other holding exactly that is known
+  to hold a state both had.
+- **A device that simply has fewer of the same files is not asked about.**
+  With no history between two devices, one holding part of the other's
+  save — every file it has identical — was taken for a different save.
+  It is behind, and is brought up to date. A device that deleted a file
+  the two once shared, or changed one, still counts as having moved.
+- **A new page opens at its top.** Moving between pages kept the scroll
+  position, so Activity could open half-way down because Settings had been.
+- **The Changelog no longer sits in one corner of a large window.** Full
+  screen, it hugged the left edge with most of the window empty beside it;
+  it is now a column of a readable width in the middle.
+- **A save folder that cannot be read is no longer taken for an empty one.**
+  When the folder itself could not be listed — its permissions refusing it,
+  or it gone for a moment — it read as a folder with nothing in it. The game
+  was then held back as if every save file had been deleted, and stopped
+  syncing though its save was all there; and a sync that read it that way
+  told the other device every file had been deleted, which deleted them
+  there. Such a folder now fails to read, and nothing is synced or held
+  until it can be.
+- **An edit made on both devices to a game's second save folder is no
+  longer lost.** When the other device's word that a sync had finished
+  arrived late — after both edits — one device's change quietly replaced
+  the other's, with no conflict raised. It is a conflict now, as it always
+  should have been. Found by a test that failed only on a slow machine.
+- **A file in a game's main save folder could be deleted because of its
+  second one.** Files pulled into a second save folder were recorded as
+  shared in the main folder too, so a file of the same name the game later
+  wrote into its main folder — a `settings.ini` in both, say — read as one
+  the other device had deleted, and was deleted. Each folder's files are
+  now recorded against that folder.
+- **A backup in a local or shared cloud folder is never half a backup.** It
+  was copied in under its final name, so another device reading the same
+  folder — a NAS, a synced folder — could list and restore one still being
+  copied, and an interrupted copy stayed there looking whole. It now appears
+  only once complete. Downloads work the same way: one that failed used to
+  take the copy already on this device with it.
+- **An edit to a game's second save folder no longer raises a conflict when
+  only one device made it**, after the other device's word that it had
+  taken the last change went missing.
+- **A game installed without a launcher is seen being played.** A game kept
+  in a Games folder at the root of a drive — `D:\Games\Elden Ring` — or in
+  your own Games folder was never matched to its install, so playing it
+  started no session. Those folders are now looked in.
+- **A game started through a program of its own is seen being played.** Many
+  games start with a small program that hands over to the real one and
+  exits; with that one chosen as the game's program, the game was seen for
+  a few seconds or not at all. Anything running from the chosen program's
+  folder now counts.
+
+## [2.4.0-beta.3] — 2026-09-26
+
+The biggest beta yet, and the one that has been waiting as beta.3: it was
+never published, so everything since beta.2 is here.
+
+Your saves are safer. A save folder emptied by an uninstaller or a game
+resetting itself no longer empties your other devices — the game is held back
+until you say whether that was meant. Snapshots are checked in the background
+and, with cloud backup on, a damaged one is put back from its cloud copy.
+Older snapshots share the files they have in common, so a game with many save
+slots takes a fraction of the room.
+
+OpenSave tells you more. A bell keeps what happened and what is waiting on
+you, and the same news reaches your desktop when the app is not in front. An
+Activity timeline shows every sync, snapshot and play session, and where each
+game was last played. Switch games are named and given covers from what your
+emulators already know, and match across emulators and devices by title id.
+
+It is easier to use: a Home that says where your saves stand, a library you
+can lay out, filter and group, a pause button, keyboard shortcuts, controller
+navigation, a light theme, and a Track folder that goes straight to the
+folder picker. The Steam Deck panel and the command line catch up with all of
+it.
+
+A fix for a way a paired device could lose a save file: untracking a game
+while a sync was still running, then tracking it again, could make
+OpenSave send a deletion the other device never asked for. If you sync
+between devices, update. And on Windows, a game's watch could freeze and
+stop sending that game's saves on as they happened; it no longer does.
+
+The Windows installer is new. Run it over an existing install and it asks
+whether to reinstall or remove OpenSave; it can start OpenSave when it
+finishes, and with Windows; it closes a running copy properly first; and it
+matches the app. Sidebar cover art that failed to load once now comes back,
+and `opensave install --uninstall` takes the command-line tool off again.
+
+### Added
+
+- **The Steam Deck panel catches up.** The Game Mode panel had not changed
+  since August, and it showed. Now:
+  - It says what a sync did: synced, already in sync, or why not — paused,
+    held, or no other device online. "Sync all now" used to say "Sync
+    started" even when nothing could sync.
+  - It stays quiet when your other devices are simply off. With "Sync around
+    gameplay" on, a Deck away from home used to report a failed sync at every
+    game launch and exit.
+  - Syncing can be paused and resumed from Game Mode, and the panel shows
+    when it is paused.
+  - An emptied save can be answered from Game Mode — put the files back, or
+    delete them on your other devices too — and so can a conflict in one of
+    a game's extra save folders. Both used to wait for Desktop Mode.
+  - It counts devices online, not devices paired.
+  - Every game has its cover, Switch games included.
+  - "Start sync service" finds an `opensave-cli` installed with install.sh,
+    in `~/.local/bin`, which Decky's own PATH leaves out; it used to find
+    only the Flatpak.
+
+  It is now version 2.4.0, like the app. It has still not been run on a
+  Steam Deck by anyone who wrote it.
+
+- **The command line catches up with the app.**
+  - `opensave offers` lists the games your other devices sync that this one
+    was set to ask about, and `offers place <game> <folder>` or `offers
+    decline <game>` answers them. The setting could be turned on from the
+    command line, but an offer could not be answered there, so those games
+    never synced on a device without the app.
+  - `opensave conflicts` also lists conflicts in a game's extra save folders
+    (`--locations --json` for scripts), and `opensave resolve <game>
+    keep-local|keep-remote --location <folder>` settles one; a game whose only
+    conflict is in one folder needs no `--location`.
+  - `opensave activity [<game>]` shows the Activity timeline: what came from
+    and went to your other devices, snapshots, play and restores, by day.
+  - `opensave sync` says what it did, and exits non-zero when nothing could
+    sync (paused, or no other device online) or something failed. It used to
+    print "Sync started" and exit 0 whatever happened.
+  - The man page covers every command again; it had not been updated since
+    August and was missing thirty-eight of them, the whole cloud section included.
+
+- **Notifications on the desktop.** What OpenSave tells you in its window
+  now also reaches you when the window is not in front — hidden in the tray,
+  minimised, or behind something else: a save arriving from another device,
+  a newer save brought from the cloud, a new game found, a device asking to
+  pair, a conflict, an emptied save. On Windows it comes from OpenSave, with
+  the game's cover across the top and its name, and clicking it opens that
+  game (or the Devices page, for pairing); on Linux and macOS it is the
+  system's own notification. Each follows the switch for its event, "Stay
+  quiet while a full-screen game is running" holds them back over a game,
+  and Settings → Notifications can turn them off. "Show me" there sends one
+  to see.
+
+- **Tracking a folder by hand goes straight to it.** "Track folder" opens the
+  folder picker at once, and what you pick is then named — with a name
+  suggested from the path: the game's own folder rather than "Saves" or a
+  Steam account's number, and a Switch game's name as its emulator shows it.
+  A single save file can be picked instead from the same step. A folder
+  dropped on the window, the sidebar's +, and Ctrl+K go the same way.
+  `opensave add <path>` names it the same way from the command line.
+  "Auto-scan" is now "Scan saves", and is the highlighted button on Home.
+
+- **Switch games by name and cover, not by Title ID.** A scan found each
+  Switch save as "Citron Switch Emulator - Title ID: 0100F2C0115B6000".
+  Now it is "The Legend of Zelda: Tears of the Kingdom", with its icon as the
+  cover — read from what the emulators on this device already keep about
+  every game in their list (the yuzu family's game-list cache, including
+  Citron's and Eden's for ROM folders, and Ryujinx's game data), so nothing
+  is looked up online and the name is the one the emulator shows. Games
+  tracked under the old made-up name are renamed too; a name you typed is
+  left alone. A game no emulator here has listed keeps its old name.
+
+  A Switch game is also the same game everywhere now. It is tracked under its
+  title id, so a save in Citron on a PC and in Eden on a Steam Deck sync with
+  each other without linking them by hand, as do copies tracked before this
+  under different names once both devices have this version. And a save arriving from another device goes into
+  this device's own emulator profile: it used to land under the other
+  install's profile id, a folder the emulator here never reads.
+
+- **The setup guide can be brought back.** It greets a new install whose
+  library starts empty; anyone who put it away, or set up before it
+  existed, can show it again from Settings → Library or Ctrl+K ("Show the
+  setup guide").
+
+- **Notifications, in one place.** A bell in the title bar keeps everything
+  worth telling you, with a count on it: what is waiting on you — a save
+  that needs a decision, an emptied save, a device asking to pair, a newer
+  save offered from the cloud, games found, a folder gone, a snapshot that
+  cannot be restored, an update — and what happened lately, such as a save
+  arriving from another device or brought from the cloud. What happened is
+  unread until you have opened the bell; what waits on you stays until it
+  is dealt with. Each one opens where it is dealt with. A save arriving from
+  another device is also said in the corner — once in a while for each game,
+  not at every save — and can be turned off in Settings → Notifications,
+  where "Show me" plays through how each kind of notification appears.
+
+- **Pause syncing from Home, and pick linked copies by their covers.** Home
+  has a Pause syncing button beside Sync all — for 15 minutes, an hour,
+  three hours or until you resume — which turns into Resume, with the time
+  left, while the pause lasts. Linking a game's copies now shows every
+  candidate by its cover art, with where each copy lives, instead of a list
+  of names. The status card's shield, which looked like an antivirus, is a
+  save icon now.
+
+- **An activity timeline.** Activity now opens on what happened to your
+  saves, game by game: where each game was last played — here or on which
+  of your other devices — when it was last snapshotted and synced, and how
+  long it has been played here; and below that every sync ("Got 3 files
+  from Steam Deck"), snapshot, play session, restore and anything that
+  needed you, grouped by day and filterable by game and by syncs,
+  snapshots or play. "All activity" on Home opens it. The full technical log is one click away as
+  before.
+
+- **An emptied save folder asks before it empties your other devices.**
+  When every save file of a game goes at once — an uninstaller, a game
+  resetting its saves, the wrong folder cleared — syncing that used to
+  delete the files on every other device too. Now the game is held back
+  instead: nothing is synced, your other devices keep their copies, and the
+  game's page asks. "Put them back" restores them from the newest snapshot
+  that has them, and fetches anything newer from your other devices;
+  "Delete them on my other devices too" lets the deletion go, each device
+  keeping a snapshot first. Putting the files back by hand ends the question
+  too. A device also no longer takes another's empty folder as every file
+  deleted unless it was confirmed there, which covers a device on an older
+  version. `opensave emptied` lists and answers the same.
+
+- **Snapshots take far less room when a game keeps many save files.**
+  Every snapshot used to be a complete copy of the save, so a game with
+  twenty save slots that changed one between snapshots stored all twenty
+  again each time. Now older snapshots keep the files they have in common
+  once: in the background every few hours, each large file an older
+  snapshot holds is kept a single time per game and shared by every
+  snapshot that holds it. Nothing else changes — restoring, browsing a
+  snapshot's files, comparing, uploading to the cloud, sending to another
+  device and exporting all get the complete snapshot back, exactly as it was
+  taken, and what leaves this device is the same as before. The newest
+  snapshot of each branch and every pinned one keep complete copies of their
+  own, a snapshot is only changed over once the shared version has been read
+  back and found identical, and the daily check reads every shared file back
+  against its checksum. Settings → Storage and `opensave storage` show what
+  the snapshots take on disk and what sharing saves; "Share now" and
+  `opensave storage --compact` do it straight away.
+
+- **Snapshots are checked, so a backup is known to work before it is
+  needed.** Once a week OpenSave reads every snapshot back in full and
+  compares each file with its checksum, and it does the same before any
+  restore — so a damaged archive is refused before the save folder is
+  touched, rather than found half-way through putting a save back. A
+  damaged snapshot is marked on its game's page and said on Home and
+  behind the bell. Settings → Storage shows when they were last checked,
+  can check now, and sets how often it happens by itself — every day to
+  every month, or never — as can `opensave verify` and
+  `opensave config set verify-every`.
+
+- **A snapshot that cannot be restored can be fixed, or let go.** With
+  cloud backup on, each snapshot was uploaded as it was taken, so a check
+  that finds an archive deleted or damaged fetches the cloud's copy, checks
+  it and puts it back by itself. What has no copy anywhere is listed by
+  game in Settings → Storage, with "Look for copies in the cloud" to try
+  again and "Remove them from the history" to drop the records of saves
+  that no longer exist; `opensave verify --repair` and `--remove-damaged`
+  do the same.
+
+- **Play sessions.** OpenSave notices when a tracked game is running — by
+  its launch program, its Steam install folder, or, on Linux and the Steam
+  Deck, the Steam app it was started for — and when it closes, the save as
+  you left it is kept as a snapshot named for the session ("After playing
+  (1 h 12 min)") and sent on to your other devices. Nothing is taken when the
+  save did not change; the watcher's own snapshot of the last save is named
+  for the session rather than copied. Games show "Playing now", when they
+  were last played and for how long in all, and the library can be sorted
+  by recently played. `opensave wrap <game> -- <command>` runs a game the way
+  Ludusavi's wrap does — the newest save from your other devices first, the
+  snapshot and sync after — for a game's Steam launch options:
+  `opensave wrap hades -- %command%`. `opensave sessions` lists what was
+  played and when.
+
+- **Your other devices' newer saves come to you through the cloud.** Cloud
+  backup used to be one-way: every device uploaded its snapshots, and none
+  ever looked at the others'. So the thing a cloud copy is best at — getting
+  a save onto one machine while the one that made it is switched off — only
+  happened if you opened the cloud screen and knew to look. OpenSave now
+  checks when it starts and every few minutes after. A newer save from
+  another device that carries on from the one you have, when you haven't
+  played here since, is put in place on its own, the way syncing between
+  two devices that are both on already works. Anything else — both devices
+  played, or you'd rather decide — is asked about in a card that says which
+  device and when, with this device's save kept as a snapshot if you take
+  the other one. The terminal has the same: `opensave cloud check`, `take`
+  and `skip`. It can be switched off in Settings. Asked for in GitHub
+  issue #12.
+
+  Each device keeps a small note beside its backups saying which snapshot
+  is its current save, because "the newest backup" is not always the newest
+  save: a device keeps a copy of its save before replacing it, and that copy
+  is dated after the save that replaced it. Older versions ignore the notes.
+
+- **Choose how your library looks, and filter it.** Games can be shown as
+  wide banners or as tall box art, as many to a row as fit or a number you
+  set, small, medium or large — from Settings → General or the View button
+  on the library, applied as you choose. A game with no tall art shows its
+  banner whole rather than a cropped strip of it. The library can be
+  searched by name and narrowed to games that need attention, are syncing,
+  have auto-sync off or have no snapshot yet; only the filters that would
+  narrow it are shown. It can be sorted by name, recently changed, recently
+  synced, needs attention first, most snapshots, most space or recently
+  added, and any of those turned around with the button beside it.
+
+- **Hold a game down to select it.** A long press on a game in the library
+  starts selecting, with that game picked — as does Ctrl-click; while
+  selecting, a click adds or removes a game, Shift-click takes in the run
+  from the last one picked, and Escape stops. The selected games can be
+  snapshotted, synced or added to Favourites together, as well as untracked.
+
+- **Favourites and collections.** Star a game from its page or its menu,
+  or group games into collections of your own ("Playing now",
+  "Roguelikes") from Collections… in the menu. Each shows as a chip beside
+  the library's filters, and combines with them. Collections are kept on
+  each device and change nothing about how a game syncs. In the terminal:
+  `opensave collection list|create|rename|delete|add|remove`.
+
+- **See where the space goes.** Settings → Storage → Space used: how much
+  each game's snapshots take, the biggest snapshots (deletable from there),
+  free space on the drive, and exactly what Clean up now would free — worked
+  out by the same rules the clean-up uses. `opensave storage` shows the
+  same. The button that used to be called Clean up now, under the default
+  limits, is now "Apply these limits to every game", which is what it did.
+
+- **A more useful tray menu.** Its first line says where things stand — a
+  game waiting on a decision, a pause and how long it has left, what is
+  syncing, or how many games are watched — and Recent activity shows the
+  last few things that went through or went wrong. New: Snapshot every game
+  now, before a reinstall or anything risky (also `opensave snapshot --all`
+  and in Ctrl+K), and Pause syncing / Resume syncing.
+
+- **Transfers.** The status bar's Transfers button shows what is moving
+  between your devices right now — which game, which device, which way,
+  how far along and how fast — and the last transfers with whether each went
+  through. The same with `opensave transfers`.
+
+- **Choose what interrupts you.** Settings → General → Notifications: the
+  chime and the window coming to the front for pairing requests and
+  conflicts, and the messages for saves brought from the cloud and newly
+  found games, each on or off. On Windows, OpenSave also stays quiet while a
+  full-screen game or presentation has the screen; whatever it was waits on
+  screen for when you come back.
+
+- **Getting started.** A new installation shows three steps on Home — find
+  your saves, add your other devices, back up to the cloud — each ticked
+  off when it is actually done, wherever you did it. Steps can be skipped
+  and the guide put away. Existing installations don't see it.
+
+- **Drop a folder to track it.** Drag a save folder onto the window and the
+  Track card opens with it filled in and its name guessed from the folder.
+
+- **Pause syncing.** For 15 minutes, an hour, three hours or until you
+  resume — from the status bar, Ctrl+K, or `opensave pause 1h` and
+  `opensave resume`. While paused, no save moves between this device and
+  any other, in either direction, and nothing goes to or comes from the
+  cloud backup; snapshots are still taken. Your other devices see this one
+  as paused rather than failing, and when the pause ends everything catches
+  up on its own, cloud copies included. A pause ends when OpenSave
+  restarts, so one can't be forgotten for days.
+
+- **Compare two snapshots.** The compare button on any snapshot shows which
+  files differ between it and the one before — or any other two you pick —
+  file by file, with sizes: what a session changed, or which of two saves is
+  the one from before the boss. Instant however large the save, since it
+  reads the archives' own file lists. `opensave snapshot-diff` does the same.
+  Sizes under a kilobyte are now shown in bytes rather than "0.0 KB".
+
+- **See what a restore will do before it does it.** Restoring a snapshot
+  now shows, file by file, what changes, what comes back and what goes,
+  with sizes — or that your save already matches it. The same from the
+  terminal: `opensave rollback <game> <snapshot> --dry-run`.
+
+- **Pin a snapshot, and write a note on it.** A pinned snapshot is kept
+  through everything automatic — the per-game limits, the age rule, the
+  clean-up of old conflict branches — and doesn't use up a place under the
+  limits either. It can still be deleted by hand, which says it is pinned
+  first. A note is your own words about a snapshot ("good run, before the
+  boss"), shown under it; it doesn't replace the reason OpenSave gives for
+  taking it. On the game's Snapshots tab, and in the terminal:
+  `opensave snapshot-pin`, `snapshot-unpin` and `snapshot-note`, with
+  `opensave snapshots` showing both.
+
+- **Right-click a game.** In the library or the sidebar: open it, sync it,
+  take a snapshot, launch it, open its save folder, put back its latest
+  snapshot, or stop tracking it. The menu key on the keyboard opens it too.
+  The game stays outlined while its menu is open, so it is plain which one
+  the menu is for, and a game you point at in the library lifts off the page.
+
+- **Keyboard shortcuts.** Ctrl+K opens a quick switcher: type part of a
+  game's name, a page or an action — "snap hades" takes a snapshot of Hades
+  — and press Enter. Ctrl+F searches whatever is in front (a dialog, the
+  page, or else the library in the sidebar); Ctrl+1 to Ctrl+6 go to the
+  pages in the sidebar; Shift+F10 opens the menu for the focused game; and
+  ? lists them all. Dialogs now take the keyboard when they open, so Escape
+  closes one straight away. Ctrl+K also finds a snapshot by its note or the
+  comment you gave it — "boss" finds "Before the final boss" — and opens its
+  game with that snapshot marked. In the library, the arrow keys move
+  between games as they are laid out, and Home and End go to either end.
+
+- **Use it with a controller.** On a Steam Deck, a handheld, or a PC with a
+  gamepad, the D-pad or left stick moves to the nearest control in the
+  direction pressed, A presses it, B closes what is open or goes back, X
+  opens a game's menu, Y or Start opens Ctrl+K, and the shoulder buttons
+  change page. The arrow keys do the same, for a Deck in desktop mode where
+  Steam turns the D-pad into them. It turns itself on the first time a
+  controller is used and on a device set up as a Steam Deck or handheld;
+  Settings → Appearance → Controller turns it on or off for good.
+
+- **Undo instead of "Are you sure?"** Stopping tracking a game (one or a
+  selection), declining a game another device offered, excluding a scan
+  result and removing a save location no longer ask first. They happen as
+  far as the screen shows, with an Undo button for a few seconds, and are
+  carried out when those seconds are up. Deleting a snapshot or a branch,
+  unpairing a device and restoring still ask, since those cannot wait or be
+  taken back. After stopping tracking a game with cloud backup on, deleting
+  its cloud snapshots is offered in the same way rather than asked in a
+  dialog that arrived seconds later.
+
+- **A light theme, an accent colour, a size, and animations.** Settings →
+  General → Appearance: dark, light or matching the system; one of six
+  accent colours; the whole app drawn at 90% to 125%; and small movements as
+  pages, dialogs and the library come into view, which one switch turns off
+  (and which stay off while Windows asks apps to reduce motion — spinners
+  keep turning either way). Kept per device and applied as you choose.
+
+- **New games are noticed without you scanning.** The save scan used to run
+  only when you pressed the button, so a game installed since sat untracked
+  — no snapshots, nothing synced — until you thought to scan again. OpenSave
+  now scans in the background, a few minutes after it starts and every hour,
+  and tells you when it finds a game with saves it hasn't seen before. It
+  never tracks anything on its own: Review opens the scan and you choose.
+  The first background scan takes stock quietly, so games you chose not to
+  track aren't announced. It can be switched off in Settings.
+
+- **`opensave install --uninstall`.** It removes what `opensave install` —
+  or `install.ps1` — put on this computer: the program, the `os` and
+  `opensave-cli` shortcuts, and the entry on your PATH. Your snapshots and
+  settings are left alone. It asks first; with no terminal to ask in, it
+  refuses unless given `--yes`. The Windows uninstaller offers to run it.
+
+### Changed
+
+- **Settings save themselves.** There is no Save button to forget: a switch
+  or a choice is saved as you make it, and typed text when you leave the box
+  or press Enter. Only what you changed is sent, so a setting changed
+  somewhere else while the page was open is not put back. A value OpenSave
+  can't accept — an unencrypted relay address, say — is marked, with the
+  reason, and stays unsaved until you fix it without holding up anything
+  else. On Cloud Backup the two switches work the same way; the provider and
+  its details still have a button, which appears once there is something to
+  save, because a provider half filled in is not one to start backing up to.
+
+- **A cleaner look.** The emoji used as icons are replaced by one set of line
+  icons, drawn in the app's colours rather than the system's; buttons are
+  filled rather than outlined, with the one that matters on each screen in
+  the accent colour; the selected tab is underlined instead of a bright
+  white pill; on/off settings are switches and ticks are square, so the two
+  no longer look alike. Faint text — dates, hints, labels — is brighter, and
+  the longest hints show their first sentence with the rest a click away.
+  While the app is still receiving your library it shows the shape of the
+  page rather than the word Loading.
+
+- **Home says where your saves stand.** The three counters at the top —
+  games tracked, devices online, syncs running — read 0 most of the time
+  and never said the thing you open the app to check. They are now one
+  card: every game backed up, or which game needs a decision, or what is
+  syncing, with the devices, the cloud backup and the latest snapshot
+  beside it. Each game's card says the same for that game — synced when,
+  syncing, needs a decision, or auto-sync off — quietly when all is well,
+  and in colour only when it is worth a look; the green dot that sat on
+  every card is gone. The status bar says when the app has lost touch with
+  its background service instead of showing a grey dot. Along the foot of
+  the card, the latest things that happened to your saves — snapshots,
+  safety copies, syncs, each one click from its game — as many as fit on a
+  row; the card also says how much space the snapshots take, and opens
+  Settings → Storage from there, and warns when the drive they are kept on
+  has less than 1 GB free. The View menu can hide the activity.
+  Explicit cover art is blurred in the library as it already was in the
+  sidebar.
+
+- **Snapshots are listed by when and why.** Each was titled with its ID —
+  `snap_1790235804433` — and every row looked the same, including the
+  copies OpenSave keeps just before a sync or a restore replaces your save,
+  which are the ones you want after something went wrong. The list is now
+  grouped by day and led by the time; each row says why the snapshot exists
+  (the save changed, you took it, or a safety copy before a sync or restore)
+  with safety copies and your own marked out, and the newest is labelled.
+  Restore is no longer the loudest button on every row, and Delete stays
+  quiet until you point at it.
+
+- **Activity reads like a feed.** It showed the daemon's log as written —
+  monospace, oldest first, every routine line — so the one warning that
+  mattered sat among dozens about uploads and watched folders. It now shows
+  the newest first, by day, leaving out the routine unless you ask for
+  everything; problems have their own filter and count, there is a search,
+  and a game named in an entry is a link to it. The log exactly as written
+  is one switch away, and Copy puts what is shown on the clipboard for a
+  bug report.
+
+- **Cloud settings are all on the Cloud Backup page.** Backing up every
+  snapshot, bringing newer saves from your other devices and the Drive
+  folder ID were under Settings → Sync, and the Cloud Backup page said so
+  in a note. They are now on that page, under the provider, saved with it.
+
+- **Snapshots take less room.** Every file went into a snapshot
+  uncompressed, on the theory that saves are already compressed or small.
+  Plenty are neither — JSON, XML, an engine's own uncompressed format — and
+  every snapshot is a whole copy, so those cost several times their size for
+  every version kept, on your disk and in your cloud backup. Each file is now
+  compressed if a quick test shows it compresses, and stored as before if it
+  doesn't, so saves that are already compressed cost no extra time. Older
+  versions restore the new snapshots as they always have.
+
+- **The Windows installer asks what you want, and looks like the app.** Run
+  it when OpenSave is already installed and it says so, and offers the two
+  things you might have opened it for: install this version over the top, or
+  remove OpenSave from the computer. It used to reinstall silently, and
+  someone who downloaded it to uninstall had no way in at all.
+
+  Two checkboxes on the last page: start OpenSave now, and start it when
+  Windows starts. The second writes the same setting the app's own Settings
+  screen does, and the app picks it up, so the two never disagree.
+
+  It also closes a running OpenSave before touching anything — asking it to
+  shut down properly rather than killing it, since this is an app that writes
+  a database and zips save archives, and a snapshot interrupted halfway is
+  not a snapshot. Installing over a running copy used to leave files it could
+  not replace.
+
+  And it is dark, in the app's own colours, with the app's icon. It also
+  shows which version it is installing, down to the beta. Every beta used
+  to call itself plain 2.4.0, there and in Installed apps.
+
+### Fixed
+
+- **The Mac app opens.** macOS called 2.4.0-beta.2's app "damaged" and
+  offered only the Trash, and it was right: the app's Info.plist was not
+  valid (an "&" in the copyright line, written into it unescaped), and
+  nothing in the app was signed, not even with the free signature every
+  download needs. Both are fixed, and the build now refuses to publish a Mac
+  app with either problem. macOS asks about it instead, and you can allow it
+  under System Settings > Privacy & Security. The command-line tools for Mac
+  are signed the same way.
+
+- **Exports and imports follow linked copies and missing folders.** A
+  backup made before two copies of a game were linked now imports into the
+  game they became — it was skipped as untracked, or with "overwrite"
+  tracked all over again beside the linked one. And a game whose save
+  folder is missing or empty is exported from its newest snapshot, instead
+  of being skipped or written as an empty save that "overwrite" would then
+  restore over another device's.
+
+- **Deleting several files no longer stops a game syncing with a false
+  conflict.** A device's deletions reach another one file at a time, and a
+  sync of the other device's own could land between two of them — see its
+  save part-way through, take that for a change of its own, and stop on a
+  conflict nobody caused until it was resolved by hand. The other device
+  now remembers the deletions it was asked to make, and a save that differs
+  from the last agreed one only by those is not a change of its own: the
+  sync carries on and finishes the deletions.
+
+- **Covers in the sidebar and the scan show again, for good.** Both could
+  show a game's initials instead of its art for days at a time, while the
+  art was sitting on disk and the library beside them showed it. The app
+  loads each cover two ways — as a plain image, and by fetching it so it can
+  tell an explicit cover to blur — and the browser kept one copy of each
+  for a week. The plain image's copy lacks what a fetch needs, so every
+  fetch of that cover after it failed, retries included. Covers are now
+  marked so the two never share a copy, and a retry skips the cached one,
+  which clears any left from before.
+
+- **The cloud browser shows covers.** Its tiles used the Steam address
+  stored for each game, which the app cannot reliably load and which is
+  empty for a game with no App ID, so most tiles showed only a name while
+  the library beside them had every cover. They now get their art the way
+  the library does.
+
+- Home showed its first-run welcome for a moment on every launch, before
+  your library arrived.
+
+- The explanation under a switch in Settings was printed as large and as
+  bright as the setting itself. The encryption badges on the Devices page
+  and the Steam App ID check were drawn in colours meant for a light
+  background, and were hard to read on the dark one.
+
+- **Unpairing a device reaches it, even when it was off at the time.**
+  Unpairing tells the other device once. If it was asleep, or the relay
+  connection was reconnecting, it never heard — and it went on listing this
+  device as paired indefinitely, trying to sync and being turned away,
+  because the fallback it would have heard is refused between devices that
+  have authenticated. The goodbye is now repeated, signed as before, the
+  next time that device turns up, until it answers. Separately, an unpair
+  that did arrive could be undone a moment later: the other device, busy
+  recording that this one was online, wrote the pairing straight back. It
+  no longer does.
+
+- Saving Settings could undo a cloud backup change made since the page
+  was opened — switching cloud backup back on, for one — because it sent
+  its own copy of the cloud settings back with everything else. It no
+  longer sends them.
+
+- Windows paths in Activity and in error messages are shown as they are,
+  rather than with every backslash doubled (`D:\\Games\\Saves`).
+
+- **Heroic games on an SD card or another drive are found.** Scanning
+  looked for Wine prefixes only under your home folder, and Heroic asks where
+  to install — so on a Steam Deck with games on the SD card, or a desktop
+  with a second disk, their saves were never offered. OpenSave now reads
+  where Heroic says each game's prefix is, and also looks in the usual
+  launcher folders on every mounted drive, including both ways SteamOS has
+  mounted SD cards.
+
+- **The cloud screens saw only the first page of your backups.** Google
+  Drive answers a listing a hundred files at a time, and OpenSave read one
+  page — so past a hundred snapshots the cloud screens showed an arbitrary
+  hundred, a restore could not find the rest, and `opensave cloud push`
+  uploaded again what it could not see, which on Drive makes duplicates.
+  Dropbox and OneDrive paged the same way at their own sizes. Every page is
+  read now.
+
+- `opensave cloud restore` said the backup "landed as a snapshot" to roll
+  back to. It restores it over the live save, keeping the one it replaces;
+  it now says so.
+
+- **A slow answer from the daemon is no longer reported as no daemon.** A
+  terminal command that timed out said the daemon wasn't reachable and to
+  start it — while it was running, busy doing what was asked. It now says
+  the daemon did not answer in time.
+
+- A game could go on showing as syncing on the other device after the sync
+  had finished. The progress reports sent between devices on the same
+  network each went on their own, so a quick sync's "started" could arrive
+  after its "finished". They now arrive in the order they were sent.
+
+- **A save folder that went missing could wipe the save on your other
+  devices.** When a tracked save folder disappeared — deleted, moved by a
+  reinstall, on a drive or SD card not plugged in — OpenSave made it again,
+  empty, the next time it started, and the next sync read every file in it
+  as deleted and deleted them on your paired devices too. A missing folder is
+  now left missing: the game says "Save folder missing" on Home, on its page
+  and in `opensave status`, nothing is watched or synced for it, and it is
+  picked up again within a minute of coming back. Found by testing what a
+  restart does to a folder that has gone.
+
+- **Linking two copies of a game kept only one copy's history.** Linking
+  merges one tracked copy into another, and the merged copy's snapshots went
+  with its entry — gone from the app, while their files stayed on disk where
+  nothing listed, restored or cleaned them up. They now move to the game they
+  were linked into, on a branch named after the merged copy, and can be
+  restored from there. Its place in Favourites and collections moves too.
+
+- **Files you told OpenSave not to sync stayed yours only between paired
+  devices.** A save brought from another device through the cloud —
+  automatically, from an offer, or restored from the cloud browser — and a
+  backup file imported over a game put the other device's snapshot in place
+  whole, so a file this device ignores (its graphics settings, say) became
+  the other device's copy, or was deleted when that device had none. Those
+  files are now left exactly as they were. Restoring one of this device's
+  own snapshots still puts back everything, as the preview shows.
+
+- **Quitting could hang on Windows after a game wrote a lot at once.** A
+  burst of writes can overflow the folder watcher's buffer, and if the watch
+  was stopped then — quitting, untracking — the file-watching library lost
+  its own request to close and waited for it forever, so the app never
+  exited. The watcher now takes what the library is holding before closing
+  it, and gives up after five seconds regardless. Found as a test that hung
+  for 45 minutes, and reproduced on demand.
+
+- `opensave snapshot <game> -m "before the boss"` titled the snapshot
+  "-m before the boss". `-m` and `--message` are now taken the way git
+  takes them; the comment can still be given without either.
+
+- `opensave backup export` and `import` wait for the daemon to finish. They
+  gave up after 30 seconds like any quick command, so a large library was
+  reported as the daemon not answering while it carried on writing the file.
+
+- `opensave add` no longer logs "could not watch" for every game it adds
+  while the app is running. The command's own short-lived daemon was never
+  going to watch the game — the running one does, and did.
+
+- **A peer could lose a file when a game was untracked and tracked again.**
+  Untracking clears everything a game had agreed with its paired devices —
+  which files both sides hold, what they last converged on. A sync already
+  in flight could write some of that back a moment later, because the write
+  is an upsert and nothing asked whether the game was still tracked. Track
+  the same folder again and it produces the same id, so the game returned
+  holding a record from its previous life: anything removed from the folder
+  while it was untracked then read as a deletion to send, and the other
+  device — which had done nothing — lost the file. Writes that would create
+  such a record for a game that is not tracked are now refused at the one
+  statement they all go through. Found in a CI run on Windows and then
+  reproduced on demand.
+
+- **On Windows, a game's watch could freeze for good.** When a new folder
+  appeared in a save folder with more changes right behind it — a new
+  profile folder and the files written into it — the watcher could end up
+  waiting on itself. From then on that game's saves were no longer
+  snapshotted or sent to your other devices as they happened; the
+  fifteen-minute check still found them, late. Starting to watch a large
+  save folder while a game was busy writing to it could hang the same way,
+  and since OpenSave starts its watches one after another, startup stalled
+  there. Both came from asking Windows to watch a folder from the one place
+  that had to keep reading its changes. Found by a test that failed on
+  Windows two runs in five.
+
+- **`opensave install` no longer replaces someone else's `os` command.** It
+  puts a short `os` command next to the program, and if a file by that name
+  was already there it was overwritten, whatever it was. One that is not
+  OpenSave's is now left where it is, and the install says so.
+  `install.ps1` already worked this way.
+
+- **Cover art that failed to load once now comes back.** A cover was asked
+  for exactly once: if that request did not arrive — the daemon still
+  starting, a dropped connection, a first fetch that had to reach the
+  network — the game showed its initials for the rest of the session, with
+  the picture sitting in the daemon's cache the whole time. Because every
+  tile asks in the same moment, they all failed together, which made it look
+  like artwork in the sidebar was something nobody had built. It is asked for
+  again now, a few times, backing off. A game that genuinely has no cover is
+  still asked only once.
+
+- **Uninstalling leaves less behind.** It now removes the start-with-Windows
+  entry, which otherwise had Windows trying to launch a program that was no
+  longer there at every boot. It offers to remove the command-line tool as
+  well, if `opensave install` put one on this machine, and to delete your
+  snapshots and settings - defaulting to keeping them, and keeping them
+  without asking when it runs silently. Your games' own save files are never
+  touched either way.
+
+## [2.4.0-beta.2] — 2026-09-22
+
+Two things the first beta still let a relay room see are now sealed too:
+the folder your saves live in — which on Windows begins with your account
+name — no longer travels with every sync request, and a device no longer
+announces the full list of games it tracks to everyone holding the room
+code. If you tested beta.1 over the internet, update.
+
+Each game now says when it was last confirmed the same on each of your
+devices, in the app and in `opensave status`, so "is my Deck up to date?"
+has an answer. The terminal shows the encryption state of each pairing the
+way the app does, `install.sh` can uninstall what it installed, and the
+"auto-delete old backups" setting — which has been in Settings for a long
+time doing nothing — now does what it says. A macOS build is attached for
+the first time.
+
+### Security
+
+- **The save folder's path no longer travels in the clear.** Every manifest
+  request carried the game's name and its full local save path as query
+  parameters on the route — and the route is the one part of a relayed
+  message that has to stay readable, so the receiving device can tell what
+  is being asked. On a real machine that path begins with the account name.
+  The save bytes beside it were sealed; this was not. It travels in the
+  sealed body now. Found by sitting a third socket in a relay room and
+  reading what it was handed — there is a runnable demonstration of that in
+  `e2e/wire_demo_test.go` for anyone who would rather see it than be told.
+
+- **Your game list is no longer announced to the room.** Every time a device
+  said hello, and again every thirty seconds after, it sent everyone holding
+  the room code a map of every game it tracks: the id, the active branch,
+  the latest snapshot and the manifest hash. Presence is the one message that
+  cannot be sealed — it is how devices find each other before any key exists
+  — so this went out in the clear, to devices you never paired with, and
+  nothing on the receiving end ever read it. Branch names are typed by you,
+  which made this the last piece of personal data still visible on the wire.
+  Gone, along with the timer that re-hashed every tracked save to keep it
+  fresh. What a relay room can still see is the id of a game while it is
+  actually being synced, because the request has to name what it is asking
+  for. The eavesdropper test now checks presence for this too.
+
+### Fixed
+
+- **"Auto-delete old backups" now deletes old backups.** The setting has
+  been in Settings, with a retention period, since the app was rewritten —
+  and nothing read it. Ticking it changed a row in the database and
+  nothing else. It now does what it says: the snapshots OpenSave took on
+  its own (before a sync replaced files, when a game saved, at a conflict)
+  that are older than the chosen period are removed, shortly after start
+  and every few hours, and at once when the setting is switched on.
+  Snapshots you took yourself are never deleted by age, and neither is the
+  newest one on any branch, however old — a game you have not played in a
+  year keeps its one copy. `opensave prune` applies the same rule when the
+  setting is on. The label now says "automatic snapshots" rather than
+  "pre-sync backups", because that is what they are.
+
+- `opensave help` now lists `pair <node id>` beside `pair <host>`; the relay
+  form was only mentioned inside `opensave pair` itself.
+
+- **macOS downloads are on the releases page.** The macOS build has been
+  made and checked on every release since August; the publish step's file
+  list was never updated to attach it, so `SHA256SUMS` named three files
+  nobody could download and `install.sh` on a Mac failed at the download.
+  The `.dmg` and both tarballs are attached now, and a release refuses to
+  publish at all if any platform's build is missing rather than quietly
+  shipping without it. The build is not signed: macOS will ask you to allow
+  it under Privacy & Security the first time. Separately, the Debian and RPM
+  package names in `SHA256SUMS` now match what GitHub actually publishes
+  (it rewrites the `~` in a pre-release version to `.`), so the checksums
+  can be looked up.
+
+- **Tracking a game at the moment another device syncs it here no longer
+  fails with a database error.** Track "Game One" on the Deck while the
+  desktop's sync of Game One arrives, and the two create the game at the
+  same instant; the loser used to see "UNIQUE constraint failed: games.id
+  (1555)". It now says what happened — the other device added it, and
+  where it was put — so you can move its save path if the guessed folder
+  is not yours.
+
+### Added
+
+- **Each game says when it last synced with each device.** "Is my Deck up
+  to date with this save?" had no answer anywhere in the app: the one
+  last-synced time was per device, across every game, so the game that was
+  skipped read as fresh as the two that moved. Now a game's page lists every
+  paired device with the moment that device was last confirmed to hold the
+  same save — "Steam Deck synced 4 min ago", or "never synced", which is the
+  line that explains why a save is not on the other machine. The shelf shows
+  the most recent device per game. `opensave status` prints the same lines,
+  and its `--json` carries the raw stamps as `lastSyncedWith`.
+
+  The time moves on either side of a sync: when this device runs one, and
+  when the other device runs one and this side confirms the match, so the
+  window is told without anyone pressing anything. A device that does not
+  hold a game — untracked there, or waiting to be told where to keep it — is
+  not stamped for it, even though the two devices did talk.
+
+- **`opensave peers` shows whether each pairing is encrypted.** The same four
+  states the app shows — encrypted, encrypting shortly, not encrypted, direct
+  — from the same rule, so a terminal user on a Steam Deck in Game Mode is not
+  the one person who cannot see the thing this release is about. A pairing
+  that needs to be made again is named, with the two commands that do it.
+  `--json` carries the raw fields and the pairing fingerprint for scripts.
+
+  Along the way: devices in your relay room are listed under their own
+  heading with their ids, instead of nameless under "Found on this network"
+  with a port that meant nothing; a device you are already paired with is no
+  longer offered as one to pair; and `opensave pair <node id>` now pairs
+  through the relay, where it used to look for a machine on the LAN called
+  "node_…" and report that it could not be reached.
+
+- **`install.sh --uninstall` on Linux and SteamOS.** The installer can now
+  reverse itself: it stops the daemon, removes the binaries and aliases, the
+  user service, the autostart entry and the PATH line it added — and only the
+  ones that are OpenSave's, so a command of your own that happens to be called
+  `os` is left alone. It never touches `~/.opensave` — your settings, pairings
+  and every local backup stay where they are. To remove those too, `--purge`
+  says what it will delete, counts the backup files, and makes you type a
+  confirmation; piped from `curl` with no terminal to confirm on, it refuses.
+  Requested in #13.
+
+## [2.4.0-beta.1] — 2026-09-14
+
+Saves that travel between your devices over the internet are now sealed so
+that only those two devices can read them — not the relay, and not anyone
+else you have shared a room code with — and each device shows you, pairing by
+pairing, whether that protection is on.
+
+Underneath, a run of faults that were hard to see from the outside is fixed:
+a deleted save that could come back, a game whose sync could fall silent over
+one unreadable file, a watched folder that could drift and never recover, and
+a game re-tracked on one device losing its folder on the other. Before any of
+it shipped, a security review closed the doors it found.
+
+Both devices need this version for the encryption, and internet pairings
+made on earlier versions need to be made again — the app tells you which.
+
+### Added
+
+- **Every paired device now says whether what you sync with it is
+  encrypted.** Encryption over a relay depends on a key the two devices
+  exchange while pairing, and until this version pairing over a relay threw
+  that key away — so an encrypted pairing and an unencrypted one looked exactly
+  alike, on the screen that tells you the relay cannot read your saves. Each
+  device in the list now carries its own state, the room panel sums it up when
+  you join, and a pairing that has no key offers the one thing that fixes it.
+  Devices on your local network are shown as what they are — a direct
+  connection that never touches a relay — rather than as a failure to encrypt.
+
+  The badge is computed from the same condition the sending code uses, so it
+  cannot claim a protection that is not actually being applied.
+
+- **Self-hosting a relay now asks instead of expecting flags.** Run
+  `install-relay.sh` with no options on a terminal and it walks through the
+  domain name, the port, cover art and Google Drive sign-in, explaining what
+  each is for and why you might skip it, then shows a summary before changing
+  anything. Nothing is echoed while you type a key. Every answer is still a
+  flag for anyone scripting it, and piping the script into `bash` never
+  triggers the questions — stdin there is the script itself.
+
+- **Hosting a relay from the app opens the port for you.** Ticking "host a WAN
+  relay" now asks the router for a port forward over UPnP and reports the
+  address it got back, instead of telling you to configure the router
+  yourself. Unticking it, or quitting, withdraws the mapping — a hole left
+  open by a checkbox someone has since unticked is one they would never find
+  again. The mapping is taken on a one-hour lease and renewed while hosting
+  continues, so a crash or a reinstall cleans itself up rather than leaving
+  the port open on your router indefinitely; routers that refuse leases get a
+  permanent mapping as before. Where UPnP is switched off it says so and says what to do instead;
+  the relay still works for devices on your own network either way. The
+  port-forwarding code had been in the project since the JavaScript port,
+  reachable only from a command-line verb.
+
+
+- **Change where a game's save folder is, from its Manage tab.** The folder was
+  fixed once a game was tracked, and could only be moved from the command line.
+  It now has a Browse button beside the App ID, refuses the folders tracking has
+  always refused, and asks before moving. Files sync by their position *inside*
+  that folder, so two devices can point at completely different paths and still
+  hold the same save — which is what makes this useful for games that keep saves
+  in a folder named after your Steam or Epic account, where the name is
+  different on every machine.
+
+- **"Ask me where to keep it" for games another device syncs.** OpenSave works
+  out a folder from where the game lives on the other device, which is why it
+  usually needs no setup, and that stays the default. Where the guess is least
+  reliable — a second drive, a folder you moved, a per-account save directory —
+  Settings can now ask instead. Games waiting for a folder appear at the top of
+  the Games page with the path they use on the other device, and nothing syncs
+  until you choose. The other device is told plainly that yours is waiting,
+  rather than being shown the same "not tracked" state as a game you removed on
+  purpose.
+
+- **Cover art on a relay you run yourself.** The relay has been able to look
+  up artwork for games Steam has no cover for since the key handling landed,
+  but there was no way to install the key alongside the Google secret and
+  nothing said where to get one. `install-relay.sh` now takes
+  `--steamgriddb-key-file`, handled exactly as the Google secret is — read
+  once, copied to a root-only file, never printed, and no value-on-the-command-line
+  variant, because an argument is visible in `ps` to every user on the machine.
+  Both secrets now share one env file rather than the second overwriting the
+  first. `docs/RELAY.md` says where to get a key, why each relay needs its own
+  rather than sharing, and how to check it arrived.
+
+### Security
+
+- **Web pages can no longer drive the app.** The app's local API answered
+  every request from this computer with a blanket "any website may call me",
+  and the default port is a well-known number. A page on any site you had
+  open could read your settings — node ID, room code, relay address —
+  untrack games, restore an old snapshot over a current save, or point your
+  relay setting at a server of its choosing, all from JavaScript, all without
+  you noticing. Only the app's own window is allowed now; a request from any
+  other page is refused outright rather than merely denied a reply, because
+  a plain POST has already happened by the time a browser decides whether to
+  show the answer. The command line and the Steam Deck plugin are not
+  browsers and are unaffected.
+
+- **Nobody else in your relay room can unpair your devices or untrack your
+  games.** The three messages that carry those actions were sent with no
+  proof of who sent them, and the relay hands every message to every device
+  in the room while also announcing each device's paired IDs. Anyone holding
+  the room code could have switched your sync off in a paired device's name.
+  Those messages are now signed like everything else and act only on the
+  device that provably sent them — never on a name written inside the
+  message. On a local network the same omission had the opposite effect: a
+  device that had authenticated before correctly refused the unsigned
+  message, so an untrack never registered there. Fixed together.
+
+- **Your private key and Google tokens are no longer readable by other
+  accounts on a shared Linux or Mac.** The folder holding the database was
+  created open to everyone on the machine, and the database inside it with
+  the system default. It is now private to your account, and an existing
+  install is tightened the next time OpenSave starts. Windows was never
+  exposed; its profile folder carries its own protection.
+
+- A replayed request could slip past the nonce check if the sender's clock
+  ran ahead: the nonce was forgotten before the timestamp went stale. Nonces
+  are now remembered for twice the allowed clock skew.
+
+- **Updates are checked against the checksums published with them.** The only
+  thing between a downloaded update and a rename over the running program was
+  a size check and the first two bytes of the file — anything beginning "MZ"
+  passed. The connection to GitHub is encrypted, which protects the transfer
+  and says nothing about the file: an altered release asset would have been
+  installed and run without a murmur. Both the app and the command line now
+  verify a download against the release's `SHA256SUMS`, as the relay installer
+  already did, and refuse to install anything that does not match — including
+  when no checksums are published at all, because "we could not check, so we
+  installed it" is not a defence.
+
+  This is not the same as signed updates. Checksums fetched from the same
+  release as the file are only as trustworthy as that release. It closes the
+  likelier gap — a file altered in transit or at rest — and signing with a key
+  that never touches CI is the step after it.
+
+- **Devices on your network are identified by proof, not by address.** A peer
+  was recognised by the network address it connected from, which anyone on the
+  same network can take — by ARP spoofing, or simply by being handed that
+  address after the real device's DHCP lease expired. Requests between paired
+  devices now carry proof that the sender holds the key pinned when the two
+  paired, covering the route, the method and the contents, and each one is
+  single-use so a captured request cannot be replayed or re-aimed.
+
+  As with relay sync, both devices need this version: until then a pair keeps
+  working on the old check, and protection latches on the first request that
+  proves itself. A pairing with no key behind it has nothing to prove with —
+  unpair and pair those two again to give it one.
+
+- **Internet sync is now end-to-end encrypted and authenticated.** Saves sent
+  through a relay are sealed between your two devices, so the relay passes on
+  data it cannot read — not even ours — and each request now carries proof that
+  it came from the device it says it did.
+
+  Before this, the connection to the relay was encrypted but the contents were
+  not, so anyone you had given your room code to was in a position to read what
+  passed through. It was never reachable from the open internet: a room code is
+  twelve characters from a cryptographic generator and is not guessable, so in
+  practice this meant the people you had deliberately shared a room with.
+
+  A relay can still see that two devices are talking, roughly how much data is
+  moving, and which games by id.
+
+  **Two things worth knowing.** Both devices need this version before either
+  protection applies; until then a pair keeps working exactly as before, so an
+  upgrade part-way through never looks like a device that stopped talking.
+
+  And **pair your devices again over the internet once both are updated.**
+  Encryption needs a key that the two devices exchange while pairing, and
+  pairing over a relay never stored one — it was sent and quietly discarded, on
+  every version up to this one, so no existing internet pairing has a key to
+  encrypt with. Nothing is lost by leaving it: those pairs keep syncing exactly
+  as they always have. Re-pairing is simply how you turn the new protection on.
+  Pairings made over a local network are unaffected and always kept their key.
+
+  LAN sync is unchanged: it never involves a relay, but it is not encrypted and
+  identifies a device by its network address, so treat an untrusted network
+  accordingly.
+
+### Fixed
+
+- **Re-tracking a game puts it back where it was on every device.** Untracking
+  a game on one device removes it on the others, and tracking it again brought
+  it back — by guessing each device's folder from the re-tracking device's
+  path. For a device that had never had the game that is the right thing to
+  do; for one that had, it was wrong: the folder it was actually syncing, saves
+  and all, was left behind for a new empty one at the guessed path, and the
+  real saves stopped syncing without a word. Each device now remembers where
+  it kept the game and restores it there, as long as that folder still exists.
+
+  Untracking also now forgets everything the game had agreed with its peers.
+  Game IDs come from the name, so a game tracked again has the same ID, and
+  the old record of "both devices held this file" came back with it. If the
+  folder had lost a file in the meantime, the first sync read that as a
+  deletion to pass on and removed the peer's copy. A game tracked afresh now
+  starts with no history, and a file the peer has that this device lacks is
+  simply pulled.
+
+- **Placing an offered game no longer leaves its own offer behind.** When
+  you chose a folder for a game another device offered, the offer could
+  reappear a moment later: the other device asks about the game every few
+  seconds, and if one of those requests was already being answered while you
+  placed it, its "this device has no folder for that" conclusion was written
+  down after your placement had made it false. The check and the write are
+  now one step, so an offer can never be recorded for a game that is tracked.
+
+- **A save deleted right after it synced no longer comes back.** OpenSave
+  keeps a record of which files both devices have held, and "in that record
+  but missing on one side" is how it knows the missing side deleted a file
+  rather than never having had it. That record was rebuilt after every
+  transfer from a fresh look at the folder — and a file deleted in the moment
+  after it arrived was already gone from the folder by then, so the rebuild
+  erased the one entry that proved it had been shared. The next sync saw the
+  other device's copy as something new and pulled it back, undoing the
+  deletion with no sign anything had happened. On Linux this hit five times in
+  six.
+
+  An entry now stays in the record until the deletion has reached both sides.
+  And for the case where a device deletes a file and the other device creates
+  a new one under the same name before that propagates, the newer file wins
+  rather than being deleted: the record of what was removed says so, and it is
+  now trusted over the older evidence.
+
+- **Typing a Steam App ID now tells you whether it's right.** As you enter
+  one, the field checks with Steam and shows the store title it belongs to —
+  or says that no game has that number, or that Steam couldn't be reached from
+  this network. Before, the only feedback was whether a cover eventually
+  appeared, and a cover that doesn't appear looks the same whether the number
+  was mistyped, the game has no art, or the network blocks Steam's CDN. That
+  is how "I added the App ID but nothing happens — am I doing something
+  wrong?" gets asked, with no way to answer it from the app.
+
+  Changing an App ID also clears the app's memory that art for that ID was
+  missing. A cover that failed to load once was remembered as absent for six
+  hours, so correcting a number a minute later — or the network coming back —
+  changed nothing until then. Reported by mufaaf.
+
+- **A save rewritten twice within one clock tick no longer keeps its old
+  hash.** File size and modification time identify a file's contents only if a
+  second write can't leave both unchanged, and within a filesystem's timestamp
+  granularity it can — a fixed-size save written twice in quick succession
+  would have the first write's hash handed back for the second, and the sync
+  would see nothing to do for a save that had changed. A file is now only
+  remembered once it has been still for a couple of seconds, the same rule git
+  applies. Caught on Linux, where the kernel's coarser file times made it
+  reproducible; it had passed on Windows by luck of the clock.
+
+- **"Start when the computer starts" now starts in the tray, as it always said
+  it would.** The setting's own description promised a launch minimised to the
+  system tray, and it did not: the entry it registered launched OpenSave
+  exactly as a double-click does, so every boot brought the full window up over
+  whatever you sat down to do. It now launches hidden, with the tray icon as
+  the way back in. Entries registered by earlier versions are repaired the
+  next time OpenSave runs, so there is nothing to re-tick.
+
+  If no tray is available — some Linux desktops have none without an
+  extension — the window is shown after all rather than left unreachable.
+  Reported by mufaaf.
+
+- **A watch that lost track of a folder now finds its way back.** Watching a
+  folder tells you what happens next, and everything the watcher did to correct
+  itself was driven by another change arriving. When the change was the thing
+  that went missing — a burst big enough to drop events, a new subfolder that
+  ended up watched by nobody — the watcher was left holding a picture of the
+  folder that was wrong, and nothing was ever going to correct it. It stayed
+  wrong for as long as the folder stayed quiet.
+
+  That picture is what decides whether a save has changes worth protecting
+  before another device's copy is applied, so a wrong one is wrong in the
+  direction that loses a save. Every watched game is now re-checked on a timer
+  and put right if it has drifted, so this lasts minutes at worst instead of
+  indefinitely. A game nothing has touched still produces nothing.
+
+- **OpenSave no longer stops a game from deleting its own save (Windows).**
+  While a save was being read — to hash it, to send it, or to archive it into a
+  snapshot — Windows would not let anything else delete that file, and OpenSave
+  reads every tracked save on a timer. A game deleting a save slot at the wrong
+  moment got an error from an operation that normally cannot fail. Saves are
+  now opened in a way that permits it.
+
+  One related case is beyond our reach: Windows refuses to let any program
+  replace a file that is open, whatever we ask for, and some games save by
+  writing a new file and renaming it over the old one. The defence there is
+  reading less — the caching added this release means unchanged saves are not
+  opened at all, which is now the main reason it exists.
+
+- **A game whose watcher failed to start was never watched again.** Starting a
+  watch happened once — when a game was tracked, or when the daemon started —
+  and a failure was only written to the log. A save folder on a drive that
+  mounts a few seconds after login, a folder briefly held by another program,
+  a passing permission error: any of those left that game watched by nobody
+  for the rest of the session, with no auto-snapshots and no syncing on
+  change. Nothing said so, because a watch that does not exist raises no
+  events to reveal its absence. The watch set is now reconciled every minute,
+  which starts anything missing and leaves existing watches alone.
+
+  The same shape, one level down: a new subfolder is put under watch when its
+  creation event arrives, and if that registration failed the folder stayed
+  invisible. Failures are now remembered and retried on the next pass.
+
+- **Memory with a large library.** Watching a save folder costs 64 KB per
+  folder, and OpenSave watches every subfolder of every game it tracks, so a
+  library of a few hundred games was holding hundreds of megabytes in event
+  buffers before a single save had been read. That buffer is now 8 KB, which
+  is still around a hundred events in flight for one folder — save folders are
+  not high-event places.
+
+  Two things made that safe to do. Dropped events used to be discarded in
+  silence: every watcher error was ignored, including the one that means
+  "events were lost", so a missed change stayed missed. An overflow now
+  triggers a rescan, which finds whatever the lost events would have said.
+  And the hash cache, which was a fixed 64 MB sized for an ordinary library,
+  now scales with how many games are tracked — too small a cache evicts
+  entries it is about to want and quietly goes back to re-reading saves.
+
+  Reported by someone tracking 350+ games across three machines, whose drive
+  was audibly busy at idle.
+
+- **"Sync stalled" warnings appeared at random.** Two identical sweeps ran on
+  the same thirty-second interval looking for stuck syncs, and only one of
+  them raised the warning — so whichever fired first decided whether you were
+  told. The duplicate is gone.
+
+- **Configuring a self-hosted relay's secrets could silently do nothing.**
+  `install-relay.sh` runs the relay as its own `opensave-relay` account, but
+  `opensave-relay setup` is run with `sudo` and wrote the secrets file owned by
+  root and readable only by its owner — so the service could not read it. The
+  key was stored, `opensave-relay config` reported it as configured, and the
+  relay went on answering "no key configured". There was nothing to pull on.
+
+  Setup now hands the file to the account the service runs as, reading that
+  account from the unit rather than assuming it, and says plainly when it
+  cannot. `config` warns whenever the file's owner and the service account
+  disagree.
+
+  Separately, re-running the installer to add one secret used to erase the
+  other — adding a SteamGridDB key to a relay that already did Google Drive
+  sign-in silently removed the sign-in. It now replaces only the values passed
+  on that run.
+
+- **A relay could exhaust its SteamGridDB key and keep asking anyway, and its
+  artwork cache never stopped growing.** Both matter for the same reason: one
+  key serves everybody using that relay.
+
+  A rate-limited key produced no backoff at all — every client's every miss
+  became another request against a service already refusing them, which is how
+  a brief limit becomes a long one. A relay now stops asking when SteamGridDB
+  replies 429 or 503, honouring `Retry-After` where one is sent and capping it
+  at fifteen minutes so a stray header cannot disable artwork for a day. A
+  paused lookup is never recorded as "this game has no art", which would have
+  blanked a cover for hours because of a momentary limit.
+
+  The cache ignored expired entries on read but never removed them, so every
+  distinct game name anyone ever scanned stayed resident for the life of the
+  process — against a service unit that caps the relay at 512 MB. It is now
+  bounded, dropping expired entries first and only then the oldest live ones.
+
+  `/health` reports both, as `steamGridCached` and `steamGridPausedFor`, since
+  neither failure is visible from the outside otherwise.
+
+- **A scan location you added yourself was barely looked at.** Adding a folder
+  under Settings and running a scan checked neither the folder itself nor
+  anything below its immediate children, so the usual outcomes were "it found
+  nothing" or "it offered my whole game install".
+
+  Three causes, all in the one branch that handles user-added locations:
+  the folder you added was never a candidate itself, only its children — so
+  pointing straight at the folder your saves are in found nothing at all;
+  children were listed exactly one level deep; and the result was never
+  narrowed to where the saves actually are, which every other part of the
+  scanner does. A games library therefore proposed whole installs.
+
+  Measured against a real Steam library on a second drive: adding the library
+  folder offered 17 game installs, two of them over 100 GB, and neither of the
+  two real save folders inside them. It now finds
+  `Batman Arkham Knight\BmGame\SaveData` and `GarrysMod\garrysmod\saves`,
+  and pointing directly at either of those folders now works too.
+
+  A folder holding other folders is still not offered as a save itself, so
+  adding a games directory does not propose syncing the directory; and where
+  nothing inside looks like a save folder, the game folder is still offered as
+  before — a container you can correct beats nothing. The search below each
+  child reuses the existing bounded walk, so it cannot turn a scan into a
+  full-disk crawl.
+
+- **Cloud backups made on one device could not be restored on the other.** A
+  game's id is the slug of its display name, and a backup is stored as
+  `<id>__<branch>__<snapshot>.zip`. Track the same title by auto-scan on one
+  device and with **Track folder** on the other and the two names differ, so
+  the ids differ, so the provider ends up holding two differently named sets of
+  files — one of them shown under a bare slug, because the other device's id
+  matches nothing locally. Each device would only restore its own.
+
+  Linking the two under **Manage → Linked Copies** looked like the answer and
+  did nothing, which is what made this baffling rather than merely awkward:
+  links were resolved on the peer-to-peer sync path and nowhere in the cloud
+  screens. They are now resolved there too. A linked game lists and restores
+  the other device's backups, and the browse screen shows one game instead of
+  two.
+
+  Only ids you have actually linked are accepted — an unlinked backup is still
+  refused. Removing a game's cloud copies on untrack was deliberately left
+  alone: a linked id is another device's name for a title it is probably still
+  tracking, and deleting its backups because this device stopped following the
+  game would be silent data loss somewhere nobody was looking.
+
+- **Constant disk activity and high memory while completely idle.** With a
+  paired device online, OpenSave re-read and re-hashed *every byte of every
+  save file* roughly every twenty seconds, whether or not anything had
+  changed — once to answer the other device's ping, again for the sixty-second
+  reconcile, and again for every manifest the peer asked for. None of it was
+  visible, because the reading happens *before* the comparison that finds
+  nothing to do: the app truthfully reported "no syncs running" while keeping
+  a hard drive busy indefinitely. Reported as a machine slowing down for
+  everything else, with the drive audibly working and hundreds of megabytes
+  resident, all of it clearing the moment OpenSave was killed.
+
+  The memory was not a leak. Each pass built a fresh block list for every file
+  and dropped it moments later, and that churn keeps Go's heap target high
+  while the runtime returns pages to the system lazily.
+
+  File hashes are now remembered and reused while a file's size and
+  modification time are both unchanged, so an idle folder costs a directory
+  listing instead of a full read. Turning off auto-sync did not avoid any of
+  this, incidentally — the ping path hashed every tracked game regardless — so
+  quitting the app was the only workaround.
+
+  Reusing a hash is only safe if nothing can change a file without the app
+  noticing, so: anything OpenSave itself writes into a save folder drops that
+  folder's cached hashes outright rather than reasoning about which files it
+  touched; a filesystem event does the same; and every entry is re-read from
+  scratch after an hour regardless, which is what catches a program that
+  rewrites a file while preserving its size and timestamp. That last case is
+  the one a size-and-time check cannot see, and it is why the periodic re-read
+  exists rather than being optimised away.
+
+- **A deleted save could come back, even hours later.** Deleting a save was
+  never written down — it was worked out afterwards by subtraction, from a
+  record of which files both devices were known to share. That record is
+  rebuilt from what the two devices currently hold, so rebuilding it after a
+  deletion removed the very evidence the deletion depended on. The file then
+  looked like something the other device had and this one lacked, and it was
+  copied back onto the machine it had just been deleted from.
+
+  Deletions are now recorded when they happen, along with what the file
+  contained at the time. A recorded deletion is only ever applied to another
+  device whose copy is byte-for-byte what was deleted — if that device changed
+  the file in the meantime, its version is newer and is kept instead. So a
+  deletion can propagate reliably without ever being able to remove work
+  somebody else did afterwards.
+
+  There was a second way the same thing happened: a sync decides what to do and
+  then does it, so deleting a save while one was already running meant the sync
+  faithfully restored the file it had been told to copy. A transfer no longer
+  writes back a file that was deleted here while it was running.
+
+  Not claimed as closed. Deleting a save in the same instant it finishes
+  arriving on the other device still loses the deletion roughly one time in
+  twenty-five, measured over 135 attempts. The file comes back rather than
+  anything being lost, and every other timing tested propagates correctly, but
+  the race is narrower now rather than gone.
+
+- **A save deleted just after syncing could come back.** A file only counts as
+  deleted once both devices have recorded holding it, and that record was
+  written after a round trip to the other device. Deleting inside that window
+  read as "the other device has a new file" and pulled it back. The device that
+  received the files now reports which ones, so the record is written
+  immediately. Measured while the machine was busy: four deletions in twenty
+  were lost before, none after.
+
+- **OpenSave could refuse to close.** Stopping a save folder's watcher waited
+  for it without limit, and if a game created a subfolder at that moment the
+  wait never ended — the window stayed open and the process had to be killed.
+  Captured from a real hang, not theorised.
+
+- **A junction or symlink could be used to track a folder that is off limits.**
+  Pointing a game at your home or Documents folder was refused; pointing it at a
+  link to the same folder was not. That matters most for restoring, which
+  empties its target first. The same hole let one folder be tracked as two
+  separate games, giving it two watchers and duplicate snapshots.
+
+- **One badly-named file no longer stops a whole game syncing.** Names that are
+  ordinary on Linux and macOS — a `?`, a `*`, a trailing dot — cannot exist on
+  Windows, and the first one encountered aborted the entire transfer, so nothing
+  else arrived either. Those files are now skipped and reported by name. A colon
+  was worse than an error: Windows accepted the write and put the contents
+  somewhere the folder never shows.
+
+- **macOS devices now agree with Windows and Linux about accented filenames.**
+  macOS stores `café.sav` as `e` plus an accent mark; everyone else stores it as
+  a single character. Neither system treats the two as the same file, so a save
+  synced from a Mac never matched the copy already there and the devices could
+  not converge.
+
 ## [2.3.1] — 2026-08-22
 
 Three things reported within a day of 2.3.0, and none of them lost anything —

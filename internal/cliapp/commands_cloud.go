@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // Cloud backup from the terminal, including sign-in.
@@ -49,6 +50,12 @@ func cmdCloud(args []string) int {
 		return cloudRestore(asJSON, args[1:])
 	case "delete":
 		return cloudDelete(asJSON, args[1:])
+	case "check":
+		return cloudCheck(asJSON)
+	case "take":
+		return cloudAnswer(asJSON, args[1:], true)
+	case "skip":
+		return cloudAnswer(asJSON, args[1:], false)
 	default:
 		fmt.Fprintln(os.Stderr, cloudUsage)
 		return 1
@@ -66,6 +73,9 @@ const cloudUsage = `usage:
   opensave cloud restore <gameId> <file>  Pull a cloud snapshot back
   opensave cloud delete <id> <file>       Remove one cloud snapshot
   opensave cloud delete <gameId> --yes    Remove every cloud copy of a game
+  opensave cloud check                    Newer saves from your other devices
+  opensave cloud take <gameId>            Bring the newer save for a game here
+  opensave cloud skip <gameId>            Keep this device's save instead
 
   providers: google-drive, dropbox, onedrive, webdav, webhook, local
 
@@ -367,7 +377,7 @@ func cloudBrowse(asJSON bool) int {
 		return 0
 	}
 
-	section(fmt.Sprintf("Cloud backup %s %d file(s) across %d game(s)", symDot(), total, len(games)))
+	section(fmt.Sprintf("Cloud backup %s %s across %s", symDot(), plural(total, "file", "files"), plural(len(games), "game", "games")))
 	t := newTable("game", "branch", "size", "file")
 	for _, g := range games {
 		label := g.GameName
@@ -472,7 +482,7 @@ func cloudPush(asJSON bool, args []string) int {
 	}
 	_ = json.Unmarshal(raw, &res)
 	if res.Uploaded > 0 {
-		success("Uploaded %d snapshot(s) for %s", res.Uploaded, bold(args[0]))
+		success("Uploaded %s for %s", plural(res.Uploaded, "snapshot", "snapshots"), bold(args[0]))
 	} else {
 		success("%s is already up to date in the cloud.", bold(args[0]))
 	}
@@ -494,9 +504,110 @@ func cloudRestore(asJSON bool, args []string) int {
 	if asJSON {
 		return emitRawJSON(raw)
 	}
+	// It replaces the live save. This used to say it "landed as a snapshot" to
+	// roll back to, which it never did: the route restores it, after keeping
+	// the save it replaces.
 	success("Restored %s from the cloud", accent(args[1]))
-	note("It landed as a snapshot — roll back to it to replace the live save.")
+	note("The save it replaced was kept as a snapshot.")
 	hint("opensave snapshots " + args[0])
+	return 0
+}
+
+// cloudOffer is the part of an offer the terminal shows.
+type cloudOffer struct {
+	GameID     string `json:"gameId"`
+	GameName   string `json:"gameName"`
+	SnapshotID string `json:"snapshotId"`
+	DeviceName string `json:"deviceName"`
+	SavedAt    string `json:"savedAt"`
+	Diverged   bool   `json:"diverged"`
+}
+
+// cloudCheck looks for newer saves from this person's other devices. Ones that
+// carry on from the save here are taken during the check, as the app does;
+// what is left is listed, to take or skip.
+//
+// For a machine with no window to show the app's banner in — a server, or a
+// Deck in Game Mode — this is how the question gets asked at all.
+func cloudCheck(asJSON bool) int {
+	raw, err := daemonRequestSlow("POST", "/api/cloud/check", nil)
+	if err != nil {
+		return fail(asJSON, err)
+	}
+	if asJSON {
+		return emitRawJSON(raw)
+	}
+	var offers []cloudOffer
+	if json.Unmarshal(raw, &offers) != nil {
+		return emitRawJSON(raw)
+	}
+	section("Newer saves in the cloud")
+	if len(offers) == 0 {
+		note("None waiting. Any that carried on from the save here were brought over already.")
+		fmt.Println()
+		return 0
+	}
+	t := newTable("game", "from", "saved", "")
+	now := time.Now()
+	for _, o := range offers {
+		warn := ""
+		if o.Diverged {
+			warn = "replaces progress made here"
+		}
+		t.add(accent(o.GameID), o.DeviceName, faint(timeAgo(o.SavedAt, now)), faint(warn))
+	}
+	t.render()
+	hint("opensave cloud take <gameId>", "opensave cloud skip <gameId>")
+	fmt.Println()
+	return 0
+}
+
+// cloudAnswer takes or skips the save waiting for one game.
+func cloudAnswer(asJSON bool, args []string, take bool) int {
+	verb := "take"
+	if !take {
+		verb = "skip"
+	}
+	if len(args) == 0 {
+		fmt.Fprintf(os.Stderr, "usage: opensave cloud %s <gameId>\n  see what is waiting with `opensave cloud check`\n", verb)
+		return 1
+	}
+	raw, err := daemonRequest("GET", "/api/cloud/offers", nil)
+	if err != nil {
+		return fail(asJSON, err)
+	}
+	var offers []cloudOffer
+	if err := json.Unmarshal(raw, &offers); err != nil {
+		return fail(asJSON, err)
+	}
+	var offer *cloudOffer
+	for i := range offers {
+		if offers[i].GameID == args[0] {
+			offer = &offers[i]
+			break
+		}
+	}
+	if offer == nil {
+		return fail(asJSON, fmt.Errorf("no newer save is waiting for %q — run `opensave cloud check` to look again", args[0]))
+	}
+	path := "/api/cloud/offers/accept"
+	if !take {
+		path = "/api/cloud/offers/dismiss"
+	}
+	raw, err = daemonRequestSlow("POST", path, map[string]string{"gameId": offer.GameID, "snapshotId": offer.SnapshotID})
+	if err != nil {
+		return fail(asJSON, err)
+	}
+	if asJSON {
+		return emitRawJSON(raw)
+	}
+	if take {
+		success("Now using %s's save for %s", offer.DeviceName, accent(offer.GameName))
+		note("This device's save was kept as a snapshot.")
+	} else {
+		success("Kept this device's save for %s", accent(offer.GameName))
+		note("A newer save from " + offer.DeviceName + " will be offered again.")
+	}
 	return 0
 }
 
@@ -594,7 +705,7 @@ func cloudDelete(asJSON bool, args []string) int {
 		Deleted int `json:"deleted"`
 	}
 	_ = json.Unmarshal(raw, &res)
-	success("Removed %d cloud file(s) for %s", res.Deleted, bold(gameID))
+	success("Removed %s for %s", plural(res.Deleted, "cloud file", "cloud files"), bold(gameID))
 	return 0
 }
 
@@ -669,7 +780,7 @@ func cmdFiles(args []string) int {
 		return 0
 	}
 
-	section(fmt.Sprintf("%s %s %d file(s)", snapID, symDot(), len(files)))
+	section(fmt.Sprintf("%s %s %s", snapID, symDot(), plural(len(files), "file", "files")))
 	t := newTable("size", "path")
 	for _, f := range files {
 		// A directory has no size worth printing, and "0 B" next to one reads

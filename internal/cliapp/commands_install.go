@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/term"
 )
 
 // cmdInstall copies this binary somewhere permanent and puts that directory
@@ -24,8 +26,13 @@ import (
 // that cannot be tried out.
 func cmdInstall(args []string) int {
 	dir := ""
+	uninstall, assumeYes := false, false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--uninstall":
+			uninstall = true
+		case "--yes", "-y":
+			assumeYes = true
 		case "--dir":
 			if i+1 >= len(args) {
 				fmt.Fprintln(os.Stderr, "error: --dir needs a directory")
@@ -35,16 +42,26 @@ func cmdInstall(args []string) int {
 			i++
 		case "--help", "-h":
 			fmt.Println("Usage: opensave install [--dir <directory>]")
+			fmt.Println("       opensave install --uninstall [--dir <directory>] [--yes]")
 			fmt.Println()
 			fmt.Println("Copies this binary to a permanent location and adds it to your PATH,")
 			fmt.Println("so `opensave` works from any terminal.")
 			fmt.Println()
 			fmt.Println("  --dir <directory>   install here instead of the default")
+			fmt.Println("  --uninstall         remove it again, and take it back off PATH")
+			fmt.Println("  --yes               do not ask (for scripts and the app's uninstaller)")
+			fmt.Println()
+			fmt.Println("Uninstalling removes only this tool. Your games, snapshots and")
+			fmt.Println("settings live elsewhere and are never touched.")
 			return 0
 		default:
 			fmt.Fprintf(os.Stderr, "error: unknown option %q\n", args[i])
 			return 1
 		}
+	}
+
+	if uninstall {
+		return uninstallCLI(dir, assumeYes)
 	}
 
 	if dir == "" {
@@ -91,8 +108,12 @@ func cmdInstall(args []string) int {
 		fmt.Printf("Installed %s\n", dest)
 	}
 
-	for _, line := range writeAliases(dir) {
+	written, skipped := writeAliases(dir)
+	for _, line := range written {
 		fmt.Printf("  %s\n", line)
+	}
+	for _, p := range skipped {
+		fmt.Printf("  %s already exists and is not OpenSave's - left alone\n", p)
 	}
 
 	added, err := ensureOnPath(dir)
@@ -113,6 +134,124 @@ func cmdInstall(args []string) int {
 	fmt.Println()
 	fmt.Println("Then: opensave scan")
 	return 0
+}
+
+// uninstallCLI removes what cmdInstall put down: the binary, the aliases
+// beside it, and the PATH entry.
+//
+// It is what the Windows app's uninstaller calls, and the counterpart of
+// `install.sh --uninstall` on Linux. Three things it will not do. It does not
+// touch ~/.opensave — the tool is not the data, and someone removing a
+// command-line front end has not asked to lose their snapshots. It does not
+// delete a directory it did not create: the default is a folder of our own,
+// but --dir can point anywhere and ~/.local/bin holds other people's
+// programs. And it removes an alias only when that alias is still ours.
+func uninstallCLI(dir string, assumeYes bool) int {
+	ownDir := dir == ""
+	if dir == "" {
+		d, err := defaultInstallDir()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			return 1
+		}
+		dir = d
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return 1
+	}
+	dir = abs
+
+	installed := filepath.Join(dir, installedName)
+	if _, statErr := os.Stat(installed); statErr != nil {
+		fmt.Printf("Nothing to remove: no %s in %s\n", installedName, dir)
+		// A stale PATH entry outlives a binary deleted by hand, so it is
+		// still worth taking off.
+		if changed, pathErr := removeFromPath(dir); pathErr == nil && changed {
+			fmt.Printf("Removed %s from your PATH.\n", dir)
+		}
+		return 0
+	}
+
+	if !assumeYes {
+		if !stdinIsTerminal() {
+			// Nobody to ask and no --yes. Refused, and as a failure: exiting
+			// 0 here told a script its uninstall had worked when nothing had
+			// been removed at all.
+			fmt.Fprintln(os.Stderr, "error: refusing to uninstall without --yes when there is no terminal to ask")
+			return 1
+		}
+		if !confirmRemoval(installed, dir) {
+			// A person said no. That is an answer, not a failure.
+			fmt.Println("Left alone.")
+			return 0
+		}
+	}
+
+	if err := removeInstalledBinary(installed); err != nil {
+		fmt.Fprintf(os.Stderr, "error: could not remove %s: %v\n", installed, err)
+		return 1
+	}
+	fmt.Printf("Removed %s\n", installed)
+
+	for _, alias := range aliasPaths(dir) {
+		if !aliasPointsAtUs(alias, dir) {
+			continue
+		}
+		if err := os.Remove(alias); err == nil {
+			fmt.Printf("Removed %s\n", alias)
+		}
+	}
+
+	if changed, err := removeFromPath(dir); err != nil {
+		fmt.Fprintf(os.Stderr, "\nwarning: could not update PATH: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Remove this directory from your PATH by hand:\n  %s\n", dir)
+		return 1
+	} else if changed {
+		fmt.Printf("Removed %s from your PATH.\n", dir)
+	}
+
+	// Only a directory we chose, and only once it is empty.
+	if ownDir {
+		if err := os.Remove(dir); err == nil {
+			fmt.Printf("Removed %s\n", dir)
+		}
+	}
+
+	fmt.Println()
+	fmt.Println("Your games, snapshots and settings were not touched.")
+	return 0
+}
+
+// confirmRemoval asks the person at the terminal. The caller has already
+// made sure there is one.
+func confirmRemoval(installed, dir string) bool {
+	fmt.Printf("Remove %s and take %s off your PATH? [y/N] ", installed, dir)
+	var answer string
+	_, _ = fmt.Scanln(&answer)
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	return answer == "y" || answer == "yes"
+}
+
+// stdinIsTerminal reports whether there is a person to ask.
+//
+// A real terminal check, not "is it a character device": the null device is
+// one too, on Windows and Unix alike, so stdin redirected from it passed as a
+// console, the prompt read nothing, and a script without --yes was told it
+// had been "Left alone" with exit 0.
+func stdinIsTerminal() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// aliasPaths lists the short names writeAliases drops beside the binary.
+// One list, so the writer and the remover cannot drift apart.
+func aliasPaths(dir string) []string {
+	var out []string
+	for _, alias := range aliasNames {
+		out = append(out, filepath.Join(dir, alias+aliasSuffix))
+	}
+	return out
 }
 
 // sameFile reports whether two paths are the same file on disk, so a re-run

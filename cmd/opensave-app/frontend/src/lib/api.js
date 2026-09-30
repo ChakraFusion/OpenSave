@@ -1,5 +1,7 @@
 // REST + WebSocket client for the embedded OpenSave daemon.
 
+import { switchTitleId } from './switchtitle.js';
+
 let baseURL = '';
 
 /** Resolve the daemon address from the Wails-bound Go method. */
@@ -21,13 +23,24 @@ export async function initApi() {
   // with no explanation.
   let lastErr;
   for (let attempt = 0; attempt < 4; attempt++) {
+    let status;
     try {
-      await request('GET', '/api/status');
-      return baseURL;
+      status = await request('GET', '/api/status');
     } catch (e) {
+      // Not a connection that may come good in a moment, and not a firewall:
+      // said as it is, not wrapped in the advice below, which is about those.
+      if (e.notOpenSave) throw e;
       lastErr = e;
       await new Promise((r) => setTimeout(r, 700));
+      continue;
     }
+    // Answered — but by OpenSave? Its status always carries its settings.
+    // Anything else is another program on the port, and going on would
+    // show that program's answers as an OpenSave with nothing in it.
+    if (!status || typeof status.settings !== 'object' || status.settings === null) {
+      throw notOpenSave();
+    }
+    return baseURL;
   }
   throw new Error(
     `The window can't reach OpenSave's background service at ${baseURL} (${lastErr?.message ?? 'no response'}). ` +
@@ -43,11 +56,32 @@ async function request(method, path, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(baseURL + path, opts);
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text().catch(() => '');
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // Every OpenSave answer with a body is JSON. One that is not came from
+      // another program on this port, and read as {} it made OpenSave look
+      // empty: no games, first-run settings, "i is not iterable" from a scan.
+      if (res.ok) throw notOpenSave();
+    }
+  }
   if (!res.ok) {
     throw new Error(data.error || `${method} ${path} failed (${res.status})`);
   }
   return data;
+}
+
+function notOpenSave() {
+  const e = new Error(
+    `Something other than OpenSave is answering at ${baseURL}. Another program is using OpenSave's port — ` +
+      `often a hardware or vendor utility installed alongside a driver or BIOS update. Your games and saves are not affected. ` +
+      `Restart OpenSave to have it pick another port.`
+  );
+  e.notOpenSave = true;
+  return e;
 }
 
 export const api = {
@@ -60,19 +94,41 @@ export const api = {
 /**
  * Cover-art URL served through the local daemon proxy (which caches and has
  * reliable internet), instead of hotlinking Steam's CDN from the webview.
- * Returns '' when there's no App ID. `portrait` fetches the tall library art.
+ * `portrait` fetches the tall library art.
+ *
+ * A name may be given as well as, or instead of, an App ID. Steam's CDN is
+ * keyed on App ID and can answer for nothing else, so a game sold only on GOG
+ * or itch — or one found under a folder name no manifest recognises — used to
+ * get an empty string here and never ask at all. The daemon can look those up
+ * by name, and returning '' meant nothing ever reached the code that does.
+ *
+ * A Switch game is asked for by its title id too: the daemon makes its cover
+ * from the icon its emulator keeps (lib/switchtitle.js).
  */
-export function coverURL(appId, portrait = false) {
-  if (!appId) return '';
-  return `${baseURL}/api/cover?appId=${encodeURIComponent(appId)}${portrait ? '&portrait=1' : ''}`;
+export function coverURL(appId, portrait = false, name = '', titleId = '') {
+  const q = new URLSearchParams();
+  if (appId) q.set('appId', String(appId));
+  if (name) q.set('name', name);
+  if (titleId) q.set('titleId', titleId);
+  if (![...q.keys()].length) return '';
+  if (portrait) q.set('portrait', '1');
+  return `${baseURL}/api/cover?${q.toString()}`;
 }
 
 /** Best cover for a tracked game: a user's custom URL wins; otherwise the
- *  proxied Steam art for its App ID. */
-export function gameCover(game) {
+ *  proxied art for its App ID, or for its name when it has no App ID.
+ *  `portrait` asks for box art rather than the wide banner. */
+export function gameCover(game, portrait = false) {
   const custom = game?.coverUrl;
   if (custom && !custom.includes('steamstatic.com')) return custom;
-  return coverURL(game?.appId);
+  return coverURL(game?.appId, portrait, game?.name ?? '', switchTitleId(game?.savePath));
+}
+
+/** Whether a URL points at this app's own daemon — which is what decides
+ *  whether the page can fetch it (and read its headers) or can only show it
+ *  in an <img>: an image host elsewhere rarely allows a cross-origin fetch. */
+export function isDaemonURL(url) {
+  return !!baseURL && typeof url === 'string' && url.startsWith(baseURL + '/');
 }
 
 /** Open the live-update WebSocket; onMessage receives {type, data}. */
@@ -142,5 +198,13 @@ export const native = {
   toggleMaximise: () => app()?.WindowToggleMaximise(),
   close: () => app()?.WindowClose(),
   showWindow: () => app()?.ShowWindow(),
+  // A notification on the desktop (cmd/opensave-app/notify.go). Resolves to
+  // '' once shown, or why it could not be.
+  desktopNotify: (note) => app()?.DesktopNotify?.(note) ?? Promise.resolve('not available in browser preview'),
+  // Whether a full-screen game or presentation is running (Windows asks the
+  // OS; elsewhere, and in a browser, never).
+  userBusy: () => app()?.UserBusy?.() ?? Promise.resolve(false),
+  // The native window's colour behind the page (Wails runtime; absent in a browser).
+  setWindowBackground: (r, g, b) => globalThis.runtime?.WindowSetBackgroundColour?.(r, g, b, 255),
   isWails: () => !!app()
 };

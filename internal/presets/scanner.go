@@ -42,6 +42,15 @@ type Scanner struct {
 	// (emulator paths, Proton prefixes). Empty means os.UserHomeDir. Tests
 	// only.
 	HomeDir string
+	// EpicManifestDirs overrides where the Epic launcher's install manifests
+	// are read from when non-nil. Tests only.
+	EpicManifestDirs []string
+	// InstallParentDirs overrides the non-Steam launcher folders whose
+	// children are game install directories when non-nil. Tests only.
+	InstallParentDirs []string
+	// MountRoots overrides the Linux drive roots searched for launcher
+	// prefixes (an SD card, a second disk) when non-nil. Tests only.
+	MountRoots []string
 }
 
 // linuxHome returns the home dir used to resolve Linux save paths.
@@ -140,6 +149,7 @@ func (sc *Scanner) Scan(customScanPaths []string) []DiscoveredSave {
 						Name:     fmt.Sprintf("%s - Title ID: %s", p.Name, filepath.Base(title)),
 						Type:     p.Type,
 						SavePath: title,
+						TitleID:  strings.ToUpper(filepath.Base(title)),
 					})
 				}
 			} else {
@@ -246,6 +256,15 @@ func (sc *Scanner) Scan(customScanPaths []string) []DiscoveredSave {
 	discovered = append(discovered, sc.scanLocalLow()...)
 
 	// 4. Epic "Saved Games" and GOG "My Games" wrapper folders.
+	//
+	// Some children are the studio rather than the game: "CD Projekt Red"
+	// holding Cyberpunk 2077, "Arkane Studios" holding Deathloop,
+	// "MachineGames" holding Wolfenstein II. Offering the studio names the
+	// row after the publisher, leaves it with no cover art, and where a
+	// studio ships more than one title puts several games in one synced unit
+	// — so rolling back any of them rolls back all of them. Descend one level
+	// when the manifest says the child is a game and the folder is not.
+	knownGames := sc.knownGameNames()
 	for _, w := range []struct{ id, name, path string }{
 		{"epic-savedgames", "Epic / Saved Games", "%USERPROFILE%/Saved Games"},
 		{"gog-mygames", "GOG / My Games", "%USERPROFILE%/Documents/My Games"},
@@ -258,11 +277,15 @@ func (sc *Scanner) Scan(customScanPaths []string) []DiscoveredSave {
 			if isCacheDirName(sub) {
 				continue
 			}
+			name, path := sub, filepath.Join(resolved, sub)
+			if child, ok := sc.resolveWrapperChild(resolved, sub, knownGames); ok {
+				name, path = child, filepath.Join(path, child)
+			}
 			discovered = append(discovered, DiscoveredSave{
-				ID:       w.id + "-" + sanitizeID(sub),
-				Name:     sub,
+				ID:       w.id + "-" + sanitizeID(name),
+				Name:     name,
 				Type:     "game",
-				SavePath: filepath.Join(resolved, sub),
+				SavePath: path,
 			})
 		}
 	}
@@ -302,23 +325,56 @@ func (sc *Scanner) Scan(customScanPaths []string) []DiscoveredSave {
 		}
 
 		base := sanitizeID(filepath.Base(resolved))
-		for _, sub := range listSubdirs(resolved) {
+		subs := listSubdirs(resolved)
+
+		// The path may BE the save folder. Someone adding a location is at
+		// least as likely to point at the folder their saves are in as at a
+		// folder of game folders — and offering only its children found
+		// nothing at all in that case, which is what "it didn't check the new
+		// location" meant.
+		//
+		// A folder with no subdirectories is unambiguous: there is nothing
+		// below it to offer instead, so if it holds anything it is what was
+		// meant. A folder that has children is left to the loop below, which
+		// would otherwise start offering "D:\Games" as if it were a save.
+		if len(subs) == 0 {
+			if dirNonEmpty(resolved) {
+				discovered = append(discovered, DiscoveredSave{
+					ID:       "custom-" + base,
+					Name:     filepath.Base(resolved),
+					Type:     "game",
+					SavePath: resolved,
+				})
+			}
+			continue
+		}
+
+		for _, sub := range subs {
 			if isCacheDirName(sub) {
 				continue
 			}
+			full := filepath.Join(resolved, sub)
 			// A portable emulator gets its save folders offered, not the
 			// whole install: the install holds cores, BIOS and ROMs, and
 			// syncing that instead of the saves is worse than finding
 			// nothing.
-			if saves := portableEmulatorSaves(filepath.Join(resolved, sub)); len(saves) > 0 {
+			if saves := portableEmulatorSaves(full); len(saves) > 0 {
 				discovered = append(discovered, saves...)
 				continue
 			}
 			discovered = append(discovered, DiscoveredSave{
-				ID:       "custom-" + base + "-" + sanitizeID(sub),
-				Name:     sub,
-				Type:     "game",
-				SavePath: filepath.Join(resolved, sub),
+				ID:   "custom-" + base + "-" + sanitizeID(sub),
+				Name: sub,
+				Type: "game",
+				// Narrowed, exactly as a repack wrapper's subfolder is a few
+				// dozen lines above. This branch was the one place that
+				// offered a raw folder, so adding a library directory
+				// proposed whole game installs — "The Witcher 3", 100+ GB of
+				// it — instead of the SaveData folder two levels inside. The
+				// walk behind this is depth- and fan-out-bounded already, and
+				// it declines to guess when several candidates match, leaving
+				// the container for the user to correct.
+				SavePath: resolveGameContainerDir(full),
 			})
 		}
 	}
@@ -343,10 +399,17 @@ func (sc *Scanner) Scan(customScanPaths []string) []DiscoveredSave {
 	// matter how the game was installed.
 	discovered = append(discovered, sc.scanWinePrefixes(dedupSet(discovered))...)
 
-	// Infer AppIDs from names for entries that lack one.
+	// Switch games, by the names their emulators know them by — before
+	// anything reads a name.
+	sc.nameSwitchTitles(discovered)
+
+	// Infer AppIDs from names for entries that lack one. Never for a Switch
+	// save: "Hollow Knight" on a Switch is not Steam's Hollow Knight, whose
+	// saves are another format entirely — an App ID would group the two as
+	// one game and, with App-ID matching on, sync one over the other.
 	nameIndex := nameToAppIDIndex()
 	for i := range discovered {
-		if discovered[i].AppID == "" {
+		if discovered[i].AppID == "" && discovered[i].TitleID == "" {
 			discovered[i].AppID = inferAppIDFromName(discovered[i].Name, nameIndex)
 		}
 	}

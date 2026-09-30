@@ -1,12 +1,42 @@
 // Central app state, fed by the daemon's init dump + live WS updates.
 import { writable, derived, get } from 'svelte/store';
+import { notifyPrefs } from './notifyprefs.js';
+import { arrivalMessage, arrivalNote, newGamesNote } from './notifications.js';
+import { toDesktop } from './notify.js';
+
+// When each game's arrival was last said (lib/notifications.js).
+const arrivalShown = {};
+// New games already told about, by folder, so a list that shrinks or comes
+// round again is not announced twice.
+const newGamesSeen = new Set();
 
 export const view = writable({ name: 'home', params: {} });
 export const settings = writable(null);
 export const games = writable({});
+// Counts events kept in the activity history as they arrive (the daemon's
+// "activity" message), for the timeline and the notifications to catch up on.
+export const activityTick = writable(0);
+// The newest of those events, for the notifications.
+export const lastActivity = writable(null);
+/** True once the daemon has sent its first full state. Until then an empty
+ *  game list means "not here yet", not "no games" — without this, Home showed
+ *  its first-run welcome for a moment on every launch. */
+export const stateLoaded = writable(false);
+/** Whether this device has paused syncing: {paused, untilRestart, endsAt}
+ *  where endsAt is a local timestamp for a timed pause. See lib/syncpause.js. */
+export const syncPause = writable({ paused: false });
+const pauseFromWire = (st) => ({
+  paused: !!st?.paused,
+  untilRestart: !!st?.untilRestart,
+  endsAt: st?.paused && !st.untilRestart ? Date.now() + (st.remainingSeconds ?? 0) * 1000 : null
+});
 export const peers = writable({});
 export const discoveredPeers = writable([]);
 export const pairingRequests = writable([]);
+// Newer saves from other devices' cloud backups, waiting for a yes or a no.
+export const cloudOffers = writable([]);
+// Newly installed games the background scan found and nobody has looked at.
+export const newGames = writable([]);
 export const wanRoom = writable(null);
 export const conflicts = writable({});
 // Divergences in a game's EXTRA save locations, as a list: one game can
@@ -47,7 +77,10 @@ export const cloudAuthEvent = writable(null); // {success, userEmail?, error?} f
 export const cloudUploadEvent = writable(null); // {gameId, done, total, current, complete} while sync-local runs
 export const backupProgressEvent = writable(null); // {op, done, total, current, complete} while an .sscb export/import runs
 export const conflictResolution = writable(null); // {gameId, resolution, branchName?, error?} when a background resolution finishes
-export const appUpdate = writable(null); // {state: downloading|installing|restarting|error, percentage, error} during self-update
+export const appUpdate = writable(null);
+// A newer version found by the update check ({latest, current, ...}), for
+// the notifications; the banner has its own copy.
+export const availableUpdate = writable(null); // {state: downloading|installing|restarting|error, percentage, error} during self-update
 export const showAbout = writable(false); // About dialog visibility (shared so any surface can open it)
 export const aboutChangelogOpen = writable(false); // open About with the changelog pre-expanded
 
@@ -84,12 +117,18 @@ export function answerConfirm(result) {
 }
 
 let toastId = 0;
-export function toast(message, kind = 'info') {
+/** Shows a message for a few seconds. `action` ({label, run}) adds a button
+ *  to it — Undo, most often — and `ttl` says how long it stays. */
+export function toast(message, kind = 'info', { action = null, ttl = 0 } = {}) {
   const id = ++toastId;
-  toasts.update((t) => [...t, { id, message, kind }]);
+  toasts.update((t) => [...t, { id, message, kind, action }]);
   // Errors stay long enough to actually read the reason.
-  const ttl = kind === 'error' ? 9000 : 4200;
-  setTimeout(() => toasts.update((t) => t.filter((x) => x.id !== id)), ttl);
+  const life = ttl || (kind === 'error' ? 9000 : 4200);
+  setTimeout(() => dismissToast(id), life);
+  return id;
+}
+export function dismissToast(id) {
+  toasts.update((t) => t.filter((x) => x.id !== id));
 }
 
 // Turn a raw sync error into a plain-language reason.
@@ -106,6 +145,14 @@ function friendlySyncError(raw) {
   return String(raw).slice(0, 160);
 }
 
+// Collections live in lib/collections.js, which needs this module for its
+// toasts; it registers where incoming lists go rather than being imported
+// here, which would make the two import each other.
+let collectionsIn = () => {};
+export function onCollections(fn) {
+  collectionsIn = fn;
+}
+
 /** Apply one WS message to the stores. */
 export function applyMessage(msg) {
   const { type, data } = msg;
@@ -115,10 +162,56 @@ export function applyMessage(msg) {
       games.set(data.games ?? {});
       applyPeersPayload(data, true);
       logEntries.set(data.logHistory ?? []);
+      cloudOffers.set(data.cloudOffers ?? []);
+      newGames.set(data.newGames ?? []);
+      for (const g of data.newGames ?? []) newGamesSeen.add(g.savePath);
+      syncPause.set(pauseFromWire(data.syncPause));
+      collectionsIn(data.collections ?? []);
+      stateLoaded.set(true);
+      break;
+    case 'collections-update':
+      collectionsIn(data ?? []);
+      break;
+    case 'sync-pause':
+      syncPause.set(pauseFromWire(data));
+      break;
+    case 'new-games': {
+      const found = data ?? [];
+      const fresh = found.filter((g) => !newGamesSeen.has(g.savePath));
+      for (const g of found) newGamesSeen.add(g.savePath);
+      newGames.set(found);
+      if (fresh.length) toDesktop('newGames', newGamesNote(fresh));
+      break;
+    }
+    case 'cloud-offers':
+      cloudOffers.set(data ?? []);
+      break;
+    case 'cloud-pulled':
+      // Taken without asking, because it carried on from the save this
+      // device had and this device had not changed since. Said out loud all
+      // the same: a save that changes by itself should say who changed it.
+      if (get(notifyPrefs).cloudPulled) {
+        toast(`Brought ${data.deviceName}'s newer save for “${data.gameName}” from the cloud`, 'success');
+        toDesktop('cloudPulled', {
+          title: data.gameName,
+          body: `Brought ${data.deviceName}'s newer save from the cloud`,
+          game: get(games)[data.gameId]
+        });
+      }
       break;
     case 'games-update':
       games.set(data ?? {});
       break;
+    case 'activity': {
+      lastActivity.set(data);
+      activityTick.update((n) => n + 1);
+      const said = get(notifyPrefs).arrivals ? arrivalMessage(data, get(games), arrivalShown) : null;
+      if (said) {
+        toast(said, 'info', { action: { label: 'Open', run: () => navigate('game', { gameId: data.gameId }) } });
+        toDesktop('arrivals', arrivalNote(data, get(games)));
+      }
+      break;
+    }
     case 'peers-update':
       applyPeersPayload(data ?? {});
       break;
@@ -167,7 +260,7 @@ export function applyMessage(msg) {
       } else {
         toast(
           data.resolution === 'merge-branch'
-            ? `Both versions kept for “${gameName}” — the other device's copy is on branch "${data.branchName}"`
+            ? `Both versions kept for “${gameName}” — you carry on with yours, and the other device's is on branch "${data.branchName}"`
             : data.resolution === 'keep-remote'
               ? `Now using the other device's version of “${gameName}” — yours is snapshotted if you change your mind`
               : `Kept this device's version of “${gameName}”`,
@@ -219,24 +312,14 @@ export function applyMessage(msg) {
 
 const lastSyncErrorToast = {}; // gameId -> ms timestamp of last error toast
 
-// Safety sweep: if the other device died mid-sync, no sync-complete or
-// sync-error ever arrives and the "syncing…" spinner would stay forever.
-// Any running entry that hasn't reported progress in 3 minutes is dropped
-// (live transfers report at least every 500ms).
-setInterval(() => {
-  syncActivity.update((s) => {
-    const now = Date.now();
-    let changed = false;
-    const copy = { ...s };
-    for (const [gid, entry] of Object.entries(copy)) {
-      if (entry.state === 'running' && entry.at && now - entry.at > 180_000) {
-        delete copy[gid];
-        changed = true;
-      }
-    }
-    return changed ? copy : s;
-  });
-}, 30_000);
+// The stale-sync sweep lives at the top of this file, beside SYNC_STALE_MS.
+//
+// There was a second copy here doing the same thing on the same 30s interval,
+// and the duplication was not merely redundant: the version above also raises
+// a "sync stalled" toast, and whichever timer fired first removed the entry.
+// So the toast appeared or did not appear depending on which interval won a
+// race — the same stall telling one user and not another, for no reason
+// either could see.
 
 let wasWanConnected = false;
 

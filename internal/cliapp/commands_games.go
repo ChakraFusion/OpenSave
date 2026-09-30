@@ -1,14 +1,15 @@
 package cliapp
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"encoding/json"
 	"strconv"
 	"strings"
 
 	"github.com/opensave/opensave/internal/daemon"
+	"github.com/opensave/opensave/internal/store"
 )
 
 // Per-game configuration and history management — everything the desktop
@@ -97,7 +98,7 @@ const gameUsage = `usage: opensave game <gameId> set <key> <value>
   name <text>            Display name (also how peers match this game)
   path <dir|file>        Move tracking to a different save location
   app-id <steam-id>      Steam App ID, used for cover art and cross-device matching
-  exe-path <file>        Executable, so the app can launch the game
+  exe-path <file>        Program to launch the game with, before Steam
   cover-url <url>        Custom cover image
   auto-sync <true|false> Watch this save and sync it automatically
   max-snapshots <n>      Automatic snapshots kept per branch (0 = unlimited)
@@ -138,9 +139,9 @@ func cmdUntrackAll(d *daemon.Daemon, args []string) int {
 	}
 	if !confirmed {
 		if asJSON {
-			return fail(asJSON, fmt.Errorf("refusing to untrack %d game(s) without --yes", len(games)))
+			return fail(asJSON, fmt.Errorf("refusing to untrack %s without --yes", plural(len(games), "game", "games")))
 		}
-		warning("This will untrack all %d game(s).", len(games))
+		warning("This will untrack all %s.", plural(len(games), "game", "games"))
 		note("Save files and snapshot archives on disk are kept.")
 		hint("opensave untrack-all --yes")
 		return 1
@@ -157,7 +158,7 @@ func cmdUntrackAll(d *daemon.Daemon, args []string) int {
 	if asJSON {
 		return emitJSON(map[string]any{"untracked": n})
 	}
-	success("Untracked %d game(s).", n)
+	success("Untracked %s.", plural(n, "game", "games"))
 	note("Snapshots on disk were kept.")
 	hint("opensave scan     re-add them from the correct locations")
 	return 0
@@ -191,7 +192,7 @@ func cmdPrune(args []string) int {
 		success("Nothing to prune — every game is within its limit.")
 		return 0
 	}
-	success("Removed %d snapshot(s), freed %s", removed, bold(humanBytes(freed)))
+	success("Removed %s, freed %s", plural(removed, "snapshot", "snapshots"), bold(humanBytes(freed)))
 	return 0
 }
 
@@ -218,6 +219,71 @@ func cmdSnapshotDelete(args []string) int {
 	success("Deleted %s", accent(args[1]))
 	note("freed " + humanBytes(freed))
 	return 0
+}
+
+// cmdSnapshotPin pins or unpins a snapshot: a pinned one is never removed by
+// the retention limits, the age rule or the conflict-branch sweep.
+func cmdSnapshotPin(args []string, pinned bool) int {
+	asJSON, args := jsonFlag(args)
+	verb := "snapshot-pin"
+	if !pinned {
+		verb = "snapshot-unpin"
+	}
+	if len(args) != 2 {
+		fmt.Fprintf(os.Stderr, "usage: opensave %s <gameId> <snapshotId>\n", verb)
+		return 1
+	}
+	snap, err := editSnapshot(args[0], args[1], map[string]any{"pinned": pinned})
+	if err != nil {
+		return fail(asJSON, err)
+	}
+	if asJSON {
+		return emitJSON(snap)
+	}
+	if pinned {
+		success("Pinned %s", accent(args[1]))
+		note("it stays until you delete it yourself — no limit or clean-up removes it")
+	} else {
+		success("Unpinned %s", accent(args[1]))
+		note("the game's snapshot limits apply to it again")
+	}
+	return 0
+}
+
+// cmdSnapshotNote writes a note on a snapshot, or removes it when the note is
+// empty. The note is everything after the snapshot id, so it needs no quotes.
+func cmdSnapshotNote(args []string) int {
+	asJSON, args := jsonFlag(args)
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: opensave snapshot-note <gameId> <snapshotId> [note…]   (no note removes it)")
+		return 1
+	}
+	text := strings.Join(args[2:], " ")
+	snap, err := editSnapshot(args[0], args[1], map[string]any{"note": text})
+	if err != nil {
+		return fail(asJSON, err)
+	}
+	if asJSON {
+		return emitJSON(snap)
+	}
+	if snap.Note == "" {
+		success("Removed the note on %s", accent(args[1]))
+	} else {
+		success("Noted %s: %s", accent(args[1]), snap.Note)
+	}
+	return 0
+}
+
+func editSnapshot(gameID, snapshotID string, body map[string]any) (store.Snapshot, error) {
+	raw, err := daemonRequest("PATCH", "/api/games/"+gameID+"/snapshot/"+snapshotID, body)
+	if err != nil {
+		return store.Snapshot{}, err
+	}
+	var snap store.Snapshot
+	if err := json.Unmarshal(raw, &snap); err != nil {
+		return store.Snapshot{}, fmt.Errorf("unexpected answer from the daemon: %w", err)
+	}
+	return snap, nil
 }
 
 // cmdBranchDelete removes a branch and its snapshots. "main" is protected,

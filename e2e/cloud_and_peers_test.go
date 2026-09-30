@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opensave/opensave/internal/snapshot"
 	"github.com/opensave/opensave/testutil"
 )
 
@@ -54,7 +55,22 @@ func cloudFiles(t *testing.T, dir string) []string {
 	return out
 }
 
-// waitForUpload waits until the cloud folder holds a finished file.
+// cloudSnapshots lists the snapshots in the cloud folder, leaving out the heads
+// each device writes beside them (see internal/cloud/heads.go). Tests that took
+// "the first file" as the backup started picking up a head once devices began
+// announcing their saves, and a head sorts before its game's snapshots.
+func cloudSnapshots(t *testing.T, dir string) []string {
+	t.Helper()
+	out := []string{}
+	for _, n := range cloudFiles(t, dir) {
+		if _, _, _, ok := snapshot.ParseExportEntryName(n); ok {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// waitForUpload waits until the cloud folder holds a finished snapshot.
 //
 // Presence is not completion: uploads create the destination and then stream
 // into it, so a file that exists may still be zero bytes for a moment. A test
@@ -64,7 +80,7 @@ func waitForUpload(t *testing.T, dir string) []string {
 	t.Helper()
 	var names []string
 	ok := testutil.WaitFor(30*time.Second, func() bool {
-		names = cloudFiles(t, dir)
+		names = cloudSnapshots(t, dir)
 		if len(names) == 0 {
 			return false
 		}
@@ -220,6 +236,16 @@ func TestSyncAll_SyncsEveryTrackedGame(t *testing.T) {
 	a := testutil.NewTestDaemon(t, "SyncAll-A")
 	b := testutil.NewTestDaemon(t, "SyncAll-B")
 	a.PairWith(b)
+
+	// Tracking does not sync by itself here. It normally fires a sync at the
+	// paired peers in the background, and this test tracks the same game on
+	// both devices: whichever tracks first syncs it to the other, which
+	// auto-tracks it under the same id, and the second device's own track
+	// then loses with a 409. Ordering the two calls only decides who loses.
+	// Sync all is what this test invokes on purpose, and it does so below.
+	for _, d := range []*testutil.TestDaemon{a, b} {
+		d.API(http.MethodPost, "/api/settings", map[string]any{"autoSyncOnTrack": false}, nil)
+	}
 
 	// Each game needs its own folder: a daemon refuses to track two games
 	// against one directory.

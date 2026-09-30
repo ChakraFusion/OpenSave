@@ -1,4 +1,4 @@
-// Pure logic behind the auto-scan screen.
+// Pure logic behind the scan screen.
 //
 // This lives outside the component because it is where the mistakes were. The
 // scan grid's real bugs have all been decisions, not rendering: which folder
@@ -24,8 +24,19 @@ export const normPath = (p) => (p ?? '').replace(/[\\/]+$/, '').toLowerCase();
  * The `measured` half is load-bearing and must never be dropped: a folder the
  * daemon could NOT read also reports zero files, and treating that as empty
  * would hide a real save from the listing. Unknown is not empty.
+ *
+ * `truncated` is the same argument for the harder case. Measuring shares one
+ * budget across the whole scan, and a walk cut short by it reports measured
+ * with a count of zero — indistinguishable, without this, from a folder that
+ * genuinely holds nothing. That is what made games appear only after several
+ * scans and vanish again: a save with a folder per slot walks hundreds of
+ * directories before its first file, and whether the budget lasts depends on
+ * what was measured before it.
+ *
+ * Truncated with a non-zero count is the file cap, not the clock, and stays
+ * empty-able — a folder holding 20,000 files is not empty by any definition.
  */
-export const isEmptyResult = (r) => !!r.measured && r.fileCount === 0;
+export const isEmptyResult = (r) => !!r.measured && !r.truncated && r.fileCount === 0;
 
 // Order within a game: the folder to track, then the ones offered with it,
 // then the ones merely offered, then the ones already covered.
@@ -145,4 +156,22 @@ export function plannedGames(selectedRows) {
     const primary = members.find((m) => m.role === 'primary' || m.role === 'only') ?? members[0];
     return { primary, extras: members.filter((m) => m !== primary) };
   });
+}
+
+// The same game can turn up at several locations, but only some entries
+// carry a Steam App ID (and therefore cover art). Share each App ID across
+// every same-named entry so duplicates all show the same artwork instead
+// of one having a cover and the other a blank tile. Changes the rows in place.
+export function fillMissingAppIds(results) {
+  if (!results) return;
+  const byName = new Map();
+  for (const r of results) {
+    const key = (r.name ?? '').trim().toLowerCase();
+    if (r.appId && key && !byName.has(key)) byName.set(key, r.appId);
+  }
+  for (const r of results) {
+    if (r.appId) continue;
+    const key = (r.name ?? '').trim().toLowerCase();
+    if (byName.has(key)) r.appId = byName.get(key);
+  }
 }

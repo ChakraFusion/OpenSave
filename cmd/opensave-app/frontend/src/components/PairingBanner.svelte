@@ -1,8 +1,12 @@
 <script>
-  import { fly } from 'svelte/transition';
+  import { fly as flyIn } from 'svelte/transition';
+  import { gated } from '../lib/motion.js';
+  // Instant with animations off; see lib/motion.js.
+  const fly = gated(flyIn);
   import { pairingRequests, toast } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { demandAttention } from '../lib/notify.js';
+  import Link from 'lucide-svelte/icons/link';
 
   let busy = false;
   let seen = new Set(); // request ids we've already chimed for
@@ -13,8 +17,8 @@
   function onRequests(list) {
     const fresh = list.filter((r) => !seen.has(r.peerId));
     if (fresh.length > 0) {
-      demandAttention();
       const who = fresh[0].deviceName ?? 'A device';
+      demandAttention('pairing', { title: `${who} wants to pair`, body: 'Open OpenSave to accept or decline.', open: { view: 'devices', params: {} } });
       toast(`${who} wants to pair`, 'info');
     }
     seen = new Set(list.map((r) => r.peerId));
@@ -36,14 +40,14 @@
     }
   }
 
-  const source = (req) => (req.isWan ? '🌐 over the internet' : `🖧 ${req.address}`);
+  const source = (req) => (req.isWan ? 'over the internet' : `from ${req.address}`);
 </script>
 
 {#if $pairingRequests.length > 0}
   <div class="pair-wrap" transition:fly={{ y: -90, duration: 320 }}>
     {#each $pairingRequests as req (req.peerId)}
       <div class="pair-card" transition:fly={{ y: -20, duration: 200 }}>
-        <div class="pair-icon">🔗</div>
+        <div class="pair-icon"><Link size={19} /></div>
         <div class="pair-body">
           <div class="pair-title"><strong>{req.deviceName ?? 'A device'}</strong> wants to pair</div>
           <div class="pair-sub">{source(req)} · approve to start syncing your saves</div>
@@ -77,16 +81,19 @@
     background: var(--bg-raised);
     border: 1px solid var(--accent);
     border-radius: var(--radius-lg);
-    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--accent-soft);
-    animation: pair-glow 2s ease-in-out infinite;
-  }
-  @keyframes pair-glow {
-    0%, 100% { box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px var(--accent-soft); }
-    50% { box-shadow: 0 12px 44px rgba(0, 0, 0, 0.6), 0 0 0 3px var(--accent-soft); }
+    /* Still, no pulse: the outline, the chime and the window coming to the
+       front already say someone is asking. */
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
   }
   .pair-icon {
-    font-size: 1.5rem;
     flex-shrink: 0;
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: grid;
+    place-items: center;
+    background: var(--accent-soft);
+    color: var(--accent-text);
   }
   .pair-body {
     flex: 1;

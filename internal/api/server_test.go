@@ -108,8 +108,11 @@ func TestCORSPreflight(t *testing.T) {
 		if resp.StatusCode != http.StatusNoContent {
 			t.Errorf("preflight %s status = %d, want 204", path, resp.StatusCode)
 		}
-		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "*" {
-			t.Errorf("preflight %s Allow-Origin = %q, want *", path, got)
+		// The app's own origin, echoed back — never the wildcard. This test
+		// used to demand "*", which is to say it pinned a hole: every page on
+		// the web could call this API. See allowedBrowserOrigins.
+		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "http://wails.localhost" {
+			t.Errorf("preflight %s Allow-Origin = %q, want the app's origin echoed", path, got)
 		}
 		if got := resp.Header.Get("Access-Control-Allow-Methods"); got == "" {
 			t.Errorf("preflight %s missing Allow-Methods", path)
@@ -329,9 +332,16 @@ func TestDeckyPluginContract(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("/api/status = %d", resp.StatusCode)
 	}
-	for _, key := range []string{"settings", "gameCount", "peerCount"} {
+	for _, key := range []string{"settings", "gameCount", "peerCount", "peersOnline", "syncPause"} {
 		if _, ok := body[key]; !ok {
 			t.Errorf("/api/status missing %q", key)
+		}
+	}
+	// What waits on someone besides a conflict, as lists — [] and never null,
+	// which the panel would have to guard against on every render.
+	for _, key := range []string{"locationConflicts", "emptied"} {
+		if got := strings.TrimSpace(string(body[key])); !strings.HasPrefix(got, "[") {
+			t.Errorf("/api/status %q = %s, want a list", key, got)
 		}
 	}
 
@@ -355,6 +365,103 @@ func TestDeckyPluginContract(t *testing.T) {
 	}
 	if _, ok := body["results"]; !ok {
 		t.Error("/api/games/sync-all missing results")
+	}
+
+	// The id is derived from the name, and the assertion above already pins
+	// that; the plugin reads it out of this same payload.
+	const gameID = "deck-game"
+
+	// The three below are the rest of what opensave-decky-plugin/main.py
+	// calls, and they were the half of its contract nothing checked.
+	//
+	// This test is the only place that contract is verifiable at all. The
+	// plugin is a separate codebase, its Python half imports decky and so
+	// only runs inside Decky Loader on the hardware, and it ships in every
+	// release. An endpoint renamed here would be found by a user in Game
+	// Mode, on a handheld, with no keyboard.
+
+	// POST /api/games/{id}/sync — the panel button, and the launch/exit
+	// hooks. Answers either with per-peer results or, when a sync for this
+	// game is already running, {"queued": true}. The plugin treats any 2xx
+	// as success, so both shapes have to stay 2xx.
+	//
+	// With no peer online this answers 409, an explanation, and the reason
+	// "offline" — which the panel reads to stay quiet about a desktop that
+	// is simply asleep, rather than report a failure at every game launch.
+	// Sync-all answers 200 in the same situation with the same reason on
+	// each game, so the panel can say nothing synced instead of "started".
+	resp, body = ts.do(t, http.MethodPost, "/api/games/"+gameID+"/sync", map[string]any{})
+	if resp.StatusCode == http.StatusConflict && string(body["reason"]) != `"offline"` {
+		t.Errorf("/api/games/{id}/sync with nobody online: reason = %s, want \"offline\"", body["reason"])
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+		_, hasResults := body["results"]
+		_, hasQueued := body["queued"]
+		if !hasResults && !hasQueued {
+			t.Errorf("/api/games/{id}/sync answered 200 with neither results nor queued: %v", keysOf(body))
+		}
+	case http.StatusConflict:
+		if _, ok := body["error"]; !ok {
+			t.Error("/api/games/{id}/sync refused without saying why — the plugin shows this " +
+				"text to somebody in Game Mode with no other way to find out")
+		}
+	default:
+		t.Fatalf("/api/games/{id}/sync = %d (%v)", resp.StatusCode, body)
+	}
+
+	// Pausing from Game Mode: the panel pauses and resumes, and a sync while
+	// paused says so by reason.
+	resp, body = ts.do(t, http.MethodPost, "/api/sync/pause", map[string]any{"minutes": 60})
+	if resp.StatusCode != http.StatusOK || string(body["paused"]) != "true" {
+		t.Fatalf("/api/sync/pause = %d (%v)", resp.StatusCode, body)
+	}
+	resp, body = ts.do(t, http.MethodPost, "/api/games/"+gameID+"/sync", map[string]any{})
+	if resp.StatusCode != http.StatusConflict || string(body["reason"]) != `"paused"` {
+		t.Errorf("sync while paused = %d reason %s, want 409 \"paused\"", resp.StatusCode, body["reason"])
+	}
+	resp, body = ts.do(t, http.MethodPost, "/api/sync/resume", map[string]any{})
+	if resp.StatusCode != http.StatusOK || string(body["paused"]) != "false" {
+		t.Errorf("/api/sync/resume = %d (%v)", resp.StatusCode, body)
+	}
+
+	// Answering for an emptied save: the panel sends "restore" or "delete".
+	// Nothing is emptied here, so the answer is refused — but as "not
+	// emptied" (409), not as a request the endpoint no longer understands.
+	resp, body = ts.do(t, http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]any{"answer": "restore"})
+	if resp.StatusCode != http.StatusConflict {
+		t.Errorf("/api/games/{id}/emptied for a game that is not emptied = %d (%v), want 409", resp.StatusCode, body)
+	}
+
+	// POST /api/games/{id}/snapshot — sent with a comment, which is how a
+	// Game Mode snapshot is labelled in the history afterwards.
+	resp, body = ts.do(t, http.MethodPost, "/api/games/"+gameID+"/snapshot",
+		map[string]any{"comment": "Steam Deck snapshot"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/api/games/{id}/snapshot = %d (%v)", resp.StatusCode, body)
+	}
+
+	// POST /api/games/{id}/resolve-conflict — the reason a conflict on a
+	// handheld does not mean going and finding a keyboard. The plugin sends
+	// peerId and resolution, and refuses anything outside this vocabulary
+	// before it reaches us; the endpoint has to accept the same three words.
+	//
+	// There is no conflict to settle here, so a 404 or 409 is a fine answer.
+	// What must not happen is 400 "unknown resolution" or 404 "no such
+	// route", which would mean the two sides disagree about the request
+	// itself rather than about whether there is anything to resolve.
+	for _, resolution := range []string{"keep-local", "keep-remote", "merge-branch"} {
+		resp, body = ts.do(t, http.MethodPost, "/api/games/"+gameID+"/resolve-conflict",
+			map[string]any{"peerId": "node_absent", "resolution": resolution})
+		if resp.StatusCode == http.StatusBadRequest {
+			t.Errorf("resolve-conflict rejected %q as a bad request — the plugin only ever "+
+				"sends these three, so this one has stopped being understood: %v", resolution, body)
+		}
+		if resp.StatusCode == http.StatusNotFound {
+			if msg, ok := body["error"]; ok && strings.Contains(strings.ToLower(string(msg)), "route") {
+				t.Errorf("resolve-conflict route is gone: %v", body)
+			}
+		}
 	}
 }
 

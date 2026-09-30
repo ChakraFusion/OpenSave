@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"encoding/json"
 	"fmt"
+	"github.com/opensave/opensave/internal/ignore"
 	"io"
 	"net/http"
 	"os"
@@ -32,12 +33,11 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	zr, err := zip.OpenReader(snap.ZipPath)
+	entries, err := snapshot.ArchiveEntries(snap.ZipPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("open snapshot zip: %v", err))
 		return
 	}
-	defer zr.Close()
 
 	type fileEntry struct {
 		Path  string `json:"path"`
@@ -45,11 +45,11 @@ func (s *Server) handleSnapshotFiles(w http.ResponseWriter, r *http.Request) {
 		IsDir bool   `json:"isDir"`
 	}
 	files := []fileEntry{}
-	for _, f := range zr.File {
+	for _, f := range entries {
 		files = append(files, fileEntry{
 			Path:  f.Name,
-			Size:  int64(f.UncompressedSize64),
-			IsDir: f.FileInfo().IsDir(),
+			Size:  int64(f.Size),
+			IsDir: f.IsDir,
 		})
 	}
 	writeJSON(w, http.StatusOK, files)
@@ -104,12 +104,20 @@ func (s *Server) handleRestoreFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The archive before the safety snapshot, whose pruning could take it.
+	archive, done, err := snapshot.OpenArchive(snap.ZipPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("open snapshot zip: %v", err))
+		return
+	}
+	defer done()
+
 	safetyComment := fmt.Sprintf("Safety snapshot before restoring file %q from %s", body.RelPath, snapshotID)
-	if _, err := s.Daemon.Snapshots.Create(gameID, safetyComment, true); err != nil {
+	if _, err := s.Daemon.Snapshots.CreateBeforeReplacing(gameID, safetyComment); err != nil {
 		s.Daemon.Log.Log("warn", "safety snapshot before file restore failed: "+err.Error())
 	}
 
-	if err := extractSingleFile(snap.ZipPath, body.RelPath, snapshot.ArchiveEntryRelPath(body.RelPath), target); err != nil {
+	if err := extractSingleFile(archive, body.RelPath, snapshot.ArchiveEntryRelPath(body.RelPath), target); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -142,7 +150,19 @@ func extractSingleFile(zipPath, entryName, destRel, savePath string) error {
 		}
 		defer src.Close()
 
-		destPath := filepath.Join(savePath, filepath.FromSlash(want))
+		// The entry name decides where this is written, and a snapshot archive
+		// is not always this machine's own — it can arrive from a peer or
+		// inside an imported backup. An entry called "../x" wrote outside the
+		// save folder entirely.
+		//
+		// The same check the whole-archive path has always made; this one
+		// joined the name straight on. Matching an entry in the archive is not
+		// protection when the archive is what an attacker controls.
+		clean := filepath.Clean(filepath.FromSlash(want))
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.IsAbs(clean) {
+			return fmt.Errorf("file %q in this snapshot points outside the save folder", entryName)
+		}
+		destPath := filepath.Join(savePath, clean)
 		if info, statErr := os.Stat(savePath); statErr == nil && !info.IsDir() {
 			destPath = savePath // single-file save mode
 		}
@@ -297,7 +317,7 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 		games = append(games, entry)
 	}
 
-	exported, exportSkipped, err := s.exportSelectedSaves(outPath, games)
+	exported, exportSkipped, fromSnapshot, err := s.exportSelectedSaves(outPath, games)
 	skipped = append(skipped, exportSkipped...)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -305,16 +325,34 @@ func (s *Server) handleBackupExport(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Daemon.Log.Log("success", fmt.Sprintf("exported the saves of %d game(s) to %s (%d skipped)", len(exported), outPath, len(skipped)))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"path": outPath, "exported": len(exported), "skipped": skipped,
+		"path": outPath, "exported": len(exported), "skipped": skipped, "fromSnapshot": fromSnapshot,
 	})
 }
 
 // exportSelectedSaves zips each game's live save and writes the v2
 // archive: saves/<gameID>.zip entries plus the manifest.
-func (s *Server) exportSelectedSaves(outPath string, games []backupManifestGame) (exported []backupManifestGame, skipped []skippedGame, err error) {
+// fromSnapshotGame is a game exported from its newest snapshot, because its
+// save folder was empty or missing.
+type fromSnapshotGame struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Snapshot string `json:"snapshot"` // its time
+}
+
+// copySnapshotArchive writes a snapshot's archive, whole, to dest.
+func copySnapshotArchive(snap store.Snapshot, dest string) error {
+	archive, done, err := snapshot.OpenArchive(snap.ZipPath)
+	if err != nil {
+		return err
+	}
+	defer done()
+	return copyFile(archive, dest)
+}
+
+func (s *Server) exportSelectedSaves(outPath string, games []backupManifestGame) (exported []backupManifestGame, skipped []skippedGame, fromSnapshot []fromSnapshotGame, err error) {
 	out, err := os.Create(outPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("create export file: %w", err)
+		return nil, nil, nil, fmt.Errorf("create export file: %w", err)
 	}
 	defer out.Close()
 
@@ -329,7 +367,7 @@ func (s *Server) exportSelectedSaves(outPath string, games []backupManifestGame)
 		})
 		tmp, tmpErr := os.CreateTemp("", "opensave-export-*.zip")
 		if tmpErr != nil {
-			return exported, skipped, tmpErr
+			return exported, skipped, fromSnapshot, tmpErr
 		}
 		tmpPath := tmp.Name()
 		tmp.Close()
@@ -339,6 +377,19 @@ func (s *Server) exportSelectedSaves(outPath string, games []backupManifestGame)
 			gameRoots = nil
 		}
 		skippedFiles, zipErr := snapshot.ZipRoots(g.SavePath, gameRoots, tmpPath)
+		// A tracked game whose folder is gone, or holds nothing, still has its
+		// save in its snapshots: that goes in, rather than skipping the game or
+		// writing an empty save — which "overwrite" would then restore over
+		// another device's save.
+		if n, _ := snapshot.ArchiveFileCount(tmpPath); g.Tracked && (zipErr != nil || n == 0) {
+			if snap, ok := s.Daemon.NewestSnapshotWithFiles(g.ID); ok {
+				if err := copySnapshotArchive(snap, tmpPath); err == nil {
+					zipErr, skippedFiles = nil, nil
+					fromSnapshot = append(fromSnapshot, fromSnapshotGame{g.ID, g.Name, snap.Timestamp})
+					s.Daemon.Log.Log("info", fmt.Sprintf("the save folder of %q is empty or missing — exported its snapshot of %s instead", g.Name, snap.Timestamp))
+				}
+			}
+		}
 		if zipErr != nil {
 			os.Remove(tmpPath)
 			skipped = append(skipped, skippedGame{g.ID, g.Name, zipErr.Error()})
@@ -358,7 +409,7 @@ func (s *Server) exportSelectedSaves(outPath string, games []backupManifestGame)
 		}
 		os.Remove(tmpPath)
 		if entryErr != nil {
-			return exported, skipped, entryErr
+			return exported, skipped, fromSnapshot, entryErr
 		}
 		exported = append(exported, g)
 	}
@@ -373,16 +424,16 @@ func (s *Server) exportSelectedSaves(outPath string, games []backupManifestGame)
 	}
 	raw, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
-		return exported, skipped, err
+		return exported, skipped, fromSnapshot, err
 	}
 	mEntry, err := zw.CreateHeader(&zip.FileHeader{Name: backupManifestName, Method: zip.Deflate})
 	if err != nil {
-		return exported, skipped, err
+		return exported, skipped, fromSnapshot, err
 	}
 	if _, err := mEntry.Write(raw); err != nil {
-		return exported, skipped, err
+		return exported, skipped, fromSnapshot, err
 	}
-	return exported, skipped, nil
+	return exported, skipped, fromSnapshot, nil
 }
 
 // exportAllSnapshots writes an inner ZIP (one entry per snapshot zip,
@@ -417,22 +468,27 @@ func (s *Server) exportAllSnapshots(outPath string) (int, error) {
 				return count, err
 			}
 			for _, snap := range snaps {
-				src, err := os.Open(snap.ZipPath)
+				archive, done, err := snapshot.OpenArchive(snap.ZipPath)
 				if err != nil {
+					s.Daemon.Log.Log("warn", fmt.Sprintf("skipping snapshot %s: %v", snap.ZipPath, err))
+					continue
+				}
+				src, err := os.Open(archive)
+				if err != nil {
+					done()
 					s.Daemon.Log.Log("warn", fmt.Sprintf("skipping missing snapshot zip %s", snap.ZipPath))
 					continue
 				}
 				entryName := fmt.Sprintf("%s__%s__%s.zip", game.ID, branch, snap.ID)
 				entry, err := zw.CreateHeader(&zip.FileHeader{Name: entryName, Method: zip.Store})
-				if err != nil {
-					src.Close()
-					return count, err
-				}
-				if _, err := io.Copy(entry, src); err != nil {
-					src.Close()
-					return count, err
+				if err == nil {
+					_, err = io.Copy(entry, src)
 				}
 				src.Close()
+				done()
+				if err != nil {
+					return count, err
+				}
 				count++
 			}
 		}
@@ -592,6 +648,16 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 			"op": "import", "done": i, "total": len(manifest.Games), "current": g.Name,
 		})
 		res := importResult{ID: g.ID, Name: g.Name}
+		// The game this device knows it as: itself, or the game it was linked
+		// into since the backup was made (a link keeps the merged-away id as
+		// an alias). Going by the id alone skipped it as untracked, or — with
+		// "overwrite" — tracked it all over again beside the linked game.
+		local, localErr := s.gameForImport(g.ID)
+		res.Tracked = localErr == nil
+		gameID := g.ID
+		if res.Tracked {
+			gameID = local.ID
+		}
 		entry, ok := saves[g.ID]
 		if !ok {
 			res.Action, res.Error = "skipped", "save data missing from backup file"
@@ -609,7 +675,7 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 		// Names only, with no path: the app can then ask where each one lives
 		// here rather than the files quietly going nowhere.
 		for _, name := range g.Locations {
-			if err := s.Daemon.Store.NoteGameRoot(g.ID, name); err != nil {
+			if err := s.Daemon.Store.NoteGameRoot(gameID, name); err != nil {
 				s.Daemon.Log.Log("warn", fmt.Sprintf(
 					"backup import: could not record the %q save location of %q: %v", name, g.Name, err))
 			}
@@ -631,9 +697,6 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 			continue
 		}
 
-		local, err := s.Daemon.Store.GetGame(g.ID)
-		res.Tracked = err == nil
-
 		if res.Tracked {
 			// The imported state always lands in snapshot history first;
 			// overwrite mode then restores that snapshot through the
@@ -644,7 +707,7 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 				branch = "main"
 			}
 			snapID := fmt.Sprintf("snap_%d", baseMs+int64(i))
-			destDir := filepath.Join(settings.BackupsDir, g.ID, branch)
+			destDir := filepath.Join(settings.BackupsDir, gameID, branch)
 			destPath := filepath.Join(destDir, snapID+".zip")
 			err := os.MkdirAll(destDir, 0o777)
 			if err == nil {
@@ -655,10 +718,12 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 				if info, statErr := os.Stat(destPath); statErr == nil {
 					size = info.Size()
 				}
-				err = s.Daemon.EnsureImportedSnapshot(g.ID, branch, snapID, destPath, size)
+				err = s.Daemon.EnsureImportedSnapshot(gameID, branch, snapID, destPath, size)
 			}
 			if err == nil && mode == "overwrite" {
-				_, err = s.Daemon.Snapshots.Restore(g.ID, snapID)
+				// A backup file may come from another device: this one's
+				// excluded files stay its own (Manager.RestoreKeeping).
+				_, err = s.Daemon.Snapshots.RestoreKeeping(gameID, snapID, ignore.Parse(local.SyncIgnore))
 				res.Path = local.SavePath
 				res.Action = "restored"
 			} else if err == nil {
@@ -747,7 +812,12 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 		if importErr != nil {
 			importRoots = nil
 		}
+		// Written into a game's save folder, so held as any other write to one
+		// is: nothing syncing the game reads it half-restored
+		// (syncengine/settle.go).
+		importDone := s.Daemon.P2P.Sync.Writing(g.ID)
 		unplaced, unzipErr := snapshot.UnzipRoots(tmpPath, target, importRoots)
+		importDone()
 		for _, name := range unplaced {
 			s.Daemon.Log.Log("warn", fmt.Sprintf("%q in this backup includes a %q save location, which this device has no folder for — those files were not restored", g.Name, name))
 		}
@@ -863,11 +933,13 @@ func (s *Server) importLegacyBackup(zr *zip.Reader) (imported, skipped int, err 
 			skipped++
 			continue
 		}
-		if _, err := s.Daemon.Store.GetGame(gameID); err != nil {
+		local, err := s.gameForImport(gameID)
+		if err != nil {
 			s.Daemon.Log.Log("warn", fmt.Sprintf("backup entry %s: game not tracked, skipping", f.Name))
 			skipped++
 			continue
 		}
+		gameID = local.ID
 
 		destDir := filepath.Join(settings.BackupsDir, gameID, branch)
 		if err := os.MkdirAll(destDir, 0o777); err != nil {
@@ -891,6 +963,22 @@ func (s *Server) importLegacyBackup(zr *zip.Reader) (imported, skipped int, err 
 		imported++
 	}
 	return imported, skipped, nil
+}
+
+// gameForImport is the game a backup's game id means here: that game, or the
+// one it was linked into (Store.ResolveGameAlias) — so a backup made before
+// two copies were linked imports into the game they became.
+func (s *Server) gameForImport(id string) (store.Game, error) {
+	g, err := s.Daemon.Store.GetGame(id)
+	if err == nil {
+		return g, nil
+	}
+	if canonical, ok := s.Daemon.Store.ResolveGameAlias(id); ok {
+		if linked, lErr := s.Daemon.Store.GetGame(canonical); lErr == nil {
+			return linked, nil
+		}
+	}
+	return store.Game{}, err
 }
 
 func extractZipEntryToFile(f *zip.File, destPath string) error {

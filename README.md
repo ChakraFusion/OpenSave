@@ -12,7 +12,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white)](https://discord.gg/hvBv92DZvn)
 [![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
-![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Steam%20Deck-lightgrey)
+![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Steam%20Deck%20%7C%20macOS-lightgrey)
 
 *A complete Go rewrite of the original Node.js/Electron app: one small native binary, no runtime to install, and wire-compatible with existing peers.*
 
@@ -34,23 +34,24 @@ OpenSave gives **every** game the Steam Cloud experience:
 
 - **You own it.** Saves sync directly between *your* devices. No account to create, nothing stored on someone else's server.
 - **It's automatic.** Auto-detects hundreds of games, watches for changes, and syncs the moment a save is written.
-- **It's safe.** Every change is snapshotted and reversible. Conflicts are detected and resolved without silently clobbering a playthrough.
+- **It's safe.** Every change is snapshotted and reversible — a full version history you can roll back, not just the latest copy. Conflicts are detected and resolved without silently clobbering a playthrough.
+- **Your devices don't have to be on at the same time.** Connect your own Google Drive, Dropbox, OneDrive, WebDAV server or NAS folder, and a save made on one device reaches the next one you open, even with the first switched off. Still no account with us.
 
 ## Features
 
-- **Auto-detection** — scans for saves from Steam, emulators (RetroArch, Dolphin, Ryujinx, Yuzu, Citra, PCSX2, RPCS3, PPSSPP, Cemu, Xenia), Steam-emulator repacks (Goldberg/GSE, CODEX, RUNE, Tenoke, EMPRESS, Online-Fix, CPY, SKIDROW, 3DM, …), Epic, GOG, Unity `LocalLow`, and Unreal Engine conventions — plus the community-maintained [Ludusavi manifest](https://github.com/mtkennerly/ludusavi-manifest) covering save paths for tens of thousands of games, whatever store (or no store) they came from.
+- **Auto-detection** — scans for saves from Steam, emulators (RetroArch, Dolphin, Ryujinx, Yuzu, Citra, PCSX2, RPCS3, PPSSPP, Cemu, Xenia), Steam-emulator repacks (Goldberg/GSE, CODEX, RUNE, Tenoke, EMPRESS, Online-Fix, CPY, SKIDROW, 3DM, …), Epic, GOG, Unity `LocalLow`, and Unreal Engine conventions — plus the community-maintained [Ludusavi manifest](https://github.com/mtkennerly/ludusavi-manifest) covering save paths for tens of thousands of games, whatever store (or no store) they came from. Heroic, Lutris and Bottles prefixes are found on any drive, SD card included, and a newly installed game is noticed in the background — pointed out, never tracked without asking.
 - **Track anything** — any folder or single save file, watched live with block-level change detection (SHA-256, 64 KB–2 MB adaptive blocks). Only the blocks that changed are ever transferred.
 - **One tile per game, not one per folder** — a scan finds the same game in several places as a matter of course, and every result shows its file count, size and last-written date so you can tell the save you play from the one an old install left behind. Folders holding no files are hidden. Where a game's save is genuinely split across sibling folders, they are offered together as one game.
 - **A save split across folders is one game** — some titles keep progress in one place and settings or mods in another. Add each folder as a **save location** and all of them sync, snapshot and restore together.
 - **Files that shouldn't sync** — device-specific settings living beside the save can be excluded per game, written like a `.gitignore`, or picked from a list of what is actually in the folder. Excluded files are still captured in every snapshot, so a rule can never be the thing that loses one.
 - **P2P sync** — automatic over LAN (zero-config discovery) or across the internet through a relay **room code** — no port forwarding. A paired-device model means every connection is explicitly approved.
-- **Snapshot history** — every change creates a versioned snapshot. Roll back a whole save or a single file; branches keep parallel playthroughs (and conflict resolutions) safe.
+- **Snapshot history** — every change creates a versioned snapshot, compressed where that helps. Roll back a whole save or a single file; branches keep parallel playthroughs (and conflict resolutions) safe.
 - **Smart conflict handling** — diverged saves are detected by **sync lineage**, not wall-clock timestamps. Keep yours, keep theirs, or keep both on a new branch.
-- **Cloud backup** — optional mirroring to Google Drive, Dropbox, OneDrive, WebDAV, a webhook, or a local/NAS folder. Any OAuth provider can use your own app credentials instead of the built-in ones — required for OneDrive, and the fix for Google Drive's weekly re-login.
+- **Cloud backup and hand-off** — optional mirroring to Google Drive, Dropbox, OneDrive, WebDAV, a webhook, or a local/NAS folder. Each device also reads the others' backups: a newer save that carries on from yours is brought over, and one that would replace progress made here is asked about first. Any OAuth provider can use your own app credentials instead of the built-in ones — required for OneDrive, and the fix for Google Drive's weekly re-login.
 - **Cross-device game matching** — the same title tracked under different names on two machines (a Steam install here, a differently-named folder there) can be matched by Steam App ID or linked by hand. App-ID matching is opt-in, so two separate copies of a game are never merged without asking.
 - **A full command line** — `opensave` does everything the app does, for a Steam Deck in Game Mode or a headless server. See [Command line](#command-line).
 - **In-app updates** — one-click update from GitHub releases, pull a newer build straight from a paired device, or `opensave update` from the terminal.
-- **Privacy-first** — no accounts, no telemetry. The relay only routes WebSocket frames and writes no save to disk; the hop to it is encrypted, and you can self-host it so nobody else is on the path at all.
+- **Privacy-first** — no accounts, no telemetry. As of v2.4.0, saves sent through the relay are encrypted end to end between your own two devices: the relay routes frames it cannot read and writes nothing to disk. You can self-host it so nobody else is on the path at all.
 
 ## Screenshots
 
@@ -84,8 +85,14 @@ OpenSave gives **every** game the Steam Cloud experience:
 | **Windows** | `OpenSave.Setup.exe` (installer) or portable `OpenSave.exe` | Double-click |
 | **Linux** | `opensave-linux-amd64.tar.gz` | extract, then `./opensave` |
 | **Steam Deck / SteamOS** | `OpenSave.flatpak` | see [Steam Deck install](#steam-deck-install) |
+| **macOS** (2.4.0 betas onward) | `OpenSave-macos.dmg`, or `opensave-macos-arm64.tar.gz` / `-amd64` for the CLI | open the `.dmg` and drag OpenSave to Applications — it isn't signed yet, so macOS asks you to allow it under **Privacy & Security** |
 
 Grab the latest from the [**Releases**](https://github.com/Liquid-co/OpenSave/releases) page.
+
+> **macOS says OpenSave "is damaged and can't be opened"?** That is
+> 2.4.0-beta.2, whose Mac app really was broken: its Info.plist was not valid,
+> and nothing in it was signed. Nothing you can do opens it — download a later
+> build, which macOS asks about instead; allow it under **Privacy & Security**.
 
 ### Steam Deck install
 
@@ -223,6 +230,22 @@ To choose where it lands or pin a version:
 OPENSAVE_INSTALL_DIR=/usr/local/bin OPENSAVE_VERSION=v2.2.0 sh install.sh
 ```
 
+To remove it, the same script reverses exactly what it and `opensave service
+install` put down — binaries, aliases, the service, the autostart entry, the
+PATH line — and **leaves your settings and backups where they are**:
+
+```bash
+curl -fsSL https://opensave.org/install.sh | sh -s -- --uninstall
+```
+
+Add `--purge` to delete `~/.opensave` as well; it says what it is about to
+delete, counts your backup files, and asks you to type a confirmation first.
+
+On Windows, `opensave install --uninstall` does the same for what
+`install.ps1` put down — the binary, the `os` and `opensave-cli` shims, and the
+`PATH` entry — and never touches your data. The desktop app's own uninstaller
+offers to run it for you.
+
 Or build it: `go build -o opensave ./cmd/opensave-cli`
 
 ### Keeping it current
@@ -246,8 +269,9 @@ opensave sync --all
 ```
 
 Different networks instead of a LAN? Run `opensave relay join <code>` with the
-same made-up code on both devices — no port forwarding, and the relay only
-passes encrypted data through without storing it.
+same made-up code on both devices — no port forwarding. As of v2.4.0 the relay
+passes data it cannot read: saves are encrypted end to end between your two
+devices, and nothing is stored on the way.
 
 ### Run it permanently
 
@@ -398,13 +422,19 @@ go build ./cmd/opensave-relay
 Run the test suite:
 
 ```bash
-go test ./...          # unit tests
-go test ./e2e/...      # end-to-end pairing & sync tests
+go test ./... -timeout 2700s     # everything
+go test ./e2e/... -timeout 2700s # end-to-end pairing & sync tests only
 ```
+
+The timeout is not optional. `e2e` drives real daemons over real HTTP with
+real file watching, and a large part of its ten minutes is spent deliberately
+waiting for background work to settle. That is comfortably past Go's default
+of ten minutes *per package*, and overrunning it prints a goroutine dump that
+reads like a crash rather than a clock running out. CI uses the same 2700s.
 
 ## Self-hosting the relay
 
-The relay is stateless — it brokers room codes and proxies OAuth, and writes no save to disk. What it forwards is encrypted in transit, but that encryption ends at the relay rather than at your other device, so a relay operator could read what passes through. Ours is `wss://relay.opensave.org`; run your own so that nobody but you is on the path:
+The relay is stateless — it brokers room codes and proxies OAuth, and writes no save to disk. As of v2.4.0, what it forwards is encrypted end to end: saves are sealed with a key only your two devices hold, so a relay operator cannot read what passes through. What a relay can still see is that two devices are talking, roughly how much data moves, and which games by id. Ours is `wss://relay.opensave.org`; run your own to keep even that to yourself:
 
 ```bash
 ./opensave-relay                     # listens on :8386
@@ -457,7 +487,9 @@ No accounts, no telemetry, no analytics. See [PRIVACY.md](PRIVACY.md) for the fu
 No. Devices sync directly. The optional relay only matters for syncing across the internet, and you can self-host it.
 
 **Is my data encrypted in transit?**
-Yes, to the relay — the connection is TLS, and the relay writes no save to disk. But that encryption ends at the relay rather than at your other device, so saves are not sealed end-to-end yet and a relay operator could read what passes through. LAN sync is direct and involves no relay; self-hosting the relay puts the whole WAN path under your control too.
+Over the relay, yes — end to end as of v2.4.0: save data is sealed with a key derived from the two devices' own keys when they paired, so neither the relay nor anyone else in your room can read it. Both devices need v2.4.0 or later, and an internet pairing made on an earlier version has no key to use — unpair and pair those two again to protect them. The app shows each device's state under **Devices**.
+
+LAN sync is direct, involves no relay, and is **not** encrypted: anything on the same network can read a save as it transfers. Treat a network you do not control as one that can see your saves.
 
 **What if two devices change the same save while offline?**
 OpenSave detects the divergence by sync lineage and asks you to keep yours, theirs, or both (on a new branch). It never silently overwrites.
@@ -470,7 +502,7 @@ Yes, during the transition. They share the same wire protocol and your data migr
 
 ## Contributing
 
-Issues and pull requests are welcome. Please run `go test ./...` before opening a PR, and keep changes focused. For larger features, open an issue first so we can align on approach.
+Issues and pull requests are welcome. Please run `go test ./... -timeout 2700s` before opening a PR (see [Build from source](#build-from-source) for why the timeout is needed), and keep changes focused. For larger features, open an issue first so we can align on approach.
 
 ## Documentation
 

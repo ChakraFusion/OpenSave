@@ -1,4 +1,5 @@
 <script>
+  import { dialogOut } from '../lib/motion.js';
   import { confirmRequest, answerConfirm } from '../lib/stores.js';
   import { backdropClose } from '../lib/backdrop.js';
 
@@ -18,7 +19,7 @@
 <svelte:window on:keydown={onKeydown} />
 
 {#if $confirmRequest}
-  <div class="backdrop" use:backdropClose={() => answerConfirm(false)} role="presentation">
+  <div class="backdrop" use:backdropClose={() => answerConfirm(false)} role="presentation" out:dialogOut|global>
     <div class="modal card" role="alertdialog" aria-modal="true" aria-label={$confirmRequest.title}>
       <h3>{$confirmRequest.title}</h3>
       <p class="message">{$confirmRequest.message}</p>
@@ -41,7 +42,7 @@
   .backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.55);
+    background: var(--overlay);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -54,7 +55,7 @@
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg);
     padding: 22px 24px 20px;
-    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+    box-shadow: var(--shadow);
   }
   h3 {
     margin: 0 0 10px;
@@ -72,11 +73,14 @@
     justify-content: flex-end;
     gap: 10px;
   }
+  /* The one action the dialog exists for, so solid rather than tinted. */
   .btn.danger {
-    background: #b91c1c;
-    border-color: #b91c1c;
+    background: var(--danger);
+    border-color: transparent;
+    color: #fff;
   }
   .btn.danger:hover {
-    background: #dc2626;
+    background: var(--danger);
+    filter: brightness(1.1);
   }
 </style>
