@@ -13,6 +13,12 @@ All notable changes to OpenSave are documented here. This project adheres to
   the game was held back, asking whether that was meant, instead of fetching
   the files from your other devices. What a location held before now counts
   only from when it got the folder it has.
+- **The first launch after boot no longer fails to reach OpenSave.** With a
+  large library, starting up takes several seconds on a cold disk, and the
+  window asked for OpenSave's address before there was one: it said it
+  "can't reach OpenSave's background service at http://" and Retry worked.
+  The window now waits for startup to finish. Reported with the cause
+  pinned down in GitHub #17.
 
 ## [2.4.0] — 2026-09-30
 

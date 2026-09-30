@@ -38,16 +38,38 @@ type App struct {
 	reallyQuit  bool
 	updatedFrom string // previous version when this run is the first on a new build
 	notifyErr   error  // why desktop notifications cannot be shown, where known (notify_other.go)
+	// ready is closed when startup has finished, however it finished. The
+	// window loads while startup is still running, and what startup sets —
+	// the address, the boot error, the version updated from — is read only
+	// after this, never while it is being written (see started).
+	ready chan struct{}
 }
 
 // NewApp creates the App shell (daemon boots in startup).
 func NewApp() *App {
-	return &App{}
+	return &App{ready: make(chan struct{})}
+}
+
+// startupWait is how long the window waits for startup before saying it is
+// taking too long. Generous: a large library on a cold disk takes a while to
+// watch, and every second of it is better spent waiting than showing an error
+// that Retry would clear.
+var startupWait = 3 * time.Minute
+
+// started waits for startup to finish, and says whether it did in time.
+func (a *App) started() bool {
+	select {
+	case <-a.ready:
+		return true
+	case <-time.After(startupWait):
+		return false
+	}
 }
 
 // startup boots the daemon + local API server once the webview exists.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	defer close(a.ready)
 
 	// Asked to stop a running OpenSave, and we ARE the only one: there is
 	// nothing to stop. Exit without booting a daemon, claiming a port or
@@ -224,7 +246,7 @@ func (a *App) ChangelogReleases() []changelog.Release {
 // Empty when this isn't the first run on a new build, so the UI has a single
 // condition to check rather than reimplementing the comparison.
 func (a *App) WhatsNew() []changelog.Release {
-	if a.updatedFrom == "" {
+	if !a.started() || a.updatedFrom == "" {
 		return nil
 	}
 	return changelog.Since(changelog.Parse(opensave.Changelog), a.updatedFrom)
@@ -233,12 +255,26 @@ func (a *App) WhatsNew() []changelog.Release {
 // UpdateGreeting reports the version this install was just updated FROM
 // ("" normally) so the UI can announce the update and offer the changelog.
 func (a *App) UpdateGreeting() map[string]string {
+	if !a.started() {
+		return map[string]string{"updatedFrom": ""}
+	}
 	return map[string]string{"updatedFrom": a.updatedFrom}
 }
 
 // DaemonAddr returns the local API address (host:port) or an error string
 // if the daemon failed to boot.
+//
+// It waits for startup to finish. The window asks as soon as it loads, and
+// with many games to watch startup is still running then; answering at once
+// gave it an empty address, and the first launch after boot failed with
+// "can't reach OpenSave's background service at http://" while Retry worked
+// (GitHub #17). Bound methods are called asynchronously, so the wait only
+// holds the window's first request back until there is an answer to give.
 func (a *App) DaemonAddr() map[string]string {
+	if !a.started() {
+		return map[string]string{"error": "OpenSave's background service is still starting after " +
+			startupWait.String() + " — its log (opensave.log in the .opensave folder) says what it is doing"}
+	}
 	if a.bootErr != "" {
 		return map[string]string{"error": a.bootErr}
 	}
