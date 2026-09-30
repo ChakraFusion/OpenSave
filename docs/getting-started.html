@@ -314,10 +314,12 @@
           traffic and stores nothing; no copy of your saves is written to it.
         </p>
         <p>
-          The connection to the relay is encrypted, but that encryption ends <em>at</em> the relay
-          rather than at your other device — so whoever runs the relay is someone you are trusting
-          with the save data passing through it. For the public relay, that is us. If you would
-          rather it were nobody, <a href="#relay">run your own</a>.
+          From OpenSave 2.4.0, saves sent through the relay are sealed end to end: only your two
+          devices hold the key, so neither the relay nor anyone else with your room code can read
+          them. Both devices need 2.4.0 or later, and two devices paired over the internet on an
+          earlier version need pairing again — the app shows which. A relay can still see that two
+          devices are talking and roughly how much data moves; if you would rather that were
+          nobody, <a href="#relay">run your own</a>.
         </p>
         <div class="guide-note">
           <p>

@@ -85,7 +85,7 @@ OpenSave gives **every** game the Steam Cloud experience:
 | **Windows** | `OpenSave.Setup.exe` (installer) or portable `OpenSave.exe` | Double-click |
 | **Linux** | `opensave-linux-amd64.tar.gz` | extract, then `./opensave` |
 | **Steam Deck / SteamOS** | `OpenSave.flatpak` | see [Steam Deck install](#steam-deck-install) |
-| **macOS** (2.4.0 betas onward) | `OpenSave-macos.dmg`, or `opensave-macos-arm64.tar.gz` / `-amd64` for the CLI | open the `.dmg` and drag OpenSave to Applications — it isn't signed yet, so macOS asks you to allow it under **Privacy & Security** |
+| **macOS** (2.4.0 onward) | `OpenSave-macos.dmg`, or `opensave-macos-arm64.tar.gz` / `-amd64` for the CLI | open the `.dmg` and drag OpenSave to Applications — it isn't signed yet, so macOS asks you to allow it under **Privacy & Security** |
 
 Grab the latest from the [**Releases**](https://github.com/Liquid-co/OpenSave/releases) page.
 

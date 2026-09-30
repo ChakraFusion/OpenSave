@@ -95,7 +95,7 @@
       <!-- Kept as .hero-eyebrow because app.js rewrites the version here
            from the live GitHub tag, matching a text node against /v2.\d/. -->
       <div class="hero-eyebrow">
-        <span class="badge-dot"></span> v2.3.1 &mdash; latest release
+        <span class="badge-dot"></span> v2.4.0 &mdash; latest release
       </div>
 
       <h1 class="hero-title">Steam Cloud for<br><span>every&nbsp;game</span> you own.</h1>
@@ -396,7 +396,7 @@
         </div>
         <div class="arch-notes">
           <h3>Local-first by design</h3>
-          <p>The relay is a stateless room broker — it forwards WebSocket frames and <strong>writes no save to disk</strong>. The connection to it is encrypted, but that encryption ends at the relay rather than at your other device, so whoever runs one is in a position to read what passes through. Ours is <code>wss://relay.opensave.org</code>. Don't want to take our word for it? <a href="https://github.com/Liquid-co/OpenSave#self-hosting-the-relay" target="_blank" rel="noopener">Self-host it</a> with one binary or a Dockerfile.</p>
+          <p>The relay is a stateless room broker — it forwards WebSocket frames and <strong>writes no save to disk</strong>. From 2.4.0, saves are sealed end to end between your two devices, so the relay forwards what it cannot read. Ours is <code>wss://relay.opensave.org</code>. Don't want to take our word for it? <a href="https://github.com/Liquid-co/OpenSave#self-hosting-the-relay" target="_blank" rel="noopener">Self-host it</a> with one binary or a Dockerfile.</p>
           <p>Prefer a terminal? The headless daemon + <code>opensave-cli</code> runs on servers and Steam Deck alike, and everything the app does is scriptable over a local REST/WebSocket API.</p>
 
           <!-- Filled from https://relay.opensave.org/health at load. Left as
@@ -552,7 +552,7 @@
         </details>
         <details class="faq-item">
           <summary>Is my data safe in transit?</summary>
-          <p>WAN sync travels over an encrypted connection to a stateless relay that stores nothing. That encryption ends at the relay rather than at your other device, so the relay could read what it forwards — saves are not sealed end-to-end yet. Ours runs on our own hardware at <code>wss://relay.opensave.org</code>, and you can replace it with your own in one command. On LAN, devices talk directly and no relay is involved. Saves are only ever persisted on <em>your</em> devices (and, if you enable it, your own cloud storage).</p>
+          <p>WAN sync goes through a stateless relay that stores nothing, and from 2.4.0 saves are sealed end to end between your two devices: the relay forwards them but cannot read them. It can still see that two devices are talking, roughly how much data moves, and which games by id. Ours runs on our own hardware at <code>wss://relay.opensave.org</code>, and you can replace it with your own in one command. On LAN, devices talk directly and no relay is involved. Saves are only ever persisted on <em>your</em> devices (and, if you enable it, your own cloud storage).</p>
         </details>
         <details class="faq-item">
           <summary>Can I use it without a GUI?</summary>
