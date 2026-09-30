@@ -63,10 +63,12 @@ func TestCloudLinkedCopies_RestoreABackupUploadedUnderTheOtherDevicesName(t *tes
 	}
 
 	// Before linking, the backup is correctly none of this game's business.
+	// Only A's file is looked for: B's own first snapshot may already have
+	// been uploaded under B's id, and that one does belong to this game.
 	var before []map[string]any
 	b.API(http.MethodGet, "/api/cloud/snapshots/"+localID, nil, &before)
-	if len(before) != 0 {
-		t.Fatalf("an unlinked game listed another id's backups: %v", before)
+	if listsFile(before, remoteName) {
+		t.Fatalf("an unlinked game listed another id's backup %s: %v", remoteName, before)
 	}
 	code := b.APIStatus(http.MethodPost, "/api/cloud/restore/"+localID,
 		map[string]string{"fileName": remoteName}, nil)
@@ -80,8 +82,9 @@ func TestCloudLinkedCopies_RestoreABackupUploadedUnderTheOtherDevicesName(t *tes
 	// Now the other device's backup belongs to this game.
 	var after []map[string]any
 	b.API(http.MethodGet, "/api/cloud/snapshots/"+localID, nil, &after)
-	if len(after) == 0 {
-		t.Fatalf("after linking, the peer's backup is still not listed for this game (%s)", b.LastError())
+	if !listsFile(after, remoteName) {
+		t.Fatalf("after linking, the peer's backup %s is still not listed for this game: %v (%s)",
+			remoteName, after, b.LastError())
 	}
 
 	code = b.APIStatus(http.MethodPost, "/api/cloud/restore/"+localID,
@@ -137,4 +140,15 @@ func TestCloudLinkedCopies_ListingFoldsLinkedIDsIntoOneGame(t *testing.T) {
 	if listing[0].GameName == "" || listing[0].GameName == listing[0].GameID {
 		t.Errorf("the folded game is labelled with a bare id (%q) rather than its name", listing[0].GameName)
 	}
+}
+
+// listsFile reports whether a /api/cloud/snapshots listing holds the named
+// backup file.
+func listsFile(listing []map[string]any, name string) bool {
+	for _, s := range listing {
+		if s["name"] == name {
+			return true
+		}
+	}
+	return false
 }
