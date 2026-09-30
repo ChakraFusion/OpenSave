@@ -2,6 +2,7 @@
   import { settings, wanRoom, peers, toast } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { generateRoomCode } from '../lib/roomcode.js';
+  import { plural } from '../lib/format.js';
   import { roomProtection } from '../lib/protection.js';
   import DeviceIcon from '../components/DeviceIcon.svelte';
   import Lock from 'lucide-svelte/icons/lock';
@@ -266,7 +267,7 @@
   {#if health}
     <div class="health with-icon" class:ok={health.reachable}>
       {#if health.reachable}
-        <CircleCheck size={16} /> Relay reachable — {health.health?.clients ?? 0} client(s) in {health.health?.rooms ?? 0} room(s)
+        <CircleCheck size={16} /> Relay reachable — {plural(health.health?.clients ?? 0, 'device')} connected, in {plural(health.health?.rooms ?? 0, 'room')}
       {:else}
         <CircleX size={16} /> Relay unreachable: {health.error}
       {/if}
