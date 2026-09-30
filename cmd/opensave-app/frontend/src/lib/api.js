@@ -27,6 +27,9 @@ export async function initApi() {
     try {
       status = await request('GET', '/api/status');
     } catch (e) {
+      // Not a connection that may come good in a moment, and not a firewall:
+      // said as it is, not wrapped in the advice below, which is about those.
+      if (e.notOpenSave) throw e;
       lastErr = e;
       await new Promise((r) => setTimeout(r, 700));
       continue;
@@ -35,7 +38,7 @@ export async function initApi() {
     // Anything else is another program on the port, and going on would
     // show that program's answers as an OpenSave with nothing in it.
     if (!status || typeof status.settings !== 'object' || status.settings === null) {
-      throw new Error(notOpenSave());
+      throw notOpenSave();
     }
     return baseURL;
   }
@@ -62,7 +65,7 @@ async function request(method, path, body) {
       // Every OpenSave answer with a body is JSON. One that is not came from
       // another program on this port, and read as {} it made OpenSave look
       // empty: no games, first-run settings, "i is not iterable" from a scan.
-      if (res.ok) throw new Error(notOpenSave());
+      if (res.ok) throw notOpenSave();
     }
   }
   if (!res.ok) {
@@ -72,11 +75,13 @@ async function request(method, path, body) {
 }
 
 function notOpenSave() {
-  return (
+  const e = new Error(
     `Something other than OpenSave is answering at ${baseURL}. Another program is using OpenSave's port — ` +
-    `often a hardware or vendor utility installed alongside a driver or BIOS update. Your games and saves are not affected. ` +
-    `Restart OpenSave to have it pick another port.`
+      `often a hardware or vendor utility installed alongside a driver or BIOS update. Your games and saves are not affected. ` +
+      `Restart OpenSave to have it pick another port.`
   );
+  e.notOpenSave = true;
+  return e;
 }
 
 export const api = {
