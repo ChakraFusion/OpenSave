@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +39,9 @@ import (
 //
 // What the location "held before" is the files the other devices are
 // recorded as having in common with this one, together with the files in
-// this device's newest snapshot that has any. Not the first alone: that
+// this device's newest snapshot that has any — from a snapshot taken since
+// the location has had the folder it has now (lastSavedFiles). Not the first
+// alone: that
 // record lags — a file pushed to another device joins it only once that
 // device has said it has the file — while the other device's own record,
 // which is what it acts on, already has it. The snapshot is there before the
@@ -154,15 +157,30 @@ func (e *Engine) emptiedLocations(game store.Game) (x emptiness, err error) {
 
 // lastSavedFiles is what the game's newest snapshot with any files held, by
 // save location: what its save was just before it was emptied.
+//
+// A location's files count only from a snapshot taken since it has had the
+// folder it has now. An older one's came from somewhere else — another
+// folder, or another machine whose backup was restored here, which leaves out
+// the files of any location this machine had no folder for yet. Counted, they
+// made a location just given its folder, empty until the files arrived, read
+// as emptied, and the game was held back instead of fetching them.
 func (e *Engine) lastSavedFiles(game store.Game) map[string]map[string]struct{} {
 	snaps, err := e.Store.ListSnapshots(game.ID, game.ActiveBranch) // newest first
 	if err != nil {
 		return nil
 	}
+	mappedSince, err := e.Store.GameRootsMappedSince(game.ID)
+	if err != nil {
+		mappedSince = nil // every snapshot counts, as it did before this was recorded
+	}
 	for _, s := range snaps {
+		taken, known := snapshotTakenMs(s)
 		out := map[string]map[string]struct{}{}
 		add := func(root, path string) {
 			if path == "" || strings.HasSuffix(path, "/") || dotted(path) {
+				return
+			}
+			if root != delta.PrimaryRoot && known && taken < mappedSince[root] {
 				return
 			}
 			if out[root] == nil {
@@ -186,6 +204,18 @@ func (e *Engine) lastSavedFiles(game store.Game) map[string]map[string]struct{} 
 		}
 	}
 	return nil
+}
+
+// snapshotTakenMs is when a snapshot was taken, from its timestamp or, failing
+// that, its id (snap_<ms>). Not known means it counts for every location.
+func snapshotTakenMs(s store.Snapshot) (int64, bool) {
+	if t, err := time.Parse(time.RFC3339Nano, s.Timestamp); err == nil {
+		return t.UnixMilli(), true
+	}
+	if ms, err := strconv.ParseInt(strings.TrimPrefix(s.ID, "snap_"), 10, 64); err == nil && strings.HasPrefix(s.ID, "snap_") {
+		return ms, true
+	}
+	return 0, false
 }
 
 // dotted says whether a path is inside a dot-folder or is a dot-file, which

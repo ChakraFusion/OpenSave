@@ -1,10 +1,13 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	slashpath "path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/opensave/opensave/internal/logging"
 )
@@ -175,15 +178,53 @@ func (s *Store) AddGameRoot(gameID, name, path string) error {
 			}
 		}
 	}
-	_, err := s.db.Exec(`
+	tx, err := s.db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var before string
+	if err := tx.Get(&before, `SELECT path FROM game_roots WHERE game_id = ? AND name = ?`, gameID, n); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("add game root: %w", err)
+	}
+	if _, err := tx.Exec(`
 		INSERT INTO game_roots (game_id, name, path, ordinal)
 		VALUES (?, ?, ?, COALESCE((SELECT MAX(ordinal) + 1 FROM game_roots WHERE game_id = ?), 0))
 		ON CONFLICT(game_id, name) DO UPDATE SET path = excluded.path`,
-		gameID, n, path, gameID)
-	if err != nil {
+		gameID, n, path, gameID); err != nil {
 		return fmt.Errorf("add game root: %w", err)
 	}
-	return nil
+	// A different folder from the one it had, or its first: from now on is
+	// when this folder's contents began (migration 0037). The same folder
+	// saved again is not a new one.
+	if strings.TrimSpace(path) != "" && normalizeLocationPath(path) != normalizeLocationPath(before) {
+		if _, err := tx.Exec(`
+			INSERT INTO game_root_mapped (game_id, name, mapped_ms) VALUES (?, ?, ?)
+			ON CONFLICT(game_id, name) DO UPDATE SET mapped_ms = excluded.mapped_ms`,
+			gameID, n, time.Now().UnixMilli()); err != nil {
+			return fmt.Errorf("add game root: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// GameRootsMappedSince is when each of a game's extra locations got the
+// folder it has now, in Unix milliseconds, for the locations that record it —
+// those given a folder since migration 0037. A snapshot older than that holds
+// nothing that was ever in this folder.
+func (s *Store) GameRootsMappedSince(gameID string) (map[string]int64, error) {
+	var rows []struct {
+		Name     string `db:"name"`
+		MappedMs int64  `db:"mapped_ms"`
+	}
+	if err := s.db.Select(&rows, `SELECT name, mapped_ms FROM game_root_mapped WHERE game_id = ?`, gameID); err != nil {
+		return nil, fmt.Errorf("game roots mapped since: %w", err)
+	}
+	out := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		out[r.Name] = r.MappedMs
+	}
+	return out, nil
 }
 
 // RemoveGameRoot forgets an extra location. The files it pointed at are left
@@ -205,6 +246,9 @@ func (s *Store) RemoveGameRoot(gameID, name string) error {
 	}
 	if _, err := tx.Exec(`DELETE FROM game_root_sync_state WHERE game_id = ? AND root = ?`, gameID, n); err != nil {
 		return fmt.Errorf("remove game root lineage: %w", err)
+	}
+	if _, err := tx.Exec(`DELETE FROM game_root_mapped WHERE game_id = ? AND name = ?`, gameID, n); err != nil {
+		return fmt.Errorf("remove game root: %w", err)
 	}
 	return tx.Commit()
 }

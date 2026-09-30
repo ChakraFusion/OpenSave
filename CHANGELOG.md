@@ -3,6 +3,17 @@
 All notable changes to OpenSave are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **Restoring onto a new PC no longer holds a game back for nothing.** After
+  a backup from the old PC was restored, giving one of a game's other save
+  locations its folder on the new machine read as every file there deleted:
+  the game was held back, asking whether that was meant, instead of fetching
+  the files from your other devices. What a location held before now counts
+  only from when it got the folder it has.
+
 ## [2.4.0] — 2026-09-30
 
 Everything from the four 2.4 betas below, now stable. Coming from 2.3.1, it

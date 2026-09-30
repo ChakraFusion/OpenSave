@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func rootsTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -292,5 +295,66 @@ func TestLearningANewLocationRecordsItUnmapped(t *testing.T) {
 	}
 	if roots[0].Mapped() {
 		t.Error("a location learned by name alone was recorded as mapped")
+	}
+}
+
+// When a location got the folder it has now: set by its first folder and by a
+// different one, left alone by the same folder saved again (the settings
+// screen saves every field at once) and by learning the name, and gone with
+// the location.
+func TestAGameRootRemembersWhenItGotItsFolder(t *testing.T) {
+	s := rootsTestStore(t)
+	since := func() (int64, bool) {
+		t.Helper()
+		m, err := s.GameRootsMappedSince("elden-ring")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ms, ok := m["config"]
+		return ms, ok
+	}
+
+	if err := s.NoteGameRoot("elden-ring", "config"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := since(); ok {
+		t.Error("a location known by name only has a folder time")
+	}
+
+	before := time.Now().UnixMilli()
+	if err := s.AddGameRoot("elden-ring", "config", `C:\Users\me\Documents\ER`); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := since()
+	if !ok || first < before {
+		t.Fatalf("first folder: time %d (recorded %v), want at least %d", first, ok, before)
+	}
+
+	time.Sleep(5 * time.Millisecond)
+	if err := s.AddGameRoot("elden-ring", "config", `c:/users/me/documents/ER`); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := since(); again != first {
+		t.Errorf("the same folder saved again moved the time from %d to %d", first, again)
+	}
+	if err := s.NoteGameRoot("elden-ring", "config"); err != nil {
+		t.Fatal(err)
+	}
+	if again, _ := since(); again != first {
+		t.Errorf("learning the name again moved the time from %d to %d", first, again)
+	}
+
+	if err := s.AddGameRoot("elden-ring", "config", `D:\Elsewhere\ER`); err != nil {
+		t.Fatal(err)
+	}
+	if moved, _ := since(); moved <= first {
+		t.Errorf("a different folder left the time at %d, want later than %d", moved, first)
+	}
+
+	if err := s.RemoveGameRoot("elden-ring", "config"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := since(); ok {
+		t.Error("the folder time outlived the location")
 	}
 }
