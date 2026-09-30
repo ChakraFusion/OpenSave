@@ -196,9 +196,10 @@ func (s *Server) handleUpdateSettings(w http.ResponseWriter, r *http.Request) {
 		prevAutoDelete, prevAutoDeleteDays = prev.AutoDeleteBackups, prev.AutoDeleteDays
 	}
 
-	// Refuse a cleartext relay before it is stored, not at the dial: saves
-	// carry no encryption of their own, so ws:// to somewhere public puts the
-	// file itself on the wire in the clear.
+	// Refuse a cleartext relay before it is stored, not at the dial: only
+	// saves between two 2.4 devices are sealed, so ws:// to somewhere public
+	// puts older pairings' files, room codes and pairing requests on the wire
+	// in the clear.
 	//
 	// Only when the address actually changes. This screen saves every field at
 	// once, so validating unconditionally would mean somebody who already has

@@ -720,8 +720,9 @@ if [ -z "$DOMAIN" ] && [ "$PUBLIC_ONLY" -eq 1 ]; then
 
     It is running, but it was installed without --domain, so it speaks ws://
     rather than wss:// — and OpenSave refuses an unencrypted relay at a public
-    address. Saves carry no encryption of their own, so that would put the save
-    file itself on the wire in the clear.
+    address. Only saves between two 2.4 devices are sealed, so that would put
+    older pairings' saves, room codes and pairing requests on the wire in the
+    clear.
 
     This machine has no private address to fall back on, which is normal for a
     hosted server. Point a name at it and re-run:
