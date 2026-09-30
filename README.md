@@ -57,8 +57,8 @@ OpenSave gives **every** game the Steam Cloud experience:
 <table>
   <tr>
     <td align="center">
-      <img src="docs/screenshots/auto-scan.png" alt="Auto-scan results — detected saves as a cover-art grid" /><br>
-      <sub><b>Auto-scan</b> — 158 saves found on this PC, shown as cover art. Games, emulators, and repacks, one click to track.</sub>
+      <img src="docs/screenshots/auto-scan.png" alt="Scan results — detected saves as a cover-art grid" /><br>
+      <sub><b>Scan</b> — finds saves from Steam, emulators, GOG, Epic and repacks, shown as cover art, one click to track.</sub>
     </td>
     <td align="center">
       <img src="docs/screenshots/cloud-backup.png" alt="Cloud Backup — provider selection with Google Drive connected" /><br>
@@ -67,12 +67,12 @@ OpenSave gives **every** game the Steam Cloud experience:
   </tr>
   <tr>
     <td align="center">
-      <img src="docs/screenshots/devices-pairing.png" alt="Devices — internet pairing with a relay room code" /><br>
-      <sub><b>Internet sync</b> — pair devices anywhere with a room code. No port forwarding, and the relay never stores saves.</sub>
+      <img src="docs/screenshots/devices-pairing.png" alt="Devices — a Steam Deck paired and online" /><br>
+      <sub><b>Devices</b> — pair once on your network, or anywhere with a room code. No port forwarding, and the relay never stores saves.</sub>
     </td>
     <td align="center">
-      <img src="docs/screenshots/home-library.png" alt="Home — tracked library with snapshots per game" /><br>
-      <sub><b>Your library</b> — every tracked game with its branch and snapshot history, one Sync all button away.</sub>
+      <img src="docs/screenshots/activity.png" alt="Activity — where each game was last played, saved and synced" /><br>
+      <sub><b>Activity</b> — where each game was last played, when it was last saved and synced, and how long you have played it.</sub>
     </td>
   </tr>
 </table>
@@ -180,8 +180,8 @@ server, or a Steam Deck that lives in Game Mode — never needs the desktop app.
 No account, no token, no server to sign up to.
 
 <p align="center">
-  <img src="docs/screenshots/cli-status.png" width="820"
-       alt="The OpenSave CLI status panel: the OpenSave wordmark in white and purple, then the version, whether the daemon is running, the device name, tracked games, paired devices and relay status, followed by suggested next commands.">
+  <img src="docs/screenshots/cli-status.png" width="825"
+       alt="The OpenSave CLI status panel: the OpenSave wordmark in white and purple, then the version, whether the daemon is running, the device name, tracked games, paired devices, relay and cloud backup status, followed by suggested next commands.">
 </p>
 
 Run `opensave` on its own and it tells you what is happening right now, and what
