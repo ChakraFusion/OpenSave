@@ -228,7 +228,13 @@ func HashFile(path string) (FileEntry, error) {
 
 // BuildManifest walks root (a directory or a single file, per
 // ResolveLocalSaveFilePath) and returns a full Manifest of its contents.
+// Builds of one folder that overlap are coalesced (manifest_builds.go); the
+// walk itself is buildManifest.
 func BuildManifest(root string) (Manifest, error) {
+	return builds.build(root)
+}
+
+func buildManifest(root string) (Manifest, error) {
 	// Never scan profile/system-level folders. A mis-tracked game pointing
 	// at e.g. C:\Users\<name> would otherwise try to hash (and sync!) the
 	// whole user profile — and die on the first legacy junction anyway.
