@@ -518,10 +518,12 @@ func (d *Daemon) runCloudUpload(zipPath, remoteFileName string, log *logging.Log
 	}
 	if err != nil {
 		if !cloud.IsNotConfigured(err) {
-			log.Log("error", fmt.Sprintf("cloud upload of %s failed: %v", remoteFileName, err))
+			log.Log("error", fmt.Sprintf("cloud upload of %s failed: %v — it will be sent again once the cloud can be reached", remoteFileName, err))
+			d.noteUploadFailed(zipPath, remoteFileName)
 		}
 		return
 	}
+	_ = d.Store.ForgetCloudRetry(remoteFileName)
 	// Now that it is up there, say it is this device's save — if it is. A
 	// copy kept before a restore uploads the same way and is not.
 	if gameID, _, snapID, ok := snapshot.ParseExportEntryName(remoteFileName); ok {

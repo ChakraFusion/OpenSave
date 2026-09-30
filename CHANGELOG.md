@@ -7,6 +7,17 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Fixed
 
+- **A cloud backup that fails is sent again.** A snapshot whose upload failed
+  — the network down, a name that would not resolve, a connection that
+  stalled — was logged and forgotten, so the backup went without every
+  snapshot taken while the network was out, unless someone pressed "Upload
+  local snapshots" by hand. Failed uploads are now kept, and sent again once
+  the cloud can be reached, a few at a time.
+- **The relay's certificate error names the likely cause.** "Certificate
+  signed by unknown authority" means something on the network is answering
+  in the relay's place — a sign-in page, or a filter that inspects secure
+  connections. The log used to suggest checking the clock, which fails
+  differently.
 - **OpenSave notices when another program is answering on its port.** On
   Windows, a program listening on 127.0.0.1 at OpenSave's port — often a
   hardware or vendor utility that comes with a driver or BIOS update — took

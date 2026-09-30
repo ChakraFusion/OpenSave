@@ -428,6 +428,14 @@ func (d *Daemon) CheckCloud() {
 		}
 		return
 	}
+	// The listing worked, so the provider can be reached: send what failed to
+	// go up before. Then list again, so what is read below includes it.
+	if pending, _ := d.Store.CloudRetries(); len(pending) > 0 {
+		d.retryFailedUploads(files)
+		if again, err := d.Cloud.List(); err == nil {
+			files = again
+		}
+	}
 	settings, err := d.Store.GetSettings()
 	if err != nil {
 		return

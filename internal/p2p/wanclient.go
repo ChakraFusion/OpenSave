@@ -467,10 +467,18 @@ func (w *WanClient) connectionLost(ctx context.Context, gen int, state, errMsg s
 	// so the first few drops are expected and reconnect handles them silently.
 	// Escalate only once the relay has actually stayed away.
 	switch {
+	case errMsg != "" && strings.Contains(errMsg, "unknown authority"):
+		// A certificate from nobody this device trusts: something between it
+		// and the relay is answering in the relay's place — a network's
+		// sign-in page, or a filter that inspects secure connections. The
+		// clock is not the cause (that fails as "expired" or "not yet
+		// valid"), and saying so sent people to check the wrong thing.
+		w.engine.Log("warn", "WAN relay error: "+errMsg+
+			" — something on this network is answering in the relay's place (a sign-in page, or a filter that inspects secure connections); retrying automatically")
 	case errMsg != "" && (strings.Contains(errMsg, "x509") || strings.Contains(errMsg, "certificate")):
-		// x509 failures against a healthy relay are almost always transient
-		// (free-tier relay waking up serving a stale cert) or a wrong local
-		// clock — say so instead of leaving a scary bare TLS error.
+		// Other x509 failures against a healthy relay are almost always
+		// transient (free-tier relay waking up serving a stale cert) or a
+		// wrong local clock — say so instead of leaving a scary bare TLS error.
 		w.engine.Log("warn", "WAN relay error: "+errMsg+
 			" — the relay may still be waking up (retrying automatically); if this persists, check this device's date & time")
 	case downFor > reportAfter:
