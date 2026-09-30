@@ -3,6 +3,22 @@
 All notable changes to OpenSave are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **OpenSave notices when another program is answering on its port.** On
+  Windows, a program listening on 127.0.0.1 at OpenSave's port — often a
+  hardware or vendor utility that comes with a driver or BIOS update — took
+  every local connection meant for OpenSave, while OpenSave itself still
+  started without complaint. The window then showed that program's answers as
+  an OpenSave with nothing in it: no games, first-run settings, a blank device
+  name, and "i is not iterable" from a scan, however often it was reinstalled.
+  Nothing was lost; the window was simply not talking to OpenSave. It now
+  checks that the port answers as itself and moves to a free one if not, and
+  the window says plainly when something else answers rather than showing an
+  empty library.
+
 ## [2.4.0-beta.4] — 2026-09-27
 
 A beta mostly about conflicts, and one of them serious: if you sync between

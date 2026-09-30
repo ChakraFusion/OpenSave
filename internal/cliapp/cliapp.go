@@ -6,6 +6,7 @@ package cliapp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -246,9 +247,12 @@ func runDaemon(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		// A port clash here is nearly always a second OpenSave, and the raw
 		// bind error says nothing about that or about the ways out of it.
-		if isAddrInUse(err) {
+		// Or another program answering on 127.0.0.1 at the port, which the
+		// listen itself does not notice on Windows (api.ErrLoopbackTaken).
+		if isAddrInUse(err) || errors.Is(err, api.ErrLoopbackTaken) {
 			fmt.Fprintf(os.Stderr, `
-Port %d is already taken — usually the desktop app or another `+"`opensave daemon start`"+`.
+Port %d is already taken — usually the desktop app or another `+"`opensave daemon start`"+`,
+sometimes another program.
 
   opensave daemon status          is one already running?
   opensave daemon start --port auto   use any free port, just this once

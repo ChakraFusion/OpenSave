@@ -5,6 +5,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +37,9 @@ type Server struct {
 
 	httpServer *http.Server
 	listener   net.Listener
+	// instance marks every response from this process (instanceHeader), so
+	// Start can tell whether 127.0.0.1 at its port is really answered by it.
+	instance string
 	// transfers remembers what moved between this device and others; fed
 	// by the same progress reports the dashboard gets. See wireSyncProgress.
 	transfers *transfers.Log
@@ -45,7 +50,7 @@ type Server struct {
 
 // New assembles the router and hub around a daemon.
 func New(d *daemon.Daemon) *Server {
-	s := &Server{Daemon: d, Hub: NewHub(), transfers: transfers.New()}
+	s := &Server{Daemon: d, Hub: NewHub(), transfers: transfers.New(), instance: newInstanceID()}
 	s.Hub.InitPayload = s.initPayload
 
 	// Live-forward activity log entries to connected dashboards.
@@ -189,6 +194,14 @@ func transferEvent(ev syncengine.ProgressEvent) transfers.Event {
 func (s *Server) Start(port int) (string, error) {
 	r := chi.NewRouter()
 
+	// First, so that every answer carries it — a 404, a refusal, a preflight.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set(instanceHeader, s.instance)
+			next.ServeHTTP(w, req)
+		})
+	})
+
 	// CORS + preflight handling must be a TOP-LEVEL middleware: chi answers
 	// an unmatched method (the browser's OPTIONS preflight) with 405 before
 	// group middleware runs, so handling it inside the group would never
@@ -223,9 +236,69 @@ func (s *Server) Start(port int) (string, error) {
 			s.Daemon.Log.Log("error", fmt.Sprintf("api server: %v", err))
 		}
 	}()
+	if err := s.answersLoopback(ln.Addr()); err != nil {
+		_ = s.httpServer.Close()
+		s.httpServer, s.listener = nil, nil
+		s.Daemon.Log.Log("warn", err.Error())
+		return "", err
+	}
 	s.writeAddrFile(ln.Addr().String())
 	s.recordBoundPort(ln.Addr().String())
 	return ln.Addr().String(), nil
+}
+
+// ErrLoopbackTaken is Start's answer when another program is what answers on
+// 127.0.0.1 at the port: the listen on 0.0.0.0 succeeded, but nothing local
+// would ever reach this daemon there. Callers try another port.
+var ErrLoopbackTaken = errors.New("another program answers on this port")
+
+// instanceHeader carries Server.instance on every response.
+const instanceHeader = "X-OpenSave-Instance"
+
+func newInstanceID() string {
+	b := make([]byte, 12)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// answersLoopback asks 127.0.0.1 at the port just bound whether it is this
+// server, by the instance it marks its answers with.
+//
+// The daemon listens on 0.0.0.0, and on Windows that succeeds even while
+// another program holds 127.0.0.1 at the same port — the more specific
+// address then wins every local connection. The desktop app, the CLI and the
+// port check all dial 127.0.0.1, so all of them reached the other program;
+// the app took its web page for an empty OpenSave (no games, first-run
+// settings, a blank device name, and "i is not iterable" from a scan). A
+// BIOS update that installed a vendor utility serving on localhost was
+// enough.
+//
+// Only a connection that fails outright is let through: a firewall that
+// blocks loopback is reported by the desktop app's own check, which says what
+// to do about it. Anything that accepts the connection and does not answer as
+// this server — a page, a hang, a different OpenSave — is another program.
+func (s *Server) answersLoopback(addr net.Addr) error {
+	tcp, ok := addr.(*net.TCPAddr)
+	if !ok {
+		return nil
+	}
+	client := &http.Client{
+		Timeout:   3 * time.Second,
+		Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
+	}
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/instance", tcp.Port))
+	if err != nil {
+		var opErr *net.OpError
+		if errors.As(err, &opErr) && opErr.Op == "dial" {
+			return nil
+		}
+		return fmt.Errorf("%w: 127.0.0.1:%d does not answer as OpenSave (%v)", ErrLoopbackTaken, tcp.Port, err)
+	}
+	resp.Body.Close()
+	if resp.Header.Get(instanceHeader) != s.instance {
+		return fmt.Errorf("%w: 127.0.0.1:%d is answered by another program", ErrLoopbackTaken, tcp.Port)
+	}
+	return nil
 }
 
 // recordBoundPort stores the port actually listening in settings.

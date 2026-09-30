@@ -23,13 +23,21 @@ export async function initApi() {
   // with no explanation.
   let lastErr;
   for (let attempt = 0; attempt < 4; attempt++) {
+    let status;
     try {
-      await request('GET', '/api/status');
-      return baseURL;
+      status = await request('GET', '/api/status');
     } catch (e) {
       lastErr = e;
       await new Promise((r) => setTimeout(r, 700));
+      continue;
     }
+    // Answered — but by OpenSave? Its status always carries its settings.
+    // Anything else is another program on the port, and going on would
+    // show that program's answers as an OpenSave with nothing in it.
+    if (!status || typeof status.settings !== 'object' || status.settings === null) {
+      throw new Error(notOpenSave());
+    }
+    return baseURL;
   }
   throw new Error(
     `The window can't reach OpenSave's background service at ${baseURL} (${lastErr?.message ?? 'no response'}). ` +
@@ -45,11 +53,30 @@ async function request(method, path, body) {
     opts.body = JSON.stringify(body);
   }
   const res = await fetch(baseURL + path, opts);
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text().catch(() => '');
+  let data = {};
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // Every OpenSave answer with a body is JSON. One that is not came from
+      // another program on this port, and read as {} it made OpenSave look
+      // empty: no games, first-run settings, "i is not iterable" from a scan.
+      if (res.ok) throw new Error(notOpenSave());
+    }
+  }
   if (!res.ok) {
     throw new Error(data.error || `${method} ${path} failed (${res.status})`);
   }
   return data;
+}
+
+function notOpenSave() {
+  return (
+    `Something other than OpenSave is answering at ${baseURL}. Another program is using OpenSave's port — ` +
+    `often a hardware or vendor utility installed alongside a driver or BIOS update. Your games and saves are not affected. ` +
+    `Restart OpenSave to have it pick another port.`
+  );
 }
 
 export const api = {

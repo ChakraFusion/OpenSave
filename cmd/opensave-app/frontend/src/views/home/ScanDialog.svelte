@@ -57,7 +57,10 @@
     selected = new Set();
     selectedCount = 0;
     try {
-      const results = await api.get('/api/presets/scan');
+      const results = (await api.get('/api/presets/scan')) ?? [];
+      // A list, always. Anything else is not a scan, and reading one as a
+      // list failed with "i is not iterable" — which says nothing.
+      if (!Array.isArray(results)) throw new Error("The scan's answer was not a list of saves. Restart OpenSave and scan again.");
       fillMissingAppIds(results);
       scanResults = results;
     } catch (e) {
