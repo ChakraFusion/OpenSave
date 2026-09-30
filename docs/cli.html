@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
   <!-- ===== STATUS BANNER: relay moved to its own domain. REMOVE once 2.3.0 has shipped. ===== -->
@@ -660,7 +660,7 @@
         </details>
         <details class="faq-item">
           <summary>Does it work on macOS?</summary>
-          <p>Not yet — there are no published macOS builds. It compiles from source if you have Go installed (<code>go build ./cmd/opensave-cli</code>), but that path isn't tested the way Windows and Linux are.</p>
+          <p>Yes, from the 2.4 beta: <code>opensave-macos-arm64.tar.gz</code> for Apple Silicon and <code>opensave-macos-amd64.tar.gz</code> for Intel, on the <a href="https://github.com/Liquid-co/OpenSave/releases" target="_blank" rel="noopener">releases page</a>, beside the desktop app. Extract it and put <code>opensave-cli</code> on your PATH. The one-line installer covers macOS from 2.4.0, when a stable release has a Mac build to install.</p>
         </details>
       </div>
     </div>
@@ -701,6 +701,6 @@
     </div>
   </footer>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OpenSave — Steam Cloud for every game you own</title>
-  <meta name="description" content="OpenSave is a free, open-source, peer-to-peer game save sync. Auto-detect saves for 20,000+ games, snapshot every change, and sync between your PC, laptop, and Steam Deck — no accounts, no subscriptions, no telemetry.">
+  <meta name="description" content="OpenSave is a free, open-source, peer-to-peer game save sync. Auto-detect saves for 20,000+ games, snapshot every change, and sync between your PC, Mac, laptop, and Steam Deck — no accounts, no subscriptions, no telemetry.">
   <meta property="og:title" content="OpenSave — Steam Cloud for every game you own">
   <meta property="og:description" content="Free, open-source, peer-to-peer game save sync. Snapshots, conflict handling, LAN + internet sync, optional cloud backup. No accounts. No telemetry.">
   <meta property="og:type" content="website">
@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
 </head>
 <body>
   <!-- ===== STATUS BANNER: relay moved to its own domain. REMOVE once 2.3.0 has shipped. ===== -->
@@ -552,7 +552,7 @@
       <div class="section-heading">
         <span class="section-eyebrow">Download</span>
         <h2>Get OpenSave.</h2>
-        <p class="section-sub">Windows, Linux, and Steam Deck. One small binary — install in seconds.</p>
+        <p class="section-sub">Windows, macOS, Linux, and Steam Deck. One small app — install in seconds.</p>
       </div>
       <div class="dl-grid">
         <div class="dl-card" data-platform="windows">
@@ -570,6 +570,13 @@
             </a>
           </div>
           <span class="dl-note">OpenSave.Setup.exe · OpenSave.exe</span>
+        </div>
+        <div class="dl-card" data-platform="mac">
+          <div class="dl-os">macos</div>
+          <h3>macOS</h3>
+          <p>One app for Apple Silicon and Intel Macs, new with the 2.4 beta. The first time, macOS asks before opening it: go to <strong>System Settings → Privacy &amp; Security</strong> and choose <strong>Open Anyway</strong>.</p>
+          <a class="btn-primary" data-dl="mac" href="https://github.com/Liquid-co/OpenSave/releases" target="_blank" rel="noopener">Download for Mac</a>
+          <span class="dl-note">OpenSave-macos.dmg<span class="dl-mac-version"></span><br>command line: <a data-dl="mac-cli-arm64" href="https://github.com/Liquid-co/OpenSave/releases" target="_blank" rel="noopener">Apple Silicon</a> · <a data-dl="mac-cli-amd64" href="https://github.com/Liquid-co/OpenSave/releases" target="_blank" rel="noopener">Intel</a></span>
         </div>
         <div class="dl-card" data-platform="linux">
           <div class="dl-os">linux</div>
@@ -645,6 +652,6 @@
     <img id="lightbox-img" alt="">
   </div>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

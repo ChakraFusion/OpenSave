@@ -88,13 +88,42 @@
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape') close(); });
   }
 
-  // ---- Point download buttons at the exact latest release assets ----
-  // Best-effort; falls back to the releases page (already the href) on failure.
-  var API = 'https://api.github.com/repos/Liquid-co/OpenSave/releases/latest';
+  // ---- Point download buttons at the exact release assets ----
+  // One request for the list of releases. Windows and Linux take the newest
+  // stable release. The Mac takes the newest release that has a Mac build:
+  // a stable one when there is one, and until then the beta the Mac build
+  // came with — "latest" alone is a release with no Mac build in it.
+  // Best-effort; every link already points at a releases page.
+  var API = 'https://api.github.com/repos/Liquid-co/OpenSave/releases?per_page=30';
   fetch(API)
     .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (rel) {
-      if (!rel || !rel.assets) return;
+    .then(function (list) {
+      if (!Array.isArray(list)) return;
+      var published = list.filter(function (r) { return r && !r.draft && Array.isArray(r.assets); });
+      var hasDmg = function (r) { return r.assets.some(function (a) { return /\.dmg$/i.test(a.name); }); };
+      var macRel =
+        published.filter(function (r) { return !r.prerelease && hasDmg(r); })[0] ||
+        published.filter(hasDmg)[0];
+      if (macRel) {
+        var inMac = function (test) {
+          var a = macRel.assets.filter(function (x) { return test(x.name.toLowerCase()); })[0];
+          return a && a.browser_download_url;
+        };
+        var macMap = {
+          'mac': inMac(function (n) { return /\.dmg$/.test(n); }),
+          'mac-cli-arm64': inMac(function (n) { return n.indexOf('macos-arm64') !== -1 && n.indexOf('.tar') !== -1; }),
+          'mac-cli-amd64': inMac(function (n) { return n.indexOf('macos-amd64') !== -1 && n.indexOf('.tar') !== -1; })
+        };
+        document.querySelectorAll('a[data-dl^="mac"]').forEach(function (a) {
+          var url = macMap[a.getAttribute('data-dl')];
+          if (url) a.href = url;
+        });
+        var macVersion = document.querySelector('.dl-mac-version');
+        if (macVersion) macVersion.textContent = ' · ' + String(macRel.tag_name || '').replace(/^v/, '');
+      }
+
+      var rel = published.filter(function (r) { return !r.prerelease; })[0];
+      if (!rel) return;
       var find = function (test) {
         var a = rel.assets.filter(function (x) { return test(x.name.toLowerCase()); })[0];
         return a && a.browser_download_url;
@@ -104,9 +133,10 @@
       var winInstaller = find(function (n) { return (n.indexOf('setup') !== -1 || n.indexOf('installer') !== -1) && isExe(n); });
       var winPortable = find(function (n) { return isExe(n) && n.indexOf('setup') === -1 && n.indexOf('installer') === -1; });
       // Linux: the app tarball (not the bare cli/relay binaries).
+      // amd64 by name: a release with Mac and ARM builds has other tarballs.
       var linuxUrl =
-        find(function (n) { return n.indexOf('linux') !== -1 && n.indexOf('.tar') !== -1; }) ||
-        find(function (n) { return n.indexOf('.tar.gz') !== -1; });
+        find(function (n) { return n.indexOf('linux') !== -1 && n.indexOf('amd64') !== -1 && n.indexOf('.tar') !== -1; }) ||
+        find(function (n) { return n.indexOf('linux') !== -1 && n.indexOf('.tar') !== -1; });
       // Steam Deck: the Flatpak, and only the Flatpak. Without this the Deck
       // button was the one download that dropped you on the raw asset list,
       // where "opensave-linux-amd64.tar.gz" reads like the Steam Deck build
@@ -472,10 +502,25 @@
   // already heading for it, so this only marks the matching one.
   (function ownPlatform() {
     var ua = navigator.userAgent || '';
-    var os = /Windows/i.test(ua) ? 'windows'
+    // An iPhone or iPad says "like Mac OS X", and OpenSave has nothing for it.
+    var os = /iPhone|iPad|iPod/i.test(ua) ? null
+           : /Windows/i.test(ua) ? 'windows'
            : /Linux|X11|CrOS/i.test(ua) ? 'linux'
            : /Mac/i.test(ua) ? 'mac' : null;
     if (!os) return;
+    // On a Mac the big button downloads the Mac app, not the Windows one.
+    if (os === 'mac') {
+      var hero = document.querySelector('.hero-ctas a[data-dl="windows"]');
+      if (hero) {
+        hero.setAttribute('data-dl', 'mac');
+        hero.href = 'https://github.com/Liquid-co/OpenSave/releases';
+        hero.childNodes.forEach(function (n) {
+          if (n.nodeType === 3 && /Download for Windows/.test(n.textContent)) {
+            n.textContent = n.textContent.replace('Download for Windows', 'Download for Mac');
+          }
+        });
+      }
+    }
     document.querySelectorAll('[data-platform]').forEach(function (card) {
       if (card.getAttribute('data-platform') === os) {
         card.classList.add('is-yours');

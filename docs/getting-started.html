@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-  <link rel="stylesheet" href="styles.css?v=6">
+  <link rel="stylesheet" href="styles.css?v=7">
   <link rel="stylesheet" href="guide.css?v=6">
 </head>
 <body class="guide-page">
@@ -146,6 +146,17 @@
           <strong>Linux</strong> — download the tarball, extract it, and run <code>./OpenSave</code>.
           There is also a <code>.deb</code>, an <code>.rpm</code> and a Flatpak.
         </p>
+        <p>
+          <strong>macOS</strong> — new with the 2.4 beta. Download <code>OpenSave-macos.dmg</code>,
+          open it and drag OpenSave into Applications. It runs on Apple Silicon and Intel Macs.
+        </p>
+        <div class="guide-warn">
+          <p>
+            macOS asks before opening OpenSave the first time, because the app is not notarized by
+            Apple. Open <strong>System Settings → Privacy &amp; Security</strong> and choose
+            <strong>Open Anyway</strong>; after that it opens like any other app.
+          </p>
+        </div>
         <div class="guide-warn">
           <p>
             Windows SmartScreen may warn you, because the build is not code-signed — signing
@@ -675,7 +686,7 @@ logs/          <span class="c">a whole folder</span>
     </div>
   </footer>
 
-  <script src="app.js?v=2"></script>
+  <script src="app.js?v=3"></script>
   <script>
     // Highlight the section being read in the contents sidebar. A list of
     // fifteen links is only useful if it tells you where you are in them.

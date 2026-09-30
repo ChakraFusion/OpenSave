@@ -638,7 +638,9 @@ code {
 .t-sync { color: var(--warn); }
 
 /* ---------- download ---------- */
-.dl-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; }
+.dl-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; }
+@media (max-width: 1180px) { .dl-grid { grid-template-columns: repeat(2, 1fr); } }
+.dl-note a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .dl-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 32px 28px; text-align: center; transition: var(--ease); display: flex; flex-direction: column; align-items: center; }
 .dl-card { transition: background 0.16s ease, border-color 0.16s ease, transform 0.16s ease; }
 .dl-card:hover { border-color: var(--border-strong); transform: translateY(-2px); }
