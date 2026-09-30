@@ -594,6 +594,9 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID s
 		_ = os.MkdirAll(localPath, 0o777)
 	}
 	e.Log("info", fmt.Sprintf("auto-tracked %q at %s from peer manifest request", q.Name, logging.Quote(localPath)))
+	if e.OnAutoTracked != nil {
+		e.OnAutoTracked(game)
+	}
 	e.notifyGamesUpdate()
 	return game, nil
 }

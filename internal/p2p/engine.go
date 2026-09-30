@@ -65,6 +65,13 @@ type Engine struct {
 	OnUntrackRequest func(gameID string)
 	OnRetrackRequest func(gameID string)
 
+	// OnAutoTracked fires when a game has just been tracked here because a
+	// paired device asked for it (ensureManifestGame), so the daemon can give
+	// it what tracking by hand does: a watch, and a first snapshot of what is
+	// already in its folder. Without it the game had neither (GitHub #16).
+	// Wired by the daemon. May be nil.
+	OnAutoTracked func(game store.Game)
+
 	// SwitchSaveFolder picks where a Switch save arriving from a peer belongs
 	// on this device (presets.Scanner.SwitchSaveFolder). Wired by the daemon.
 	// May be nil.

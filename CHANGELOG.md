@@ -19,6 +19,13 @@ All notable changes to OpenSave are documented here. This project adheres to
   "can't reach OpenSave's background service at http://" and Retry worked.
   The window now waits for startup to finish. Reported with the cause
   pinned down in GitHub #17.
+- **A game another device brings over gets a history here too.** A game
+  tracked because a paired device synced it got no first snapshot and no
+  watch. Where the save was already the same on both devices, as Steam Cloud
+  often leaves them, nothing was ever pulled, so that device never had a
+  snapshot of the game at all; and until the periodic check came round, a
+  change made there was not sent on. It now gets both, as a game tracked by
+  hand does (GitHub #16).
 
 ## [2.4.0] — 2026-09-30
 

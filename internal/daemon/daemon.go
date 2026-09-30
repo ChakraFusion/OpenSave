@@ -166,6 +166,8 @@ func New(opts Options) (*Daemon, error) {
 	// A paired peer untracking/re-tracking a game mirrors here.
 	d.P2P.OnUntrackRequest = d.untrackFromPeer
 	d.P2P.OnRetrackRequest = d.retrackFromPeer
+	// A game tracked because a peer asked for it is set up as TrackGame would.
+	d.P2P.OnAutoTracked = d.adoptAutoTracked
 	// A Switch save a peer syncs goes into this device's own emulator profile.
 	d.P2P.SwitchSaveFolder = d.Scanner.SwitchSaveFolder
 
