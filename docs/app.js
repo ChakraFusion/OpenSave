@@ -89,11 +89,11 @@
   }
 
   // ---- Point download buttons at the exact release assets ----
-  // One request for the list of releases. Windows and Linux take the newest
-  // stable release. The Mac takes the newest release that has a Mac build:
-  // a stable one when there is one, and until then the beta the Mac build
-  // came with — "latest" alone is a release with no Mac build in it.
-  // Best-effort; every link already points at a releases page.
+  // One request for the list of releases, and stable releases only, the Mac
+  // included. Mac builds began in the 2.4 betas, so until a stable release
+  // carries one the Mac card says which release it comes with, rather than
+  // offering a beta. Best-effort: every link already points at the latest
+  // release's page.
   var API = 'https://api.github.com/repos/Liquid-co/OpenSave/releases?per_page=30';
   fetch(API)
     .then(function (r) { return r.ok ? r.json() : null; })
@@ -101,9 +101,7 @@
       if (!Array.isArray(list)) return;
       var published = list.filter(function (r) { return r && !r.draft && Array.isArray(r.assets); });
       var hasDmg = function (r) { return r.assets.some(function (a) { return /\.dmg$/i.test(a.name); }); };
-      var macRel =
-        published.filter(function (r) { return !r.prerelease && hasDmg(r); })[0] ||
-        published.filter(hasDmg)[0];
+      var macRel = published.filter(function (r) { return !r.prerelease && hasDmg(r); })[0];
       if (macRel) {
         var inMac = function (test) {
           var a = macRel.assets.filter(function (x) { return test(x.name.toLowerCase()); })[0];
@@ -116,10 +114,17 @@
         };
         document.querySelectorAll('a[data-dl^="mac"]').forEach(function (a) {
           var url = macMap[a.getAttribute('data-dl')];
-          if (url) a.href = url;
+          if (url) {
+            a.href = url;
+            a.target = '_blank';
+          }
         });
-        var macVersion = document.querySelector('.dl-mac-version');
-        if (macVersion) macVersion.textContent = ' · ' + String(macRel.tag_name || '').replace(/^v/, '');
+      } else {
+        // The first stable release to have one: the version of the newest
+        // beta that does, without its "-beta.N".
+        var beta = published.filter(hasDmg)[0];
+        var next = beta ? String(beta.tag_name || '').replace(/^v/, '').replace(/-.*$/, '') : '';
+        macComingSoon(next);
       }
 
       var rel = published.filter(function (r) { return !r.prerelease; })[0];
@@ -497,6 +502,29 @@
     window.__osCountUp = animate;
   })();
 
+  // No stable release has a Mac build yet: the Mac card says which release
+  // brings one, and its button does nothing.
+  function macComingSoon(version) {
+    var when = version ? 'Coming with ' + version : 'Coming soon';
+    var card = document.querySelector('.dl-card[data-platform="mac"]');
+    if (card) {
+      card.classList.add('is-soon');
+      var btn = card.querySelector('a[data-dl="mac"]');
+      if (btn) {
+        btn.textContent = when;
+        btn.removeAttribute('href');
+        btn.removeAttribute('target');
+        btn.setAttribute('aria-disabled', 'true');
+      }
+      var note = card.querySelector('.dl-note');
+      if (note) {
+        note.textContent = version
+          ? 'The Mac app and command line ship with ' + version + ', the next stable release.'
+          : 'The Mac app and command line ship with the next stable release.';
+      }
+    }
+  }
+
   // ---- Promote the visitor's own platform ------------------------
   // Reordering the download cards would move a target under a cursor
   // already heading for it, so this only marks the matching one.
@@ -508,19 +536,6 @@
            : /Linux|X11|CrOS/i.test(ua) ? 'linux'
            : /Mac/i.test(ua) ? 'mac' : null;
     if (!os) return;
-    // On a Mac the big button downloads the Mac app, not the Windows one.
-    if (os === 'mac') {
-      var hero = document.querySelector('.hero-ctas a[data-dl="windows"]');
-      if (hero) {
-        hero.setAttribute('data-dl', 'mac');
-        hero.href = 'https://github.com/Liquid-co/OpenSave/releases';
-        hero.childNodes.forEach(function (n) {
-          if (n.nodeType === 3 && /Download for Windows/.test(n.textContent)) {
-            n.textContent = n.textContent.replace('Download for Windows', 'Download for Mac');
-          }
-        });
-      }
-    }
     document.querySelectorAll('[data-platform]').forEach(function (card) {
       if (card.getAttribute('data-platform') === os) {
         card.classList.add('is-yours');
