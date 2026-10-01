@@ -81,6 +81,7 @@ func TestMatching_AppIDIgnoredWhenDisabled(t *testing.T) {
 
 	a.WriteSave("slot1.sav", "A progress")
 	gameA := a.TrackGame("Some Game")
+	b.KnowPeersSaveFolder(a.SaveDir) // so B tracks it by itself
 	var gameB struct {
 		ID string `json:"id"`
 	}

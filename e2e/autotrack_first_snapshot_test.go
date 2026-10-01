@@ -27,6 +27,9 @@ func TestAutoTrack_TakesAFirstSnapshotAndWatches(t *testing.T) {
 	saveA, saveB := filepath.Join(rootA, "Detroit"), filepath.Join(rootB, "Detroit")
 	writeAt(t, filepath.Join(saveA, "slot1.sav"), "chapter 12")
 	writeAt(t, filepath.Join(saveB, "slot1.sav"), "chapter 12")
+	// B's own scan has seen the save there: what lets B track a game a peer
+	// syncs without asking (CVE-2026-103398).
+	b.KnowSaveFolder(saveB)
 	b.API(http.MethodPost, "/api/settings", map[string]any{
 		"pathTranslations": []map[string]string{{"fromPattern": rootA, "toPattern": rootB}},
 	}, nil)

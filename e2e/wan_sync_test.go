@@ -219,6 +219,7 @@ func TestWanAutoTrackFromPeer(t *testing.T) {
 	// A tracks a game B has NEVER tracked. Only A adds it.
 	a.WriteSave("save.dat", "content from A")
 	gameID := a.TrackGame("AutoTrack Game")
+	b.KnowPeersSaveFolder(a.SaveDir) // so B tracks it by itself
 	if _, err := b.Daemon.Store.GetGame(gameID); err == nil {
 		t.Fatal("precondition: B should not have the game yet")
 	}
