@@ -19,6 +19,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/logging"
+	"github.com/opensave/opensave/internal/owntouch"
 	"github.com/opensave/opensave/internal/p2p/pairing"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
 	"github.com/opensave/opensave/internal/store"
@@ -672,6 +673,7 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 		ActiveBranch:      game.ActiveBranch,
 		Proto:             ServedProto(),
 		DeletionConfirmed: e.Sync.DeletionConfirmed(game.ID),
+		Version:           e.Sync.LocalVersion(game, manifest),
 	}
 	if latest, err := e.Snapshots.LatestSnapshot(gameID, ""); err == nil {
 		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
@@ -830,6 +832,37 @@ func (e *Engine) handleFileBatch(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"files": out})
 }
 
+// peerDeleteSnapshotEvery is how far apart two safety snapshots before a
+// peer's deletions may be: one for a burst of deletions, however many files
+// it removes one request at a time.
+const peerDeleteSnapshotEvery = 10 * time.Minute
+
+// snapshotBeforePeerDeletions takes a safety snapshot of a game before the
+// first of a burst of deletions a peer asks for.
+func (e *Engine) snapshotBeforePeerDeletions(gameID string, r *http.Request) {
+	if e.Snapshots == nil {
+		return
+	}
+	e.peerDeleteSnapMu.Lock()
+	if e.peerDeleteSnap == nil {
+		e.peerDeleteSnap = map[string]time.Time{}
+	}
+	if last, ok := e.peerDeleteSnap[gameID]; ok && time.Since(last) < peerDeleteSnapshotEvery {
+		e.peerDeleteSnapMu.Unlock()
+		return
+	}
+	e.peerDeleteSnap[gameID] = time.Now()
+	e.peerDeleteSnapMu.Unlock()
+
+	asker := "another device"
+	if peer, ok := e.peerByAddress(clientIP(r)); ok {
+		asker = peer.Name
+	}
+	if _, err := e.Snapshots.CreateBeforeReplacing(gameID, fmt.Sprintf("Before %s deleted files here", asker)); err != nil {
+		e.Log("warn", fmt.Sprintf("safety snapshot before %s's deletions failed: %v", asker, err))
+	}
+}
+
 func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	gameID := chi.URLParam(r, "gameId")
 	var body struct {
@@ -864,6 +897,11 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	_ = os.Chmod(full, 0o666)
 	deleting := time.Now()
 	if info, statErr := os.Stat(full); statErr == nil {
+		// One copy of the save before a peer starts deleting from it, not
+		// one per file: the watcher no longer snapshots changes OpenSave
+		// applies (owntouch), and it was those, one every few seconds of a
+		// half-deleted save, that had been the only copy before.
+		e.snapshotBeforePeerDeletions(game.ID, r)
 		// What is removed is remembered, so a sync of this device's own that
 		// lands before the rest of the batch does not take it for a change
 		// made here (syncengine/peerdeleted.go).
@@ -872,6 +910,8 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			entry, _ = delta.FileEntryFor(full)
 		}
 		// Empty dirs only, for a folder, like rmdirSync.
+		// A change made at a peer's request, not by the game (owntouch).
+		owntouch.Mark(full)
 		if os.Remove(full) == nil && (info.IsDir() || entry.Hash != "") {
 			e.Sync.NotePeerDeletion(game.ID, body.Root, body.RelPath, entry, info.IsDir())
 		}
