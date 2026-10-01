@@ -563,13 +563,21 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		remoteData.Manifest = filterManifest(remoteData.Manifest, ignoreRules)
 	}
 
-	// 3. Existing unresolved conflict blocks further syncing.
+	// 3. Existing unresolved conflict blocks further syncing — unless a
+	// version newer than both sides of it has turned up since (version.go):
+	// it was settled elsewhere, by an answer or "Use this save everywhere",
+	// and the question here no longer stands.
 	e.mu.Lock()
-	if existing := e.activeConflicts[gameID]; existing != nil {
-		e.mu.Unlock()
-		return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, nil
-	}
+	existing := e.activeConflicts[gameID]
 	e.mu.Unlock()
+	if existing != nil {
+		if remoteData.Version == nil || !game.AutoSync || !e.supersedes(gameID, *remoteData.Version) {
+			return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, nil
+		}
+		e.Log("info", fmt.Sprintf("%q: %s holds a version newer than both sides of the open conflict — taking it instead of asking",
+			game.Name, peer.Name))
+		e.clearConflict(gameID)
+	}
 
 	// 3b. The versions decide, when both devices keep them (version.go): who
 	// is behind takes the newer save whole, from a device that holds it, and

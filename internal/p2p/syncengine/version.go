@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -56,17 +57,30 @@ const (
 	versionConcurrent
 )
 
+// genesisAll is the entry "Use this save everywhere" adds (UseSaveEverywhere):
+// a version holding it counts as having every save from before versions
+// existed behind it, whatever its content was named.
+const genesisAll = "g:*"
+
+// holds reports whether v includes entry k at counter n.
+func holds(v VersionVector, k string, n int64) bool {
+	if v[k] >= n {
+		return true
+	}
+	return k != genesisAll && strings.HasPrefix(k, "g:") && v[genesisAll] >= 1
+}
+
 // compareVersions says how a relates to b.
 func compareVersions(a, b VersionVector) versionOrder {
 	aBehind, bBehind := false, false
 	for k, bv := range b {
-		if a[k] < bv {
+		if !holds(a, k, bv) {
 			aBehind = true
 			break
 		}
 	}
 	for k, av := range a {
-		if b[k] < av {
+		if !holds(b, k, av) {
 			bBehind = true
 			break
 		}
@@ -601,8 +615,24 @@ func (e *Engine) syncByVersion(ctx context.Context, game store.Game, peer Peer,
 	}
 	if mine.Vector.genesisOnly() || theirs.Vector.genesisOnly() {
 		// A save from before versions existed, never compared with this one
-		// since: the file comparison and the shared history decide, as before.
-		return Result{}, false, nil
+		// since: nothing recorded says which is newer. The files may, when
+		// they say it unmistakably (transitionNewer); then the older device
+		// takes the newer save whole, as any device behind does. Never file by
+		// file, which is how devices ended up holding mixtures of two saves
+		// that no game ever wrote. When the files do not say, the person is
+		// asked — or uses "Use this save everywhere" on the device that has
+		// the right one.
+		switch transitionNewer(local, remote.Manifest, e.Store.GetAgreedHash(gameID, peer.ID)) {
+		case 1:
+			return pushTo()
+		case -1:
+			e.Log("info", fmt.Sprintf("%q: %s's save is the newer one in every file that differs — taking it whole",
+				game.Name, peer.Name))
+			return e.pullVersion(ctx, game, peer, local, remote, theirs.Vector)
+		}
+		e.Log("warn", fmt.Sprintf("%q differs from %s's and neither is clearly the newer — asking", game.Name, peer.Name))
+		e.registerConflict(gameID, peer, local, remote)
+		return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, true, nil
 	}
 
 	// Someone already answered: here, keeping this device's save over the
@@ -824,4 +854,151 @@ func (e *Engine) forgetLogOnce(key string) {
 	e.versionMu.Lock()
 	delete(e.loggedOnce, key)
 	e.versionMu.Unlock()
+}
+
+// transitionNewer says which of two saves from before versions is the newer,
+// when that is beyond doubt: 1 for local, -1 for remote, 0 when it is not.
+//
+// Beyond doubt means one of two things. The devices last agreed on a state
+// and one of them still holds exactly it: that one has not changed since, so
+// the other is newer. Or one save is newer in every file that differs — each
+// is newer there or missing on the other side — and the other holds no file
+// of its own written after the first's newest. That is what a save someone
+// played on looks like next to one nobody touched.
+//
+// It is deliberately not "the newer file wins, file by file": that makes a
+// mixture of two saves no game wrote. And not "the newest file wins", which a
+// mixture passes as easily as a real save. Here the device that gives way was
+// older in every file that differs, so it never loses anything newer than
+// what it takes — at worst it takes a copy that arrived only half-way, and
+// then the complete save, newer than both, replaces that too when it is
+// seen. States newer each in different files fail the test both ways and are
+// left to a person.
+func transitionNewer(local, remote delta.Manifest, agreed string) int {
+	if agreed != "" {
+		lh, rh := local.ManifestHash(), remote.ManifestHash()
+		switch {
+		case lh == agreed && rh != agreed:
+			return -1
+		case rh == agreed && lh != agreed:
+			return 1
+		}
+	}
+	l, r := newerInEveryFile(local, remote), newerInEveryFile(remote, local)
+	switch {
+	case l && !r:
+		return 1
+	case r && !l:
+		return -1
+	}
+	return 0
+}
+
+// newerInEveryFile reports whether a is newer than b wherever they differ,
+// and they do differ.
+func newerInEveryFile(a, b delta.Manifest) bool {
+	differ := false
+	var aNewest delta.Milli
+	for p, af := range a.Files {
+		if af.MtimeMs > aNewest {
+			aNewest = af.MtimeMs
+		}
+		bf, ok := b.Files[p]
+		if !ok {
+			differ = true
+			continue
+		}
+		if af.Hash != bf.Hash {
+			differ = true
+			if af.MtimeMs <= bf.MtimeMs {
+				return false
+			}
+		}
+	}
+	for p, bf := range b.Files {
+		if _, ok := a.Files[p]; ok {
+			continue
+		}
+		differ = true
+		if bf.MtimeMs >= aNewest {
+			return false
+		}
+	}
+	return differ
+}
+
+// supersedes reports whether theirs is newer than this device's version and
+// than the version the open conflict is with: both sides of the question are
+// behind it.
+func (e *Engine) supersedes(gameID string, theirs VersionInfo) bool {
+	e.mu.Lock()
+	c := e.activeConflicts[gameID]
+	e.mu.Unlock()
+	if c == nil || c.remoteVersion == nil {
+		return false
+	}
+	e.versionMu.Lock()
+	gv, err := e.loadVersionLocked(gameID)
+	e.versionMu.Unlock()
+	if err != nil || len(gv.vec) == 0 {
+		return false
+	}
+	return compareVersions(gv.vec, theirs.Vector) == versionOlder &&
+		compareVersions(c.remoteVersion.Vector, theirs.Vector) == versionOlder
+}
+
+// UseSaveEverywhere makes this device's save of a game the one every other
+// device takes: its version becomes newer than every save from before
+// versions existed, on any device, so each of those takes this one whole,
+// keeping a snapshot of its own first. For when several devices hold states
+// nobody can rank — copies that arrived half-way, mixtures of two saves —
+// and a person knows which device has the right one.
+//
+// A change made on another device since versions existed is not overruled:
+// that device and this one have each changed the save independently, and
+// the person there is asked, as for any conflict.
+func (e *Engine) UseSaveEverywhere(gameID string) (VersionVector, error) {
+	game, err := e.Store.GetGame(gameID)
+	if err != nil {
+		return nil, err
+	}
+	if !game.AutoSync {
+		return nil, errors.New("automatic sync is off for this game, so it does not take part in versions")
+	}
+	m, err := delta.BuildManifest(game.SavePath)
+	if err != nil {
+		return nil, err
+	}
+	if len(m.Files) == 0 {
+		return nil, errors.New("this device holds no save files for this game")
+	}
+	e.versionMu.Lock()
+	gv, err := e.loadVersionLocked(gameID)
+	if err != nil || gv.rec.GameID == "" {
+		e.versionMu.Unlock()
+		if err == nil {
+			err = errors.New("the game is not tracked")
+		}
+		return nil, err
+	}
+	gv.vec = mergeVersions(gv.vec, VersionVector{genesisAll: 1})
+	gv.rec.Counter++
+	gv.vec[gv.rec.Key] = gv.rec.Counter
+	gv.rec.Hash = e.versionHashOf(gameID, m)
+	gv.target, gv.answered, gv.rec.AnsweredAt = nil, nil, 0
+	gv.rec.Pulling = false
+	saveErr := e.saveVersionLocked(gv)
+	vec := gv.vec.clone()
+	e.versionMu.Unlock()
+	if saveErr != nil {
+		return nil, saveErr
+	}
+	e.mu.Lock()
+	_, conflicted := e.activeConflicts[gameID]
+	e.mu.Unlock()
+	if conflicted {
+		e.clearConflict(gameID)
+	}
+	e.Log("info", fmt.Sprintf("%q: this device's save is to be used everywhere — version %s", game.Name, vec))
+	return vec, nil
 }

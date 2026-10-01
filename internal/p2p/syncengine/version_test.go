@@ -35,6 +35,157 @@ func TestCompareVersions(t *testing.T) {
 	}
 }
 
+// "Use this save everywhere" covers every save from before versions, not
+// changes made since.
+func TestCompareVersions_UseEverywhereCoversEveryOldSave(t *testing.T) {
+	everywhere := VersionVector{"g:aaaa": 1, genesisAll: 1, "x": 1}
+	if got := compareVersions(VersionVector{"g:bbbb": 1}, everywhere); got != versionOlder {
+		t.Errorf("an old save of other content vs everywhere = %d, want older", got)
+	}
+	if got := compareVersions(VersionVector{}, everywhere); got != versionOlder {
+		t.Errorf("an empty folder vs everywhere = %d, want older", got)
+	}
+	if got := compareVersions(VersionVector{"g:bbbb": 1, "y": 1}, everywhere); got != versionConcurrent {
+		t.Errorf("a save changed since versions vs everywhere = %d, want concurrent", got)
+	}
+}
+
+func setTimes(t *testing.T, dir, rel string, at time.Time) {
+	t.Helper()
+	if err := os.Chtimes(filepath.Join(dir, filepath.FromSlash(rel)), at, at); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two saves from before versions, one played on since they last matched:
+// that one is newer in every file that differs, and the other takes it whole
+// — no question, and no mixture.
+func TestVersions_TransitionTakesTheClearlyNewerSave(t *testing.T) {
+	m, n := newMesh(t, "played", "old")
+	played, old := n["played"], n["old"]
+	t0 := time.Now().Add(-48 * time.Hour)
+	t1 := time.Now().Add(-1 * time.Hour)
+	for _, d := range []*meshNode{played, old} {
+		write(t, d.dir, "slot1.sav", "day one")
+		write(t, d.dir, "meta.dat", "m1")
+		write(t, d.dir, "stale.tmp", "gone later")
+		setTimes(t, d.dir, "slot1.sav", t0)
+		setTimes(t, d.dir, "meta.dat", t0)
+		setTimes(t, d.dir, "stale.tmp", t0)
+	}
+	// Played on, before the update: changed, added, removed.
+	write(t, played.dir, "slot1.sav", "day five")
+	write(t, played.dir, "slot2.sav", "new slot")
+	_ = os.Remove(filepath.Join(played.dir, "stale.tmp"))
+	setTimes(t, played.dir, "slot1.sav", t1)
+	setTimes(t, played.dir, "slot2.sav", t1)
+
+	for _, pair := range [][2]*meshNode{{old, played}, {played, old}} {
+		res, err := syncPair(t, pair[0], pair[1])
+		if err != nil || res.Status == "conflict" {
+			t.Fatalf("%s↔%s: %+v, %v", pair[0].name, pair[1].name, res, err)
+		}
+	}
+	settleAll(t, played, old)
+	if !sameSave(old.files(t), played.files(t)) {
+		t.Errorf("the old device did not take the played save whole: %s", describe(old.files(t)))
+	}
+	if m.deletes() != 0 {
+		t.Errorf("%d deletion(s) were sent", m.deletes())
+	}
+}
+
+// Newer each in a different file: nothing says which is the save, so the
+// person is asked rather than either being taken — or a mixture made.
+func TestVersions_TransitionAsksWhenNeitherIsClearlyNewer(t *testing.T) {
+	_, n := newMesh(t, "a", "b")
+	a, b := n["a"], n["b"]
+	t0 := time.Now().Add(-48 * time.Hour)
+	t1 := time.Now().Add(-1 * time.Hour)
+	write(t, a.dir, "one.sav", "a-new")
+	write(t, a.dir, "two.sav", "old")
+	write(t, b.dir, "one.sav", "old")
+	write(t, b.dir, "two.sav", "b-new")
+	setTimes(t, a.dir, "one.sav", t1)
+	setTimes(t, a.dir, "two.sav", t0)
+	setTimes(t, b.dir, "one.sav", t0)
+	setTimes(t, b.dir, "two.sav", t1)
+	aBefore, bBefore := a.files(t), b.files(t)
+
+	res, err := syncPair(t, a, b)
+	if err != nil || res.Status != "conflict" {
+		t.Fatalf("mixed old saves: %+v, %v — want a conflict", res, err)
+	}
+	if !sameSave(a.files(t), aBefore) || !sameSave(b.files(t), bBefore) {
+		t.Error("a save changed before anyone answered")
+	}
+}
+
+// "Use this save everywhere" on the device with the right save: every other
+// device takes it whole — even one already waiting on a question about two
+// mixed states — and nobody is asked.
+func TestVersions_UseThisSaveEverywhere(t *testing.T) {
+	m, n := newMesh(t, "right", "mixed1", "mixed2")
+	right, mixed1, mixed2 := n["right"], n["mixed1"], n["mixed2"]
+	t0 := time.Now().Add(-48 * time.Hour)
+	t1 := time.Now().Add(-1 * time.Hour)
+	writeMany(t, right.dir, "map", 12)
+	write(t, right.dir, "players.db", "current")
+	// Two mixtures nobody can rank.
+	writeMany(t, mixed1.dir, "map", 6)
+	write(t, mixed1.dir, "players.db", "old-1")
+	write(t, mixed1.dir, "extra1.bin", "x")
+	writeMany(t, mixed2.dir, "map", 4)
+	write(t, mixed2.dir, "players.db", "old-2")
+	write(t, mixed2.dir, "extra2.bin", "y")
+	setTimes(t, mixed1.dir, "players.db", t1)
+	setTimes(t, mixed1.dir, "extra1.bin", t0)
+	setTimes(t, mixed2.dir, "players.db", t0)
+	// Newer than anything mixed1 holds, so neither is newer in every file.
+	setTimes(t, mixed2.dir, "extra2.bin", time.Now().Add(time.Hour))
+
+	if res, _ := syncPair(t, mixed1, mixed2); res.Status != "conflict" {
+		t.Fatalf("setup: two mixtures should conflict, got %+v", res)
+	}
+	if _, err := right.eng.UseSaveEverywhere("game1"); err != nil {
+		t.Fatal(err)
+	}
+	settleAll(t, right, mixed1, mixed2)
+	want := right.files(t)
+	for _, d := range []*meshNode{mixed1, mixed2} {
+		if !sameSave(d.files(t), want) {
+			t.Errorf("%s did not take the save used everywhere: %s", d.name, describe(d.files(t)))
+		}
+		if len(d.eng.ActiveConflicts()) != 0 {
+			t.Errorf("%s still has a conflict open", d.name)
+		}
+	}
+	if m.deletes() != 0 {
+		t.Errorf("%d deletion(s) were sent", m.deletes())
+	}
+}
+
+// A change made on another device after versions existed is not overruled by
+// "Use this save everywhere": that is a conflict like any other.
+func TestVersions_UseEverywhereDoesNotOverruleALaterChange(t *testing.T) {
+	_, n := newMesh(t, "a", "b")
+	a, b := n["a"], n["b"]
+	write(t, a.dir, "slot.sav", "start")
+	settleAll(t, a, b)
+	b.change(t, func(dir string) { write(t, dir, "slot.sav", "b-played") })
+	if _, err := a.eng.UseSaveEverywhere("game1"); err != nil {
+		t.Fatal(err)
+	}
+	bBefore := b.files(t)
+	settleAll(t, a, b)
+	if !sameSave(b.files(t), bBefore) {
+		t.Error("b's change since the update was replaced without anyone being asked")
+	}
+	if len(a.eng.ActiveConflicts())+len(b.eng.ActiveConflicts()) == 0 {
+		t.Error("nobody was asked")
+	}
+}
+
 // --- a network of real engines -------------------------------------------
 
 // meshNode is one device: its own store, save folder and engine.
