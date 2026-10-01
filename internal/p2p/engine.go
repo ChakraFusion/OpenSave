@@ -125,6 +125,10 @@ type Engine struct {
 	pingMisses map[string]int
 	// probeMu serializes PingPairedPeers rounds.
 	probeMu sync.Mutex
+	// When each game last got a safety snapshot before a peer's deletions
+	// (snapshotBeforePeerDeletions).
+	peerDeleteSnapMu sync.Mutex
+	peerDeleteSnap   map[string]time.Time
 	// answered holds the peers that answered a probe during this run, and
 	// startedMs is when the run began (heardThisRun).
 	answered  map[string]bool

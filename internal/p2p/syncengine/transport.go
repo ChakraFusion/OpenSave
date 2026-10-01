@@ -96,6 +96,10 @@ type ManifestResponse struct {
 	// question and sends the full manifest, which is handled as before.
 	Unchanged    bool   `json:"unchanged,omitempty"`
 	ManifestHash string `json:"manifestHash,omitempty"`
+
+	// Version is the responder's version of the save (version.go), absent
+	// from builds that predate it and for games it does not version.
+	Version *VersionInfo `json:"version,omitempty"`
 }
 
 // FileRef identifies one file inside one of a game's save locations.
