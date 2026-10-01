@@ -45,6 +45,9 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		if err := e.markResolvedLocal(ctx, gameID, peer); err != nil {
 			return "", err
 		}
+		// This device's version becomes newer than both, so the peer — and any
+		// device holding either side's — takes it whole (version.go).
+		e.versionAfterResolution(gameID, conflict.remoteVersion, true)
 		e.clearConflict(gameID)
 		e.Transport.TriggerPeerPull(peer, gameID)
 		return "", nil
@@ -64,7 +67,17 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 			e.Log("warn", fmt.Sprintf("safety snapshot before keep-remote failed: %v", err))
 		}
 		if err := e.overwriteLocalWithRemote(ctx, gameID, peer, remoteData, "Resolved conflict: Overwrite with remote"); err != nil {
+			// This device's own version is given up either way; what is still
+			// missing comes from the peer like any outdated device's would.
+			e.discardLocalVersion(gameID, remoteData.Version)
 			return "", err
+		}
+		if game, err := e.Store.GetGame(gameID); err == nil {
+			if now, err := delta.BuildManifest(game.SavePath); err == nil && sameFiles(now, remoteData.Manifest) {
+				e.versionAfterResolution(gameID, remoteData.Version, false)
+			} else {
+				e.discardLocalVersion(gameID, remoteData.Version)
+			}
 		}
 		e.markResolvedConverged(gameID, peer)
 		e.clearConflict(gameID)
@@ -107,6 +120,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		if err := e.markResolvedLocal(ctx, gameID, peer); err != nil {
 			return "", err
 		}
+		e.versionAfterResolution(gameID, conflict.remoteVersion, true)
 		e.clearConflict(gameID)
 		e.Transport.TriggerPeerPull(peer, gameID)
 		return created, nil

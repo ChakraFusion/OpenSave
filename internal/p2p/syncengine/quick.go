@@ -58,6 +58,16 @@ func (e *Engine) quickInSync(ctx context.Context, gameID string, game store.Game
 		// exchange decides.
 		return Result{}, false, nil
 	}
+	// The same files; the versions still have to say the same (version.go).
+	if resp.Version != nil && game.AutoSync {
+		res, final := e.quickVersionCheck(game, peer, local, *resp.Version)
+		if !final {
+			return Result{}, false, nil
+		}
+		if res.Status == versionStatusWaiting {
+			return res, true, nil
+		}
+	}
 
 	// Same as the in-sync outcome of a full sync, minus what is already
 	// recorded: the base is unchanged and the lineage with it.

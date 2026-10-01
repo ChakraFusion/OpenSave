@@ -101,6 +101,10 @@ func outcomeFromPeers(gameID string, peers map[string]peerSyncResult) syncOutcom
 			waiting = who + " is waiting for a folder to be chosen for it"
 		case "peer_holding":
 			waiting = who + " is holding it back: its save was emptied there"
+		case "waiting":
+			if waiting == "" {
+				waiting = "a newer version is on a device that is not online"
+			}
 		case "peer_missing":
 			if waiting == "" {
 				waiting = who + " does not track it"

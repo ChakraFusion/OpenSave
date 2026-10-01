@@ -35,6 +35,10 @@ type Conflict struct {
 	OnlyLocalTotal  int `json:"onlyLocalTotal"`
 	OnlyRemoteTotal int `json:"onlyRemoteTotal"`
 	ChangedTotal    int `json:"changedTotal"`
+
+	// remoteVersion is the peer's version when the conflict was found, which
+	// the answer is recorded against (version.go).
+	remoteVersion *VersionInfo
 }
 
 // SideStats summarises one side's save state for the conflict UI.
@@ -151,6 +155,12 @@ type Engine struct {
 	linkMu    sync.Mutex
 	links     map[string]store.PeerLink
 	pullWaits map[string]chan struct{}
+	// versionMu serialises reading and writing the save versions
+	// (version.go); pullingNow is the games this run is pulling a newer
+	// version of, and loggedOnce the last "waiting" line said per game/peer.
+	versionMu  sync.Mutex
+	pullingNow map[string]bool
+	loggedOnce map[string]string
 }
 
 // New creates an Engine.
@@ -368,7 +378,7 @@ func (e *Engine) SyncGame(ctx context.Context, gameID string, onlinePeers []Peer
 		// divergence from the NEXT sync, causing the peer to silently overwrite
 		// its own changes instead of detecting the conflict and asking.
 		switch res.Status {
-		case "conflict", "error":
+		case "conflict", "error", versionStatusWaiting:
 		case "peer_missing", "peer_awaiting_folder", "peer_holding":
 			// The two devices talked and finished, which is what the
 			// per-device stamp has always recorded. But nothing of THIS game
@@ -561,6 +571,27 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	}
 	e.mu.Unlock()
 
+	// 3b. The versions decide, when both devices keep them (version.go): who
+	// is behind takes the newer save whole, from a device that holds it, and
+	// nothing is ever taken from — or deleted on the word of — a device that
+	// is behind. Left to the file comparison below only when the two hold
+	// the same save, or both saves predate versions.
+	//
+	// Not while this device is fetching back a save someone emptied here and
+	// asked to have put back (hold.go): the emptying was recorded as a version
+	// of its own, and by versions this device would be the newer one, with
+	// nothing to fetch. The hold's own rules bring the files back.
+	fetchingBack := false
+	if h, ok, err := e.Store.GetDeletionHold(gameID); err == nil && ok && h.State == store.HoldFetching {
+		fetchingBack = true
+	}
+	if remoteData.Version != nil && game.AutoSync && !fetchingBack {
+		if res, handled, err := e.syncByVersion(ctx, game, peer, localManifest, unfilteredLocal, remoteData); handled {
+			releaseAligned()
+			return res, err
+		}
+	}
+
 	// 4. Conflict detection (lineage + skew-tolerant mtimes).
 	lastSyncMs := e.lastSyncTimeMs(peer.ID)
 	agreedHash := e.Store.GetAgreedHash(gameID, peer.ID)
@@ -739,22 +770,6 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		return Result{Status: "peer_holding", PeerID: peer.ID, PeerName: peer.Name}, nil
 	}
 	handedOverDeletion := e.handOverEmptying(gameID, peer, localManifest.Files, &decision)
-
-	// A sync about to delete a large part of a save — here or on the peer —
-	// stops and asks instead. emptiedUnconfirmed above covers a save emptied
-	// completely; this covers one gutted partly, which is what a partial copy
-	// on one device turns into once it is read as the other's deletions. Two
-	// waves of that took tens of thousands of files out of a save before
-	// anyone was asked. A deletion someone confirmed on purpose
-	// (handedOverDeletion, DeletionConfirmed) is not second-guessed.
-	if !handedOverDeletion && !remoteData.DeletionConfirmed {
-		if n, total := massDeletion(localManifest, remoteData.Manifest, decision); n > 0 {
-			e.Log("warn", fmt.Sprintf("syncing %q with %q would delete %d of %d files — holding it for a decision instead",
-				game.Name, peer.Name, n, total))
-			e.registerConflict(gameID, peer, localManifest, remoteData)
-			return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, nil
-		}
-	}
 
 	// Nothing below is about files arriving, only about local files leaving.
 	// A pull that brings files this device never held destroys nothing.
@@ -1361,6 +1376,7 @@ func (e *Engine) registerConflict(gameID string, peer Peer, localManifest delta.
 		DiffFiles:      diffs,
 		DiffTotal:      total,
 		OnlyLocalTotal: counts["only-local"], OnlyRemoteTotal: counts["only-remote"], ChangedTotal: counts["changed"],
+		remoteVersion: remoteData.Version,
 	}
 	e.mu.Unlock()
 
