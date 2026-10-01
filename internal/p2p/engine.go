@@ -108,6 +108,10 @@ type Engine struct {
 	pingMisses map[string]int
 	// probeMu serializes PingPairedPeers rounds.
 	probeMu sync.Mutex
+	// answered holds the peers that answered a probe during this run, and
+	// startedMs is when the run began (heardThisRun).
+	answered  map[string]bool
+	startedMs int64
 
 	// Serializes the offline->online transition in requirePairedPeer, so a
 	// burst of concurrent requests from a returning peer triggers one full
@@ -277,6 +281,7 @@ func New(s *store.Store, snaps *snapshot.Manager, logf func(level, msg string)) 
 		Log:       logf,
 		ctx:       ctx,
 		cancel:    cancel,
+		startedMs: time.Now().UnixMilli(),
 	}
 	e.Wan = newWanClient(e)
 	e.RelayHost = NewRelayHost(logf)
@@ -373,6 +378,26 @@ func (e *Engine) clearPingMisses(peerID string) {
 	delete(e.pingMisses, peerID)
 }
 
+// noteAnswered records that a peer answered a probe during this run.
+func (e *Engine) noteAnswered(peerID string) {
+	e.pingMu.Lock()
+	defer e.pingMu.Unlock()
+	if e.answered == nil {
+		e.answered = map[string]bool{}
+	}
+	e.answered[peerID] = true
+}
+
+// heardThisRun reports whether there is any sign of a peer since this engine
+// started: a probe it answered, or a sighting (discovery, a request from it,
+// the relay) recent enough to postdate the start.
+func (e *Engine) heardThisRun(p store.Peer) bool {
+	e.pingMu.Lock()
+	answered := e.answered[p.ID]
+	e.pingMu.Unlock()
+	return answered || p.LastSeenMs >= e.startedMs
+}
+
 // PingPairedPeers probes every paired LAN peer and updates their
 // online/offline status.
 func (e *Engine) PingPairedPeers(ctx context.Context) {
@@ -413,11 +438,18 @@ func (e *Engine) PingPairedPeers(ctx context.Context) {
 		// failed cannot lose anything: a device that really has gone is
 		// declared offline a few probes later, and the only cost is a sync
 		// attempt that fails the way it would have anyway.
+		//
+		// That patience is for a device seen during this run. A status
+		// carried over from the previous run is not evidence of anything: a
+		// PC switched off overnight came back "online" from the database on
+		// every start, and stayed so until three probes had failed. A device
+		// not heard from since this start goes offline on its first miss.
 		newStatus := p.Status
 		if ok {
 			e.clearPingMisses(p.ID)
+			e.noteAnswered(p.ID)
 			newStatus = "online"
-		} else if e.notePingMiss(p.ID) >= offlineStrikes {
+		} else if misses := e.notePingMiss(p.ID); misses >= offlineStrikes || !e.heardThisRun(p) {
 			newStatus = "offline"
 		}
 
@@ -591,6 +623,9 @@ var presenceInterval = 10 * time.Second
 // whatever sync work is running. It stops with the resync loop.
 func (e *Engine) startPresenceLoop(stop chan struct{}) {
 	e.GoSync(func(ctx context.Context) {
+		// At once, then on the ticker: until the first round, every peer
+		// shows whatever the previous run left in the database.
+		e.PingPairedPeers(ctx)
 		ticker := time.NewTicker(presenceInterval)
 		defer ticker.Stop()
 		for {
