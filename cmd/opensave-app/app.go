@@ -38,16 +38,26 @@ type App struct {
 	reallyQuit  bool
 	updatedFrom string // previous version when this run is the first on a new build
 	notifyErr   error  // why desktop notifications cannot be shown, where known (notify_other.go)
+
+	// ready is closed once startup has finished (successfully or not). The
+	// webview can call DaemonAddr while startup is still booting the daemon —
+	// on a cold start with many watched folders that takes well over the
+	// frontend's few seconds of retries — and used to get an empty address
+	// back, showing "can't reach … at http://" until the user hit Retry.
+	ready chan struct{}
 }
 
 // NewApp creates the App shell (daemon boots in startup).
 func NewApp() *App {
-	return &App{}
+	return &App{ready: make(chan struct{})}
 }
 
 // startup boots the daemon + local API server once the webview exists.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.ready != nil {
+		defer close(a.ready)
+	}
 
 	// Asked to stop a running OpenSave, and we ARE the only one: there is
 	// nothing to stop. Exit without booting a daemon, claiming a port or
@@ -239,6 +249,13 @@ func (a *App) UpdateGreeting() map[string]string {
 // DaemonAddr returns the local API address (host:port) or an error string
 // if the daemon failed to boot.
 func (a *App) DaemonAddr() map[string]string {
+	if a.ready != nil {
+		select {
+		case <-a.ready:
+		case <-time.After(3 * time.Minute):
+			return map[string]string{"error": "the background service is still starting after 3 minutes — see opensave.log"}
+		}
+	}
 	if a.bootErr != "" {
 		return map[string]string{"error": a.bootErr}
 	}
