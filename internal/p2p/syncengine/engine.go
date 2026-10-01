@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/owntouch"
 	"github.com/opensave/opensave/internal/snapshot"
 	"github.com/opensave/opensave/internal/store"
 	"github.com/opensave/opensave/internal/syncpause"
@@ -1458,6 +1459,7 @@ func (e *Engine) applyLocalDeletions(gameID string, root syncRoot, d Decision) {
 		// spelling this disk actually holds.
 		full := delta.LocalNameFor(root.Path, relPath)
 		_ = os.Chmod(full, 0o666)
+		owntouch.MarkRemoved(full)
 		if err := os.Remove(full); err == nil {
 			e.Log("info", "deleted locally (peer deleted): "+relPath)
 		}
@@ -1472,6 +1474,7 @@ func (e *Engine) applyLocalDeletions(gameID string, root syncRoot, d Decision) {
 		}
 		full := delta.LocalNameFor(root.Path, relDir)
 		if info, err := os.Stat(full); err == nil && info.IsDir() {
+			owntouch.MarkRemoved(full)
 			if err := os.Remove(full); err == nil { // only removes empty dirs, matching rmdirSync
 				e.Log("info", "deleted directory locally (peer deleted): "+relDir)
 			}
@@ -1514,7 +1517,9 @@ func (e *Engine) createPulledDirsIn(gameID string, root syncRoot, dirsToPull []s
 		if !delta.IsSafePath(root.Path, relDir) {
 			continue
 		}
-		_ = os.MkdirAll(filepath.Join(root.Path, filepath.FromSlash(relDir)), 0o777)
+		full := filepath.Join(root.Path, filepath.FromSlash(relDir))
+		owntouch.Mark(full)
+		_ = os.MkdirAll(full, 0o777)
 	}
 }
 
@@ -1562,7 +1567,11 @@ func (e *Engine) pullFiles(ctx context.Context, peer Peer, gameID string, game s
 	// Make sure every remote directory exists before patching into it.
 	for _, dir := range remoteData.Manifest.Dirs {
 		if delta.IsSafePath(root.Path, dir) {
-			_ = os.MkdirAll(filepath.Join(root.Path, filepath.FromSlash(dir)), 0o777)
+			full := filepath.Join(root.Path, filepath.FromSlash(dir))
+			if _, err := os.Stat(full); err != nil {
+				owntouch.Mark(full)
+				_ = os.MkdirAll(full, 0o777)
+			}
 		}
 	}
 
@@ -1729,7 +1738,11 @@ func (e *Engine) pullFiles(ctx context.Context, peer Peer, gameID string, game s
 		}
 		if remoteFile.MtimeMs > 0 {
 			mtime := time.UnixMilli(int64(remoteFile.MtimeMs))
+			// Marked again first: until Settled below, the time the rename left
+			// is not the one to compare (owntouch).
+			owntouch.Mark(localFilePath)
 			_ = os.Chtimes(localFilePath, mtime, mtime)
+			owntouch.Settled(localFilePath)
 		}
 		pulled = append(pulled, relPath)
 		e.Log("info", "file updated: "+relPath)

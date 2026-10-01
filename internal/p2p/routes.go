@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/logging"
+	"github.com/opensave/opensave/internal/owntouch"
 	"github.com/opensave/opensave/internal/p2p/pairing"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
 	"github.com/opensave/opensave/internal/store"
@@ -968,6 +969,8 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			entry, _ = delta.FileEntryFor(full)
 		}
 		// Empty dirs only, for a folder, like rmdirSync.
+		// A change made at a peer's request, not by the game (owntouch).
+		owntouch.MarkRemoved(full)
 		if os.Remove(full) == nil && (info.IsDir() || entry.Hash != "") {
 			e.Sync.NotePeerDeletion(game.ID, body.Root, body.RelPath, entry, info.IsDir())
 		}
