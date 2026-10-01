@@ -391,12 +391,19 @@ func (w *WanClient) routeRequest(ctx context.Context, msg RelayMessage) (int, an
 			w.engine.Log("warn", fmt.Sprintf("blocked %s from %s: %v", route, from, authErr))
 			return 401, map[string]string{"error": "Unauthorized: Request failed authentication."}
 		case authNotPossible:
-			// Paired before end-to-end encryption existed, or the other side
-			// has not upgraded yet. Allowed, as it was before, and said out
-			// loud once it matters rather than failing silently.
-			w.engine.Log("warn", fmt.Sprintf(
-				"%s from %q is not authenticated — re-pair the two devices to protect it",
-				route, peer.Name))
+			// Unproven: a pairing that holds no key, or one whose device has
+			// not signed yet. These used to be let through, which is all an
+			// attacker in the room needed: "from" is whatever the sender
+			// writes, and the room tells everyone which IDs are paired
+			// (CVE-2026-103398). Only unpairing still is — it gives nothing
+			// away, and it is how such a pair is cleared up.
+			if route != "/unpair" {
+				w.engine.Log("warn", fmt.Sprintf(
+					"refused %s from %q: it was not signed with the key from pairing. "+
+						"Pairings made over the internet before 2.4.0 never kept one: unpair and pair the two devices again",
+					route, peer.Name))
+				return 401, map[string]string{"error": unsignedRefusal}
+			}
 		}
 	}
 

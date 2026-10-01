@@ -170,6 +170,15 @@ func New(opts Options) (*Daemon, error) {
 	d.P2P.OnAutoTracked = d.adoptAutoTracked
 	// A Switch save a peer syncs goes into this device's own emulator profile.
 	d.P2P.SwitchSaveFolder = d.Scanner.SwitchSaveFolder
+	// What a game arriving from a peer may be tracked at without asking:
+	// a folder this device's own scanner noted as a save, or one inside an
+	// emulator's save folder here. Anything else is offered to the user.
+	d.P2P.KnownSaveLocation = func(path string) bool {
+		if known, err := d.Store.IsKnownSave(path); err == nil && known {
+			return true
+		}
+		return d.Scanner.InsideEmulatorSaveRoot(path)
+	}
 
 	// Every new snapshot mirrors to the configured cloud provider in the
 	// background; failures are logged, never fatal.

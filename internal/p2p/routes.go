@@ -63,6 +63,11 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
+// unsignedRefusal is what a paired device is told when its request was not
+// signed with the pairing's key, over the network or the relay.
+const unsignedRefusal = "Unauthorized: this request was not signed with the key from pairing. " +
+	"Update both devices to OpenSave 2.4.1 or later; if they were paired over the internet before 2.4.0, unpair and pair them again."
+
 // requirePairedPeer allows localhost (dashboard/CLI) plus IPs matching a
 // paired peer. A valid request from a paired peer also refreshes its
 // online status, and a peer coming back online triggers a full auto-sync
@@ -119,6 +124,19 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 		if matched == nil {
 			e.Log("warn", "blocked unauthorized P2P request from unpaired IP "+ip)
 			jsonError(w, http.StatusUnauthorized, "Unauthorized: Requesting peer is not paired.")
+			return
+		}
+		// Unsigned, the request has only its source address to say who sent
+		// it, and an address on a shared network can be taken. So nothing
+		// that reads or writes saves is served on it (CVE-2026-103398) —
+		// only unpairing, which gives nothing away and is how a pairing too
+		// old to sign is cleared up.
+		if provenID == "" && matched.AuthVerifiedMs == 0 && r.URL.Path != "/api/p2p/unpair" {
+			e.Log("warn", fmt.Sprintf(
+				"refused an unsigned request from %q: it was not signed with the key from pairing. "+
+					"If it runs a version before 2.4.0, update it; if they were paired long ago, unpair and pair the two again.",
+				matched.Name))
+			jsonError(w, http.StatusUnauthorized, unsignedRefusal)
 			return
 		}
 		// A peer that has proved itself before must keep doing so, or an
@@ -550,15 +568,7 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID s
 	// a game deliberately untracked, so the user would be told nothing is
 	// wrong while their save quietly stopped syncing.
 	if settings.ShouldAskBeforeTracking() {
-		if err := e.Store.RecordOfferedGame(store.OfferedGame{
-			GameID: gameID, PeerID: peerID, Name: q.Name,
-			AppID: q.AppID, CoverURL: q.CoverURL, PeerPath: q.SavePath,
-		}); err != nil {
-			e.Log("warn", fmt.Sprintf("could not record %q as an offered game: %v", q.Name, err))
-		} else {
-			e.notifyGamesUpdate()
-		}
-		return store.Game{}, fmt.Errorf("%s: %q", syncengine.AwaitingFolderMessage, q.Name)
+		return e.offerGame(gameID, peerID, q)
 	}
 
 	rules := make([]delta.TranslationRule, len(settings.PathTranslations))
@@ -577,6 +587,25 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID s
 	// instead of a mysterious walk error.
 	if reason := delta.DangerousSyncRoot(localPath); reason != "" {
 		return store.Game{}, fmt.Errorf("cannot auto-track %q at %s: %s — set the game's save path on this device manually", q.Name, logging.Quote(localPath), reason)
+	}
+
+	// The other device names the folder; only this one decides what may be
+	// tracked. A save path in a manifest request is the peer's say, and a
+	// paired device — or anyone posing as one — could name any folder this
+	// user can read: ~/.ssh, a browser profile, another app's settings. Once
+	// tracked, its files were served to the peer and the peer's written into
+	// it (CVE-2026-103398). The old guard above refuses only whole profiles,
+	// drives and system folders.
+	//
+	// So a game arriving from a peer is tracked by itself only where this
+	// device's own scanner recognises a save folder: one it found and noted,
+	// or one inside an emulator's own save folder here. Anywhere else, it is
+	// offered, and the user picks the folder on this device.
+	if e.KnownSaveLocation == nil || !e.KnownSaveLocation(localPath) {
+		e.Log("warn", fmt.Sprintf(
+			"a paired device asked to sync %q at %s, which this device does not know as a save folder — "+
+				"it is offered on Home instead, for you to place", q.Name, logging.Quote(localPath)))
+		return e.offerGame(gameID, peerID, q)
 	}
 
 	game := store.Game{
@@ -612,6 +641,22 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID s
 	}
 	e.notifyGamesUpdate()
 	return game, nil
+}
+
+// offerGame records a game a peer syncs as offered, for the user to place on
+// this device, and tells the peer this device is waiting rather than that the
+// game does not exist: the same answer, which the peer cannot see past, is
+// given for a game deliberately untracked.
+func (e *Engine) offerGame(gameID, peerID string, q manifestGameQuery) (store.Game, error) {
+	if err := e.Store.RecordOfferedGame(store.OfferedGame{
+		GameID: gameID, PeerID: peerID, Name: q.Name,
+		AppID: q.AppID, CoverURL: q.CoverURL, PeerPath: q.SavePath,
+	}); err != nil {
+		e.Log("warn", fmt.Sprintf("could not record %q as an offered game: %v", q.Name, err))
+	} else {
+		e.notifyGamesUpdate()
+	}
+	return store.Game{}, fmt.Errorf("%s: %q", syncengine.AwaitingFolderMessage, q.Name)
 }
 
 // handleManifest serves a game's manifest + branch + latest-snapshot info.
