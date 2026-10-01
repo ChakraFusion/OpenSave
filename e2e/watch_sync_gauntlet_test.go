@@ -57,6 +57,7 @@ func TestWatchAutoSyncChain(t *testing.T) {
 	a := testutil.NewTestDaemon(t, "Chain-A")
 	b := testutil.NewTestDaemon(t, "Chain-B")
 	a.PairWith(b)
+	logOnFailure(t, a, b)
 
 	a.WriteSave("seed.sav", "seed")
 	restoreSyncOnTrack := suppressSyncOnTrack(a, b) // see sync_on_track_test.go
