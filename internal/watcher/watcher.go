@@ -119,6 +119,16 @@ type Callbacks struct {
 	OnChanged func(gameID string)
 	// Log receives human-readable watcher activity. May be nil.
 	Log func(level, msg string)
+	// SyncWriting reports whether a sync on this device is writing the game
+	// now, or was a moment ago. While it is, a burst the watcher cannot
+	// attribute — an overflow of file events — is taken for the sync's, and
+	// the burst is looked at once the sync has finished. May be nil.
+	SyncWriting func(gameID string) bool
+}
+
+// syncWriting reports whether a sync is writing a game (Callbacks.SyncWriting).
+func (e *Engine) syncWriting(gameID string) bool {
+	return e.cb.SyncWriting != nil && e.cb.SyncWriting(gameID)
 }
 
 // Engine owns one watch goroutine per tracked game.
@@ -751,7 +761,16 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 				// directory and allocates no second buffer for one it already
 				// has.
 				gw.rewatch.Store(true)
-				gw.otherEvents = true // the missed events could be anyone's
+				// The missed events could be anyone's — unless a sync is
+				// writing this game, which is what overflows the queue: a
+				// pull of a save of many files does, again and again, and
+				// each was taken for the game saving, an automatic snapshot
+				// of a half-pulled save every few seconds.
+				if e.syncWriting(gw.gameID) {
+					gw.ownEvents = true
+				} else {
+					gw.otherEvents = true
+				}
 			} else {
 				e.log("warn", fmt.Sprintf("watching %q: %v", gw.gameID, err))
 				continue
@@ -761,6 +780,12 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 		case <-debounceC:
 			debounce = nil
 			debounceC = nil
+			// A sync still writing this game: look at the burst once it has
+			// finished, not at a save half-way between two states.
+			if e.syncWriting(gw.gameID) {
+				resetDebounce()
+				continue
+			}
 			// Re-register, so a folder that went unwatched is watched from
 			// here on, and read the tree below, so it is found now. Doing only
 			// one of those leaves it correct today and silent tomorrow.

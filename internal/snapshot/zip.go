@@ -95,6 +95,11 @@ func zipPathCapturing(sourcePath, outPath string, reuse *reuseSource) (skipped [
 			}
 			return nil
 		}
+		// OpenSave's own temporary file for a file being pulled: never part
+		// of the save, and gone by the time it is read.
+		if strings.HasSuffix(rel, delta.TmpSuffix) {
+			return nil
+		}
 		info, infoErr := d.Info()
 		if infoErr != nil {
 			skipped = append(skipped, path)

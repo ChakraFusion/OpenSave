@@ -75,7 +75,7 @@ func (e *Engine) quickInSync(ctx context.Context, gameID string, game store.Game
 		"peerName":     e.deviceName(),
 		"manifestHash": agreed,
 	})
-	if resp.LatestSnapshot != nil && len(local.Files) > 0 {
+	if resp.LatestSnapshot != nil && len(local.Files) > 0 && !e.hasSnapshot(gameID, game) {
 		e.recordMirrorSnapshot(gameID, game, peer, *resp.LatestSnapshot,
 			fmt.Sprintf("Synced from peer: %s (%s)", peer.Name, resp.LatestSnapshot.Comment))
 	}
