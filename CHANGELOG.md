@@ -3,7 +3,14 @@
 All notable changes to OpenSave are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.4.1] — 2026-10-02
+
+A security update: please install it on every device. A paired device could
+make the one it synced with track any folder and share it; now a game from
+another device is only tracked by itself at a folder this one already knows
+as a save folder, and requests for save data must be signed. Devices still on
+2.3 need updating to keep syncing, and devices paired over the internet before
+2.4.0 need to be paired again.
 
 ### Security
 
