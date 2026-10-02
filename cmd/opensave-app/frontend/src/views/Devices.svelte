@@ -76,6 +76,15 @@
   };
 
   const fmtTime = (t) => (t ? new Date(t).toLocaleString() : 'never');
+
+  // How this device reaches the peer, and how fast it has found that to be.
+  const linkKinds = { lan: 'home network', vpn: 'VPN (e.g. Tailscale)', relay: 'internet relay', internet: 'internet' };
+  const fmtRate = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + ' MB/s' : Math.max(1, Math.round(b / 1024)) + ' KB/s');
+  function linkLabel(link) {
+    const kind = linkKinds[link.kind] ?? link.kind;
+    if (!link.bytesPerSec) return `${kind} · speed not measured yet`;
+    return `${kind} · ${fmtRate(link.bytesPerSec)} (measured ${fmtTime(link.measuredMs)})`;
+  }
 </script>
 
 <div class="head">
@@ -110,6 +119,11 @@
             · last synced {fmtTime(peer.lastSynced)}
             {#if peer.appVersion}· OpenSave {peer.appVersion}{/if}
           </div>
+          {#if peer.link}
+            <div class="peer-meta" title="Saves go to the fastest connections first, and a device that is behind takes the newer save from the fastest device that has it.">
+              {linkLabel(peer.link)}
+            </div>
+          {/if}
           <!-- Per device, next to how it is reached, because that is the
                context the answer depends on. -->
           <div class="peer-protection">

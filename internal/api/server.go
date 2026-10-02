@@ -101,12 +101,17 @@ func (s *Server) peersPayload() map[string]any {
 			// NeedsUpdate: its OpenSave keeps no save versions, so this
 			// device takes nothing from it until it is updated.
 			NeedsUpdate bool `json:"needsUpdate,omitempty"`
+			// Link is how fast this device has found its connection to it,
+			// and what kind of address it is reached on: what decides the
+			// order devices are synced in.
+			Link syncengine.LinkStat `json:"link"`
 			// What actually protects traffic with this device. Sent per peer
 			// rather than described once in the interface, because the answer
 			// differs per pairing and the reader cannot work out which case
 			// they are in from a general statement.
 			p2p.PeerProtection
-		}{Peer: p, PeerProtection: s.Daemon.P2P.PeerProtection(p), NeedsUpdate: s.Daemon.P2P.Sync.PeerNeedsUpdate(p.ID)}
+		}{Peer: p, PeerProtection: s.Daemon.P2P.PeerProtection(p), NeedsUpdate: s.Daemon.P2P.Sync.PeerNeedsUpdate(p.ID),
+			Link: s.Daemon.P2P.Sync.Link(syncengine.Peer{ID: p.ID, Name: p.Name, Address: p.Address, Port: p.Port, IsWan: p.Address == "relay"})}
 		if b, ok := builds[p.ID]; ok {
 			entry.AppVersion = b.AppVersion
 			entry.BuildTimeMs = b.BuildTimeMs
