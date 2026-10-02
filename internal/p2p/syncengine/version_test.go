@@ -95,26 +95,55 @@ func TestVersions_TransitionTakesTheClearlyNewerSave(t *testing.T) {
 	}
 }
 
-// Newer each in a different file: nothing says which is the save, so the
-// person is asked rather than either being taken — or a mixture made.
-func TestVersions_TransitionAsksWhenNeitherIsClearlyNewer(t *testing.T) {
-	_, n := newMesh(t, "a", "b")
+// Two copies relayed from other devices at different times, each newer in a
+// different file — the state syncing file by file used to leave. Nobody is
+// asked: the one holding the more recent work is the save, and the other
+// takes it whole, keeping its own in a snapshot. Never a mixture.
+func TestVersions_TransitionTakesTheMostRecentWorkWithoutAsking(t *testing.T) {
+	m, n := newMesh(t, "a", "b")
 	a, b := n["a"], n["b"]
 	t0 := time.Now().Add(-48 * time.Hour)
-	t1 := time.Now().Add(-1 * time.Hour)
+	t1 := time.Now().Add(-2 * time.Hour)
+	t2 := time.Now().Add(-1 * time.Hour)
 	write(t, a.dir, "one.sav", "a-new")
 	write(t, a.dir, "two.sav", "old")
 	write(t, b.dir, "one.sav", "old")
-	write(t, b.dir, "two.sav", "b-new")
+	write(t, b.dir, "two.sav", "b-newest")
 	setTimes(t, a.dir, "one.sav", t1)
 	setTimes(t, a.dir, "two.sav", t0)
 	setTimes(t, b.dir, "one.sav", t0)
-	setTimes(t, b.dir, "two.sav", t1)
+	setTimes(t, b.dir, "two.sav", t2)
+	want := b.files(t)
+
+	for _, pair := range [][2]*meshNode{{a, b}, {b, a}} {
+		if res, err := syncPair(t, pair[0], pair[1]); err != nil || res.Status == "conflict" {
+			t.Fatalf("%s↔%s: %+v, %v — want no question", pair[0].name, pair[1].name, res, err)
+		}
+	}
+	settleAll(t, a, b)
+	if !sameSave(a.files(t), want) || !sameSave(b.files(t), want) {
+		t.Errorf("not both on the save with the most recent work: a %s, b %s", describe(a.files(t)), describe(b.files(t)))
+	}
+	if m.deletes() != 0 {
+		t.Errorf("%d deletion(s) were sent", m.deletes())
+	}
+}
+
+// Only an exact tie — the same latest time, newer in as many files — is asked
+// about: there is nothing to tell the two apart.
+func TestVersions_TransitionAsksOnlyOnAnExactTie(t *testing.T) {
+	_, n := newMesh(t, "a", "b")
+	a, b := n["a"], n["b"]
+	t1 := time.Now().Add(-1 * time.Hour)
+	write(t, a.dir, "slot.sav", "a-content")
+	write(t, b.dir, "slot.sav", "b-content")
+	setTimes(t, a.dir, "slot.sav", t1)
+	setTimes(t, b.dir, "slot.sav", t1)
 	aBefore, bBefore := a.files(t), b.files(t)
 
 	res, err := syncPair(t, a, b)
 	if err != nil || res.Status != "conflict" {
-		t.Fatalf("mixed old saves: %+v, %v — want a conflict", res, err)
+		t.Fatalf("an exact tie: %+v, %v — want a question", res, err)
 	}
 	if !sameSave(a.files(t), aBefore) || !sameSave(b.files(t), bBefore) {
 		t.Error("a save changed before anyone answered")
@@ -131,21 +160,15 @@ func TestVersions_UseThisSaveEverywhere(t *testing.T) {
 	t1 := time.Now().Add(-1 * time.Hour)
 	writeMany(t, right.dir, "map", 12)
 	write(t, right.dir, "players.db", "current")
-	// Two mixtures nobody can rank.
-	writeMany(t, mixed1.dir, "map", 6)
+	// Two states nothing tells apart: one file each, the same time.
 	write(t, mixed1.dir, "players.db", "old-1")
-	write(t, mixed1.dir, "extra1.bin", "x")
-	writeMany(t, mixed2.dir, "map", 4)
 	write(t, mixed2.dir, "players.db", "old-2")
-	write(t, mixed2.dir, "extra2.bin", "y")
 	setTimes(t, mixed1.dir, "players.db", t1)
-	setTimes(t, mixed1.dir, "extra1.bin", t0)
-	setTimes(t, mixed2.dir, "players.db", t0)
-	// Newer than anything mixed1 holds, so neither is newer in every file.
-	setTimes(t, mixed2.dir, "extra2.bin", time.Now().Add(time.Hour))
+	setTimes(t, mixed2.dir, "players.db", t1)
+	_ = t0
 
 	if res, _ := syncPair(t, mixed1, mixed2); res.Status != "conflict" {
-		t.Fatalf("setup: two mixtures should conflict, got %+v", res)
+		t.Fatalf("setup: an exact tie should be asked about, got %+v", res)
 	}
 	if _, err := right.eng.UseSaveEverywhere("game1"); err != nil {
 		t.Fatal(err)
