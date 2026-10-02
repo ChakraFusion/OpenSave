@@ -129,6 +129,27 @@ func TestVersions_TransitionTakesTheMostRecentWorkWithoutAsking(t *testing.T) {
 	}
 }
 
+// Two saves with no file in common — one file, named differently on each
+// device — are not two versions of the same files: asked about, never one
+// replacing the other because it is newer.
+func TestVersions_TransitionAsksWhenNoFileIsShared(t *testing.T) {
+	_, n := newMesh(t, "a", "b")
+	a, b := n["a"], n["b"]
+	write(t, a.dir, "alice.sav", "A's world")
+	write(t, b.dir, "bob.sav", "B's world")
+	setTimes(t, a.dir, "alice.sav", time.Now().Add(-time.Hour))
+	setTimes(t, b.dir, "bob.sav", time.Now().Add(-48*time.Hour))
+	bBefore := b.files(t)
+	for _, pair := range [][2]*meshNode{{a, b}, {b, a}} {
+		if res, err := syncPair(t, pair[0], pair[1]); err != nil || res.Status != "conflict" {
+			t.Fatalf("%s↔%s: %+v, %v — want a question", pair[0].name, pair[1].name, res, err)
+		}
+	}
+	if !sameSave(b.files(t), bBefore) {
+		t.Error("b's save was replaced by one with no file in common")
+	}
+}
+
 // Only an exact tie — the same latest time, newer in as many files — is asked
 // about: there is nothing to tell the two apart.
 func TestVersions_TransitionAsksOnlyOnAnExactTie(t *testing.T) {

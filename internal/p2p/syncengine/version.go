@@ -882,6 +882,12 @@ func transitionNewer(local, remote delta.Manifest, agreed string) int {
 			return 1
 		}
 	}
+	// Two saves with no file in common are not two versions of the same
+	// files — a save kept as one file named differently on each device, say
+	// — and nothing about their times says one should replace the other.
+	if len(local.Files) > 0 && len(remote.Files) > 0 && !shareAPath(local, remote) {
+		return 0
+	}
 	l, r := newerInEveryFile(local, remote), newerInEveryFile(remote, local)
 	switch {
 	case l && !r:
@@ -950,6 +956,15 @@ func newestWork(a, b delta.Manifest) int {
 		return -1
 	}
 	return 0
+}
+
+func shareAPath(a, b delta.Manifest) bool {
+	for p := range a.Files {
+		if _, ok := b.Files[p]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // newerInEveryFile reports whether a is newer than b wherever they differ,
