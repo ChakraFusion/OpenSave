@@ -134,7 +134,9 @@ func (t *lanTransport) FetchFileBatch(ctx context.Context, peer syncengine.Peer,
 }
 
 func (t *lanTransport) DeleteRemote(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef) error {
-	return t.postJSON(ctx, peer, peerURL(peer, "/delete-file/"+ref.GameID), map[string]any{"relPath": ref.RelPath, "root": ref.Root}, nil)
+	// "versioned": this device keeps save versions; a peer that does too
+	// refuses deletions from one that does not (handleDeleteFile).
+	return t.postJSON(ctx, peer, peerURL(peer, "/delete-file/"+ref.GameID), map[string]any{"relPath": ref.RelPath, "root": ref.Root, "versioned": true}, nil)
 }
 
 // TriggerPeerPull tells a peer that this device holds newer content.

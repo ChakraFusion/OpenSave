@@ -90,7 +90,7 @@ func (t *wanTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, re
 }
 
 func (t *wanTransport) DeleteRemote(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef) error {
-	_, err := t.wan.Request(ctx, peer.ID, "/delete-file/"+ref.GameID, "POST", map[string]any{"relPath": ref.RelPath, "root": ref.Root})
+	_, err := t.wan.Request(ctx, peer.ID, "/delete-file/"+ref.GameID, "POST", map[string]any{"relPath": ref.RelPath, "root": ref.Root, "versioned": true})
 	return err
 }
 
