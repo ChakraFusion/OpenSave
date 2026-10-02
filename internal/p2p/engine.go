@@ -125,6 +125,10 @@ type Engine struct {
 	pingMisses map[string]int
 	// probeMu serializes PingPairedPeers rounds.
 	probeMu sync.Mutex
+	// probingLinks: peers whose connection is being speed-tested now
+	// (probeLinkSoon).
+	probeLinksMu sync.Mutex
+	probingLinks map[string]bool
 	// When each game last got a safety snapshot before a peer's deletions
 	// (snapshotBeforePeerDeletions).
 	peerDeleteSnapMu sync.Mutex
@@ -470,6 +474,7 @@ func (e *Engine) PingPairedPeers(ctx context.Context) {
 			e.clearPingMisses(p.ID)
 			e.noteAnswered(p.ID)
 			newStatus = "online"
+			e.probeLinkSoon(p)
 		} else if misses := e.notePingMiss(p.ID); misses >= offlineStrikes || !e.heardThisRun(p) {
 			newStatus = "offline"
 		}
@@ -484,6 +489,35 @@ func (e *Engine) PingPairedPeers(ctx context.Context) {
 	if changed {
 		e.notifyPeerUpdate()
 	}
+}
+
+// probeLinkSoon tests the connection to a peer that just answered, in the
+// background, when nothing has measured it for a while
+// (syncengine/linkspeed.go). One test per peer at a time.
+func (e *Engine) probeLinkSoon(p store.Peer) {
+	if e.Sync == nil || p.Address == "relay" {
+		return
+	}
+	e.probeLinksMu.Lock()
+	if e.probingLinks == nil {
+		e.probingLinks = map[string]bool{}
+	}
+	if e.probingLinks[p.ID] {
+		e.probeLinksMu.Unlock()
+		return
+	}
+	e.probingLinks[p.ID] = true
+	e.probeLinksMu.Unlock()
+	go func() {
+		defer func() {
+			e.probeLinksMu.Lock()
+			delete(e.probingLinks, p.ID)
+			e.probeLinksMu.Unlock()
+		}()
+		if e.Sync.ProbeLinkIfDue(context.Background(), syncengine.Peer{ID: p.ID, Name: p.Name, Address: p.Address, Port: p.Port}) {
+			e.notifyPeerUpdate()
+		}
+	}()
 }
 
 // ErrNoPeersOnline is a sync with no other device to sync with: none of the

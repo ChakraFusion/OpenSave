@@ -2,6 +2,7 @@ package p2p
 
 import (
 	"compress/gzip"
+	"crypto/rand"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,7 @@ func (e *Engine) RegisterRoutes(r chi.Router) {
 		r.Get("/api/p2p/games", e.handlePeerGameList)
 		r.Post("/api/p2p/sync-event/{gameId}", e.handleSyncEvent)
 		r.Get("/api/p2p/app-binary", e.handleAppBinary)
+		r.Get("/api/p2p/speedtest", e.handleSpeedTest)
 
 		// What moves save data, or starts a sync: refused while paused.
 		r.Group(func(r chi.Router) {
@@ -54,6 +56,34 @@ func (e *Engine) RegisterRoutes(r chi.Router) {
 			r.Get("/api/sync/trigger/{gameId}", e.handleSyncTrigger)
 		})
 	})
+}
+
+// speedTestMax bounds one speed test, and speedTestData is what it sends:
+// random, so nothing along the way can compress it into a better figure.
+const speedTestMax = 8 << 20
+
+var speedTestData = func() []byte {
+	b := make([]byte, 1<<20)
+	_, _ = rand.Read(b)
+	return b
+}()
+
+// handleSpeedTest sends n bytes (at most speedTestMax) for a peer to time:
+// how it learns how close this device is (syncengine/linkspeed.go).
+func (e *Engine) handleSpeedTest(w http.ResponseWriter, r *http.Request) {
+	n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+	if n <= 0 || n > speedTestMax {
+		n = speedTestMax
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.Itoa(n))
+	for n > 0 {
+		chunk := min(n, len(speedTestData))
+		if _, err := w.Write(speedTestData[:chunk]); err != nil {
+			return
+		}
+		n -= chunk
+	}
 }
 
 func clientIP(r *http.Request) string {
@@ -1103,6 +1133,10 @@ func (e *Engine) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if e.Sync.Progress.OnSyncError != nil {
 			e.Sync.Progress.OnSyncError(gameID, ev)
 		}
+		// A sync here waiting for this peer to finish need not wait on.
+		if peer, ok := e.peerByAddress(clientIP(r)); ok {
+			e.Sync.NotePeerPulled(gameID, peer.ID)
+		}
 	}
 	jsonOK(w, map[string]any{"success": true})
 }
@@ -1230,6 +1264,8 @@ func SetServedProto(v int) int {
 // freshly-pushed files deliberately stay out of it (see persistLineage), so
 // deleting one here would pull it back instead of propagating the delete.
 func (e *Engine) peerFinishedPulling(gameID string, peer syncengine.Peer, data map[string]any) {
+	// A sync here waiting for this peer before slower ones goes on.
+	defer e.Sync.NotePeerPulled(gameID, peer.ID)
 	// Recorded first, and synchronously: the peer said exactly which files it
 	// wrote, so the lineage can be updated now rather than after a manifest
 	// round trip. That round trip is what left a window in which deleting a
