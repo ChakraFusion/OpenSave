@@ -44,6 +44,8 @@ const (
 	// measured it since; probeBytes how much a test moves.
 	probeEvery = 6 * time.Hour
 	probeBytes = 2 << 20
+	// probeRetry is how soon a speed test that failed is tried again.
+	probeRetry = 10 * time.Minute
 )
 
 // prior rates, by address kind, used until a link is measured.
@@ -177,7 +179,13 @@ func (e *Engine) ProbeLinkIfDue(ctx context.Context, peer Peer) bool {
 	e.loadLinksLocked()
 	l := e.links[peer.ID]
 	now := time.Now()
-	due := now.Sub(time.UnixMilli(l.MeasuredMs)) > probeEvery && now.Sub(time.UnixMilli(l.ProbedMs)) > probeEvery
+	// A link never measured is tried again soon after a test that failed;
+	// one measured before only when that has gone stale.
+	retryAfter := probeEvery
+	if l.BytesPerSec == 0 {
+		retryAfter = probeRetry
+	}
+	due := now.Sub(time.UnixMilli(l.MeasuredMs)) > probeEvery && now.Sub(time.UnixMilli(l.ProbedMs)) > retryAfter
 	if due {
 		l.PeerID = peer.ID
 		l.ProbedMs = now.UnixMilli()
@@ -194,6 +202,10 @@ func (e *Engine) ProbeLinkIfDue(ctx context.Context, peer Peer) bool {
 	defer cancel()
 	n, d, err := prober.ProbeSpeed(ctx, peer, probeBytes)
 	if err != nil {
+		// A link never measured is tried again after probeRetry (see due
+		// above): the peer may simply not have been ready — or not yet on a
+		// build that answers a speed test, which once left every link
+		// unmeasured for hours.
 		e.Log("info", fmt.Sprintf("speed test with %s did not finish: %v", peer.Name, err))
 		return true
 	}

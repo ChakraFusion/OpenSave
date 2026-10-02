@@ -2,6 +2,7 @@ package syncengine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -94,6 +95,52 @@ func TestWaitForClose(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("the wait did not end when the device reported")
+	}
+}
+
+type probeTransport struct {
+	*fakeTransport
+	fail  bool
+	calls int
+}
+
+func (p *probeTransport) ProbeSpeed(ctx context.Context, peer Peer, n int) (int64, time.Duration, error) {
+	p.calls++
+	if p.fail {
+		return 0, 0, errors.New("peer returned 404")
+	}
+	return int64(n), time.Second, nil
+}
+
+// A speed test that fails — a peer not yet updated to answer one — is tried
+// again after minutes, not hours; a measured link is not tested again soon.
+func TestProbeLink_RetriesAFailureSoon(t *testing.T) {
+	env := setupEngine(t)
+	pt := &probeTransport{fakeTransport: env.transport, fail: true}
+	env.engine.Transport = pt
+	p := Peer{ID: "p", Name: "P", Address: "192.168.1.9"}
+
+	if !env.engine.ProbeLinkIfDue(context.Background(), p) {
+		t.Fatal("an unmeasured link was not tested")
+	}
+	if env.engine.ProbeLinkIfDue(context.Background(), p) {
+		t.Fatal("tested again straight after a failure")
+	}
+	// Eleven minutes later.
+	env.engine.linkMu.Lock()
+	l := env.engine.links[p.ID]
+	l.ProbedMs = time.Now().Add(-11 * time.Minute).UnixMilli()
+	env.engine.links[p.ID] = l
+	env.engine.linkMu.Unlock()
+	pt.fail = false
+	if !env.engine.ProbeLinkIfDue(context.Background(), p) {
+		t.Fatal("a failed test was not tried again after ten minutes")
+	}
+	if env.engine.Link(p).BytesPerSec == 0 {
+		t.Fatal("the successful test was not recorded")
+	}
+	if env.engine.ProbeLinkIfDue(context.Background(), p) {
+		t.Error("a freshly measured link was tested again")
 	}
 }
 
