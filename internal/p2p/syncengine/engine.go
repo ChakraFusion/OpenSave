@@ -131,6 +131,8 @@ type Engine struct {
 	// on this device right now (settle.go).
 	settleMu sync.Mutex
 	gates    map[string]*saveGate
+	// writtenAt is when a sync last stopped writing each game (BeingWritten).
+	writtenAt map[string]time.Time
 	// servedMu guards served: the save states this device recently handed
 	// each peer, per game (served.go).
 	servedMu sync.Mutex
@@ -781,7 +783,7 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		//
 		// Last, after the other locations have synced: it zips every location,
 		// and taking that time before them delayed their sync for nothing.
-		if remoteData.LatestSnapshot != nil && len(localManifest.Files) > 0 {
+		if remoteData.LatestSnapshot != nil && len(localManifest.Files) > 0 && !e.hasSnapshot(gameID, game) {
 			e.recordMirrorSnapshot(gameID, game, peer, *remoteData.LatestSnapshot,
 				fmt.Sprintf("Synced from peer: %s (%s)", peer.Name, remoteData.LatestSnapshot.Comment))
 		}
@@ -1992,6 +1994,23 @@ func fetchWithRetry(ctx context.Context, t Transport, peer Peer, ref FileRef,
 		}
 	}
 	return nil, lastErr
+}
+
+// hasSnapshot reports whether the game has any snapshot on its active branch
+// here.
+//
+// A sync that finds both sides already identical records the peer's latest
+// snapshot only for a game with no history at all — saves identical from the
+// start (Steam Cloud, a copied folder) would otherwise never get one. It used
+// to record it for every peer it compared with: a full copy of the same save
+// per device, again with each new snapshot over there, which for a save of a
+// quarter-million files was gigabytes of identical archives.
+func (e *Engine) hasSnapshot(gameID string, game store.Game) bool {
+	if e.Snapshots == nil {
+		return false
+	}
+	_, err := e.Snapshots.LatestSnapshot(gameID, game.ActiveBranch)
+	return err == nil
 }
 
 // recordMirrorSnapshot zips the (just-updated) local save under the peer's

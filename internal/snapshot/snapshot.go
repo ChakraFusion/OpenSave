@@ -41,6 +41,18 @@ import (
 // before starting one.
 type UploadHook func(zipPath, remoteFileName string)
 
+// IncompleteError is a snapshot discarded because files of the save could not
+// be read — in use by the game, or changing while it was archived.
+type IncompleteError struct {
+	Game    string
+	Skipped []string
+}
+
+func (e *IncompleteError) Error() string {
+	return fmt.Sprintf("snapshot of %q discarded: %d file(s) could not be read (e.g. %s) — taken again at the next chance",
+		e.Game, len(e.Skipped), e.Skipped[0])
+}
+
 // Manager performs snapshot/branch operations against the store and
 // filesystem.
 type Manager struct {
@@ -249,9 +261,13 @@ func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSys
 		return store.Snapshot{}, fmt.Errorf("zip save data: %w", err)
 	}
 	defer os.Remove(stagingPath) // no-op once renamed
-	if len(skipped) > 0 && m.Log != nil {
-		sample := skipped[0]
-		m.Log("warn", fmt.Sprintf("snapshot of %q skipped %d unreadable file(s), e.g. %s", game.Name, len(skipped), sample))
+	// A snapshot missing files is not kept: it would stand in the history as
+	// a save that never existed — and, counted against retention, push out a
+	// complete one. The caller tries again at the next chance (the watcher
+	// leaves the change unrecorded, so its next pass takes it again; a sync
+	// that needed the copy before replacing files does not replace them).
+	if len(skipped) > 0 {
+		return store.Snapshot{}, &IncompleteError{Game: game.Name, Skipped: skipped}
 	}
 
 	if comment == "" {
