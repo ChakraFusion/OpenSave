@@ -1,6 +1,6 @@
 <script>
   import { dialogOut } from '../lib/motion.js';
-  import { conflicts, conflictResolution, games, peers, settings, toast, view } from '../lib/stores.js';
+  import { conflicts, conflictResolution, games, peers, settings, toast, view, askConfirm } from '../lib/stores.js';
   import { isHandheld } from '../lib/devices.js';
   import { visited } from '../lib/later.js';
   import { api } from '../lib/api.js';
@@ -166,6 +166,31 @@
     }
   }
 
+  // Neither side is the right save — a copy that arrived half-way, a mixture
+  // — and this device holds the right one: it goes to every device, which
+  // each keep a snapshot of their own first. A device on which the save was
+  // changed after the update is still asked.
+  async function useEverywhere() {
+    if (!current || busy) return;
+    const [gameId] = current;
+    const name = gameName;
+    const ok = await askConfirm(
+      `Make this device's save of ${name} the one every device uses, ${peerName} included? Each replaces its save with this one — every file, including removing files this device does not have — and keeps a snapshot of its own first.`,
+      { title: 'Use this save everywhere?', confirmText: 'Use this save everywhere', danger: true }
+    );
+    if (!ok) return;
+    busy = true;
+    try {
+      await api.post(`/api/games/${gameId}/use-everywhere`);
+      toast(`${name}: this save goes to your other devices`, 'success');
+      showDiff = false;
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      busy = false;
+    }
+  }
+
   const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '—');
   const fmtMs = (ms) => (ms ? new Date(ms).toLocaleString() : 'unknown');
   const fmtSize = (n) =>
@@ -279,6 +304,10 @@
           Keep both (recommended)
         </button>
       </div>
+      <p class="hint-line">
+        Neither is the right save, and this device has it?
+        <button class="linkish" disabled={busy} on:click={useEverywhere}>Use this device's save everywhere</button>
+      </p>
       <p class="hint-line">
         <History size={15} class="inline-icon" /> Nothing is lost whichever you pick. <strong>“Keep both”</strong> (recommended) keeps
         playing yours — {peerName} receives it too — and keeps {peerName}'s version here on a branch you can switch
@@ -490,5 +519,14 @@
     font-size: 0.78rem;
     color: var(--text-faint);
     line-height: 1.5;
+  }
+  .linkish {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent-text);
+    text-decoration: underline;
+    cursor: pointer;
   }
 </style>
