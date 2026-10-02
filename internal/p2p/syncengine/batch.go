@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,7 +31,24 @@ const (
 	// responder accepts (p2p.fileBatchMaxFiles / fileBatchMaxBytes).
 	batchMaxFiles = 256
 	batchMaxBytes = 4 << 20
+	// batchMaxClaimed bounds a request as the responder measures it: every
+	// block requested at the file's full block size, whatever the file's real
+	// size. 256 files of 4 KB claim 16 MB that way, which is the responder's
+	// whole limit (p2p.fileBatchMaxBytes), so any file of two blocks in such
+	// a batch had it refused as "batch too large" — and the whole pull with
+	// it, over and over, on saves of many small files. Kept under the limit
+	// with room to spare.
+	batchMaxClaimed = 12 << 20
 )
+
+// claimedBytes is what a file costs a batch as the responder counts it.
+func claimedBytes(f delta.FileEntry, indices []int) int64 {
+	bs := f.BlockSize
+	if bs <= 0 {
+		bs = 64 * 1024
+	}
+	return int64(len(indices)) * int64(bs)
+}
 
 // batchWorkers is how many batch requests are in flight at once: enough to
 // keep the link and the responder's disk busy while this side writes. A var
@@ -55,20 +73,22 @@ func changedBytes(f delta.FileEntry, indices []int) int64 {
 	return n
 }
 
-// groupBatches splits jobs into requests of at most batchMaxFiles files and
-// batchMaxBytes of blocks.
+// groupBatches splits jobs into requests of at most batchMaxFiles files,
+// batchMaxBytes of blocks, and batchMaxClaimed as the responder counts them.
 func groupBatches(jobs []batchJob) [][]batchJob {
 	var out [][]batchJob
 	var cur []batchJob
-	var curBytes int64
+	var curBytes, curClaimed int64
 	for _, j := range jobs {
 		b := changedBytes(j.remote, j.indices)
-		if len(cur) > 0 && (len(cur) >= batchMaxFiles || curBytes+b > batchMaxBytes) {
+		c := claimedBytes(j.remote, j.indices)
+		if len(cur) > 0 && (len(cur) >= batchMaxFiles || curBytes+b > batchMaxBytes || curClaimed+c > batchMaxClaimed) {
 			out = append(out, cur)
-			cur, curBytes = nil, 0
+			cur, curBytes, curClaimed = nil, 0, 0
 		}
 		cur = append(cur, j)
 		curBytes += b
+		curClaimed += c
 	}
 	if len(cur) > 0 {
 		out = append(out, cur)
@@ -160,6 +180,18 @@ func (e *Engine) pullOneBatch(ctx context.Context, batcher BatchFetcher, peer Pe
 		resp, err = batcher.FetchFileBatch(ctx, peer, gameID, root, req)
 		if err == nil || errors.Is(err, ErrBatchUnsupported) {
 			break
+		}
+		// Refused as too large — a responder that counts or limits batches
+		// differently: the same request will be refused again, so it goes
+		// as two halves instead. Asking again unchanged failed the whole pull.
+		if strings.Contains(err.Error(), "batch too large") && len(batch) > 1 {
+			half := len(batch) / 2
+			first, err := e.pullOneBatch(ctx, batcher, peer, gameID, root, batch[:half], throttle, tracker, onProgress)
+			if err != nil {
+				return first, err
+			}
+			second, err := e.pullOneBatch(ctx, batcher, peer, gameID, root, batch[half:], throttle, tracker, onProgress)
+			return append(first, second...), err
 		}
 		e.Log("warn", fmt.Sprintf("batch fetch attempt %d/%d of %d files failed: %v", attempt, maxAttempts, len(batch), err))
 		if attempt < maxAttempts {

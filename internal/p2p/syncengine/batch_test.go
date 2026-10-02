@@ -24,6 +24,9 @@ type batchTransport struct {
 	batchCalls int
 	blockCalls int
 	failPath   string // answered with a per-file error
+	// maxFiles, when set, refuses bigger batches the way a responder that
+	// counts differently does.
+	maxFiles int
 }
 
 func (b *batchTransport) FetchManifest(ctx context.Context, peer Peer, gameID string, q ManifestQuery) (ManifestResponse, error) {
@@ -45,6 +48,9 @@ func (b *batchTransport) FetchFileBatch(ctx context.Context, peer Peer, gameID, 
 	b.mu.Unlock()
 	if len(files) > batchMaxFiles {
 		return nil, fmt.Errorf("batch of %d files is over the limit", len(files))
+	}
+	if b.maxFiles > 0 && len(files) > b.maxFiles {
+		return nil, fmt.Errorf(`peer returned 400: {"error":"batch too large"}`)
 	}
 	out := make([]FileBlocks, 0, len(files))
 	for _, f := range files {
@@ -116,10 +122,11 @@ func TestPull_BatchesSmallFiles(t *testing.T) {
 	}
 	assertSameTree(t, env.remoteDir, env.localDir)
 
-	// 600 small files at 256 per request -> 3 requests; the big file alone
+	// 600 one-block files: each claims a 64 KB block as the responder counts,
+	// so 192 fit a request (batchMaxClaimed) -> 4 requests; the big file alone
 	// goes block by block.
-	if bt.batchCalls != 3 {
-		t.Errorf("batch requests = %d, want 3", bt.batchCalls)
+	if bt.batchCalls != 4 {
+		t.Errorf("batch requests = %d, want 4", bt.batchCalls)
 	}
 	if bt.blockCalls != 1 {
 		t.Errorf("per-file block requests = %d, want 1 (the big file)", bt.blockCalls)
@@ -180,6 +187,51 @@ func TestGroupBatches_RespectsLimits(t *testing.T) {
 		}
 		if len(b) > batchMaxFiles || n > batchMaxBytes {
 			t.Errorf("batch of %d files / %d bytes is over the limit", len(b), n)
+		}
+	}
+}
+
+// Many small files, some of several blocks: what the responder counts —
+// every block at full block size — must stay under its limit too. 256 files
+// of one 64 KB block already claim 16 MB, and each file of more blocks tipped
+// a batch over it: "batch too large", and the whole pull failed.
+func TestGroupBatches_StaysUnderWhatTheResponderCounts(t *testing.T) {
+	var jobs []batchJob
+	for i := 0; i < 2000; i++ {
+		blocks := []delta.Block{{Index: 0, Length: 4 << 10}}
+		indices := []int{0}
+		if i%10 == 0 {
+			blocks = []delta.Block{{Index: 0, Length: 64 << 10}, {Index: 1, Length: 64 << 10}, {Index: 2, Length: 10 << 10}}
+			indices = []int{0, 1, 2}
+		}
+		jobs = append(jobs, batchJob{relPath: fmt.Sprint(i),
+			remote: delta.FileEntry{BlockSize: 64 << 10, Blocks: blocks}, indices: indices})
+	}
+	for _, b := range groupBatches(jobs) {
+		var claimed int64
+		for _, j := range b {
+			claimed += claimedBytes(j.remote, j.indices)
+		}
+		if claimed > 16<<20 {
+			t.Errorf("a batch of %d files claims %d bytes, over the responder's limit", len(b), claimed)
+		}
+	}
+}
+
+// A responder that refuses a batch as too large gets it again in halves,
+// rather than the pull failing.
+func TestPull_ABatchRefusedAsTooLargeIsSplit(t *testing.T) {
+	env, bt := setupBatchEngine(t, ProtoBatchFiles)
+	bt.maxFiles = 10
+	for i := 0; i < 40; i++ {
+		write(t, env.remoteDir, fmt.Sprintf("chunks/c%02d.bin", i), fmt.Sprint("chunk ", i))
+	}
+	if _, err := env.engine.SyncWithPeer(context.Background(), "game1", env.peer); err != nil {
+		t.Fatalf("sync failed though the batches could be split: %v", err)
+	}
+	for i := 0; i < 40; i++ {
+		if _, err := os.Stat(filepath.Join(env.localDir, "chunks", fmt.Sprintf("c%02d.bin", i))); err != nil {
+			t.Fatalf("c%02d.bin did not arrive", i)
 		}
 	}
 }
