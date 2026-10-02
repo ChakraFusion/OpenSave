@@ -1,6 +1,8 @@
 package snapshot
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -29,6 +31,64 @@ func TestContentKey_FromFilesAndFromArchiveAgree(t *testing.T) {
 	stored, _ := env.store.GetSnapshot(snap.ID)
 	if stored.ContentHash != fromArchive {
 		t.Errorf("recorded content %q, want %q", stored.ContentHash, fromArchive)
+	}
+}
+
+// Steps on the way to a newer snapshot — every file of them in it, unchanged —
+// go. A newer snapshot that lacks files (something was deleted) does not make
+// the older one redundant; pinned and hand-taken snapshots are never removed.
+func TestPruneContained(t *testing.T) {
+	env := setup(t)
+	game, err := env.store.GetGame("game1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	game.MaxSnapshots = 50
+	if err := env.store.UpdateGame(game); err != nil {
+		t.Fatal(err)
+	}
+	snap := func(auto bool) string {
+		t.Helper()
+		s, err := env.mgr.Create("game1", "", auto)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s.ID
+	}
+	writeSave(t, env.saveDir, "a.bin", "a")
+	step1 := snap(true)
+	writeSave(t, env.saveDir, "b.bin", "b")
+	step2 := snap(true)
+	pinnedStep := snap(false) // same files as step2, by hand, then pinned below
+	_ = env.store.SetSnapshotPinned(pinnedStep, true)
+	writeSave(t, env.saveDir, "c.bin", "c")
+	full := snap(true)
+	// Then a file is deleted on purpose.
+	if err := os.Remove(filepath.Join(env.saveDir, "c.bin")); err != nil {
+		t.Fatal(err)
+	}
+	writeSave(t, env.saveDir, "a.bin", "a, played on")
+	after := snap(true)
+
+	removed, _, err := env.mgr.PruneContained("game1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone := func(id string) bool { _, err := env.store.GetSnapshot(id); return err != nil }
+	if !gone(step1) || !gone(step2) {
+		t.Errorf("steps on the way to a newer snapshot kept: step1 gone=%v step2 gone=%v", gone(step1), gone(step2))
+	}
+	if gone(pinnedStep) {
+		t.Error("a pinned snapshot was removed")
+	}
+	if gone(full) {
+		t.Error("removed a snapshot holding a file deleted later on purpose")
+	}
+	if gone(after) {
+		t.Error("removed the newest snapshot")
+	}
+	if removed != 2 {
+		t.Errorf("removed %d, want 2", removed)
 	}
 }
 
