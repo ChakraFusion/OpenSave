@@ -151,6 +151,9 @@ func New(opts Options) (*Daemon, error) {
 
 	snaps := snapshot.New(s)
 	snaps.Log = log.Log
+	// Each new snapshot takes the place of older automatic ones it holds
+	// whole (snapshot/content.go).
+	snaps.PruneOnCreate = true
 
 	d := &Daemon{
 		Paths:     paths,
@@ -238,6 +241,9 @@ func New(opts Options) (*Daemon, error) {
 		SyncWriting: func(gameID string) bool {
 			return d.P2P != nil && d.P2P.Sync != nil && d.P2P.Sync.BeingWritten(gameID)
 		},
+		SyncWritingNow: func(gameID string) bool {
+			return d.P2P != nil && d.P2P.Sync != nil && d.P2P.Sync.WritingNow(gameID)
+		},
 		OnChanged: func(gameID string) {
 			// A change made here, by the game or the user: a new version of
 			// the save, recorded before anyone is offered it.
@@ -281,7 +287,7 @@ func (d *Daemon) Start() error {
 	// Snapshots that hold the same files are kept once (snapshot/content.go).
 	// In the background, once things have settled: naming a snapshot taken
 	// before contents were recorded reads its whole archive.
-	time.AfterFunc(2*time.Minute, func() { d.MergeSnapshotDuplicates() })
+	time.AfterFunc(2*time.Minute, func() { d.MergeSnapshotDuplicates(false) })
 	// Switch games tracked under a made-up name get their real one, when an
 	// emulator here knows it by now.
 	d.nameSwitchGames()
@@ -1003,8 +1009,9 @@ func (d *Daemon) checkSavePathShape(abs string) error {
 
 // MergeSnapshotDuplicates keeps every game's identical snapshots once
 // (snapshot.Manager.MergeDuplicates), one game at a time. Returns how many
-// were merged and the bytes freed.
-func (d *Daemon) MergeSnapshotDuplicates() (merged int, freed int64) {
+// were merged and the bytes freed. all looks at every game; otherwise only at
+// games with snapshots whose content is not named yet.
+func (d *Daemon) MergeSnapshotDuplicates(all bool) (merged int, freed int64) {
 	d.mergeMu.Lock()
 	defer d.mergeMu.Unlock()
 	games, err := d.Store.ListGames()
@@ -1012,6 +1019,12 @@ func (d *Daemon) MergeSnapshotDuplicates() (merged int, freed int64) {
 		return 0, 0
 	}
 	for _, g := range games {
+		// Once per game: snapshots taken since are named as they are taken,
+		// and checked against the older ones then (PruneOnCreate). A game
+		// whose snapshots all have their content named has had its pass.
+		if unnamed, err := d.Store.SnapshotsWithoutContentHash(g.ID); !all && (err != nil || len(unnamed) == 0) {
+			continue
+		}
 		if n, f, err := d.Snapshots.MergeDuplicates(g.ID); err == nil {
 			merged += n
 			freed += f

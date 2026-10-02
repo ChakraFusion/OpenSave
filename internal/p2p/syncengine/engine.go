@@ -2091,6 +2091,11 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 		ContentHash:  key,
 	}); err == nil {
 		_ = e.Store.RecordSnapshotFiles(remoteSnap.ID, captured)
+		if e.Snapshots != nil {
+			if snap, gerr := e.Store.GetSnapshot(remoteSnap.ID); gerr == nil {
+				e.Snapshots.PruneContainedBy(snap, captured)
+			}
+		}
 	}
 }
 

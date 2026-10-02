@@ -120,15 +120,24 @@ type Callbacks struct {
 	// Log receives human-readable watcher activity. May be nil.
 	Log func(level, msg string)
 	// SyncWriting reports whether a sync on this device is writing the game
-	// now, or was a moment ago. While it is, a burst the watcher cannot
-	// attribute — an overflow of file events — is taken for the sync's, and
-	// the burst is looked at once the sync has finished. May be nil.
+	// now, or was a moment ago: a burst the watcher cannot attribute — an
+	// overflow of file events — is then taken for the sync's. May be nil.
 	SyncWriting func(gameID string) bool
+	// SyncWritingNow reports whether a sync is writing the game at this
+	// moment: the watcher looks at the burst once it has finished. May be nil.
+	SyncWritingNow func(gameID string) bool
 }
 
-// syncWriting reports whether a sync is writing a game (Callbacks.SyncWriting).
+// syncWriting reports whether a sync is or was just writing a game
+// (Callbacks.SyncWriting).
 func (e *Engine) syncWriting(gameID string) bool {
 	return e.cb.SyncWriting != nil && e.cb.SyncWriting(gameID)
+}
+
+// syncWritingNow reports whether a sync is writing a game at this moment
+// (Callbacks.SyncWritingNow).
+func (e *Engine) syncWritingNow(gameID string) bool {
+	return e.cb.SyncWritingNow != nil && e.cb.SyncWritingNow(gameID)
 }
 
 // Engine owns one watch goroutine per tracked game.
@@ -782,7 +791,7 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 			debounceC = nil
 			// A sync still writing this game: look at the burst once it has
 			// finished, not at a save half-way between two states.
-			if e.syncWriting(gw.gameID) {
+			if e.syncWritingNow(gw.gameID) {
 				resetDebounce()
 				continue
 			}

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 // The content a snapshot records and the content read back from its archive
@@ -89,6 +90,49 @@ func TestPruneContained(t *testing.T) {
 	}
 	if removed != 2 {
 		t.Errorf("removed %d, want 2", removed)
+	}
+}
+
+// With PruneOnCreate, a new snapshot takes the place of older automatic ones it
+// holds entirely, as it is taken; one that lacks a file of them does not.
+func TestPruneContainedBy_ANewSnapshotReplacesItsSteps(t *testing.T) {
+	env := setup(t)
+	env.mgr.PruneOnCreate = true
+	game, _ := env.store.GetGame("game1")
+	game.MaxSnapshots = 50
+	_ = env.store.UpdateGame(game)
+
+	writeSave(t, env.saveDir, "a.bin", "a")
+	first, err := env.mgr.Create("game1", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSave(t, env.saveDir, "b.bin", "b")
+	if _, err := env.mgr.Create("game1", "", true); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := env.store.GetSnapshot(first.ID); err != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if _, err := env.store.GetSnapshot(first.ID); err == nil {
+		t.Fatal("the step the new snapshot holds entirely was kept")
+	}
+
+	// Now a file goes: the newer snapshot does not hold the older one.
+	before, _ := env.store.ListSnapshots("game1", "main")
+	if err := os.Remove(filepath.Join(env.saveDir, "b.bin")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.mgr.Create("game1", "", true); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(500 * time.Millisecond)
+	if _, err := env.store.GetSnapshot(before[0].ID); err != nil {
+		t.Error("removed the snapshot holding a file deleted afterwards")
 	}
 }
 
