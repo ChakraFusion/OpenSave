@@ -243,6 +243,12 @@ func New(opts Options) (*Daemon, error) {
 			_, err := snaps.Create(gameID, "", true)
 			return err
 		},
+		SyncWriting: func(gameID string) bool {
+			return d.P2P != nil && d.P2P.Sync != nil && d.P2P.Sync.BeingWritten(gameID)
+		},
+		SyncWritingNow: func(gameID string) bool {
+			return d.P2P != nil && d.P2P.Sync != nil && d.P2P.Sync.WritingNow(gameID)
+		},
 		OnChanged: func(gameID string) {
 			// An emptied save is noticed as it happens, and said on screen,
 			// even with no other device online to hold it back from.
