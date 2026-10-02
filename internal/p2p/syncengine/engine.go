@@ -143,6 +143,13 @@ type Engine struct {
 	// rootConflicts holds divergences in a game's EXTRA save locations, keyed
 	// by game and location so several can wait on a decision at once.
 	rootConflicts map[string]*RootConflict
+
+	// linkMu guards links, the measured connection to each peer, and
+	// pullWaits, syncs waiting for a close peer to finish taking a save
+	// (linkspeed.go).
+	linkMu    sync.Mutex
+	links     map[string]store.PeerLink
+	pullWaits map[string]chan struct{}
 }
 
 // New creates an Engine.
@@ -310,13 +317,32 @@ func (e *Engine) SyncGame(ctx context.Context, gameID string, onlinePeers []Peer
 
 	results := map[string]Result{}
 	busy := false
-	for _, peer := range onlinePeers {
+	// Fastest connections first (linkspeed.go): a device that is behind takes
+	// the newer save from the closest device holding it, and a newer save
+	// here reaches the close devices before the slow ones.
+	onlinePeers = e.OrderBySpeed(onlinePeers)
+	for i, peer := range onlinePeers {
 		// Hard per-peer cap: a wedged transport must never hold
 		// activeSyncs forever (which would silently block every future
 		// sync of this game until an app restart).
 		peerCtx, cancel := context.WithTimeout(ctx, perPeerSyncTimeout)
 		res, err := e.SyncWithPeer(peerCtx, gameID, peer)
 		cancel()
+		// A close device asked to take this save is given the time to, before
+		// a much slower one is asked: it gets it at full speed, and the slow
+		// one can then take it from whichever device is nearest to it.
+		if err == nil && res.Status == "triggered_peer_pull" && e.waitsForClose(onlinePeers, i) {
+			var size int64
+			if game, gerr := e.Store.GetGame(gameID); gerr == nil {
+				if m, merr := e.ReadManifest(ctx, gameID, game.SavePath); merr == nil {
+					for _, f := range m.Files {
+						size += f.Size
+					}
+				}
+			}
+			e.Log("info", fmt.Sprintf("waiting for %s (close by) to take %s before the slower devices", peer.Name, gameID))
+			e.waitForPull(ctx, gameID, peer, size)
+		}
 		if err == nil && res.Status == "peer_busy" {
 			// Nothing was compared, so nothing is stamped, and it is not a
 			// failure: the peer was writing this game for a sync of its own.
@@ -1584,6 +1610,13 @@ func (e *Engine) pullFiles(ctx context.Context, peer Peer, gameID string, game s
 
 	tracker := newProgressTracker(totalBytes)
 	throttle := e.throttleFor(peer.Wan())
+	// What this transfer says about the connection (linkspeed.go), measured
+	// however it ends: a pull cut off half-way still moved what it moved.
+	pullStarted := time.Now()
+	defer func() {
+		moved, _, _ := tracker.stats()
+		e.noteLinkRate(peer, moved, time.Since(pullStarted))
+	}()
 
 	// Progress reporter shared by the per-file loop and the block-group
 	// loop inside each file. Without in-file reporting, a single large

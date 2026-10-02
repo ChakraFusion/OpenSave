@@ -92,13 +92,57 @@ func (t *lanTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, re
 	// No encodings advertised: on a LAN the wire is typically faster than the
 	// compressor, so the bytes saved cost more than they're worth. Responses
 	// are still decoded, so a peer that compresses anyway is handled.
-	err := t.postJSON(ctx, peer, peerURL(peer, "/blocks/"+ref.GameID), map[string]any{
+	//
+	// Given time for what it asks for. "LAN" here is any direct address,
+	// a VPN one (Tailscale) included, and a few MB of blocks at a VPN relay's
+	// hundred-odd KB a second outlasted the fixed 30 seconds every request
+	// used to get: the request failed, and with it the whole pull, over and
+	// over. Sized like the relay's (slowLinkBytesPerSec), within the bulk
+	// client's ceiling.
+	expected := int64(len(blockIndices)) * int64(max(blockSize, 1))
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second+time.Duration(expected/(slowLinkBytesPerSec/2))*time.Second)
+	defer cancel()
+	raw, err := json.Marshal(map[string]any{
 		"relPath": ref.RelPath, "root": ref.Root, "blockIndices": blockIndices, "blockSize": blockSize,
-	}, &resp)
+	})
 	if err != nil {
 		return nil, err
 	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, peerURL(peer, "/blocks/"+ref.GameID), bytes.NewReader(raw))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	t.sign(req, peer, raw)
+	if err := doJSONWith(lanBulkClient, req, &resp); err != nil {
+		return nil, err
+	}
 	return decodeBlocks(resp.Blocks)
+}
+
+// ProbeSpeed times fetching n bytes from the peer's speed test
+// (syncengine.SpeedProber). The clock starts once the answer begins to
+// arrive, so the figure is the link's rate rather than its round trip.
+func (t *lanTransport) ProbeSpeed(ctx context.Context, peer syncengine.Peer, n int) (int64, time.Duration, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, peerURL(peer, fmt.Sprintf("/speedtest?n=%d", n)), nil)
+	if err != nil {
+		return 0, 0, err
+	}
+	t.sign(req, peer, nil)
+	resp, err := lanBulkClient.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("peer returned %d", resp.StatusCode)
+	}
+	start := time.Now()
+	got, err := io.Copy(io.Discard, resp.Body)
+	if err != nil {
+		return got, time.Since(start), err
+	}
+	return got, time.Since(start), nil
 }
 
 // FetchFileBatch fetches the blocks of many files in one request. Only asked
