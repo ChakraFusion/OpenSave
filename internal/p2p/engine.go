@@ -138,10 +138,6 @@ type Engine struct {
 	answered  map[string]bool
 	startedMs int64
 
-	// Serializes the offline->online transition in requirePairedPeer, so a
-	// burst of concurrent requests from a returning peer triggers one full
-	// auto-sync instead of one per request.
-	peerOnlineMu sync.Mutex
 
 	// Lineage refreshes already running after a peer-applied deletion, keyed
 	// by game+peer. Deletions arrive one file at a time, and each one leaves
