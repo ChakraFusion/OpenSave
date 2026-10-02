@@ -1610,13 +1610,24 @@ func (e *Engine) pullFiles(ctx context.Context, peer Peer, gameID string, game s
 
 	tracker := newProgressTracker(totalBytes)
 	throttle := e.throttleFor(peer.Wan())
-	// What this transfer says about the connection (linkspeed.go), measured
-	// however it ends: a pull cut off half-way still moved what it moved.
-	pullStarted := time.Now()
-	defer func() {
+	// What this transfer says about the connection (linkspeed.go): every
+	// measureWindow while it runs — a pull of a large save takes an hour over a
+	// slow link, and one measurement at its end left the link unmeasured all
+	// that time — and what is left when it ends, however it ends: a pull cut
+	// off half-way still moved what it moved.
+	const measureWindow = 30 * time.Second
+	var measureMu sync.Mutex
+	measuredAt, measuredBytes := time.Now(), int64(0)
+	measure := func(final bool) {
 		moved, _, _ := tracker.stats()
-		e.noteLinkRate(peer, moved, time.Since(pullStarted))
-	}()
+		measureMu.Lock()
+		defer measureMu.Unlock()
+		if d := time.Since(measuredAt); final || d >= measureWindow {
+			e.noteLinkRate(peer, moved-measuredBytes, d)
+			measuredAt, measuredBytes = time.Now(), moved
+		}
+	}
+	defer measure(true)
 
 	// Progress reporter shared by the per-file loop and the block-group
 	// loop inside each file. Without in-file reporting, a single large
@@ -1633,6 +1644,7 @@ func (e *Engine) pullFiles(ctx context.Context, peer Peer, gameID string, game s
 		}
 		lastReport = time.Now()
 		reportMu.Unlock()
+		measure(false)
 
 		bytesPulled, speed, pct := tracker.stats()
 		ev := ProgressEvent{PeerName: peer.Name, BytesTransferred: bytesPulled, TotalBytes: totalBytes, SpeedBytesPerSec: speed, Percentage: pct}
