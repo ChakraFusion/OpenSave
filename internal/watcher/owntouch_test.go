@@ -113,6 +113,7 @@ func TestWhileASyncWrites_TheWatcherWaits(t *testing.T) {
 	var writing atomic.Bool
 	cb := col.callbacks()
 	cb.SyncWriting = func(string) bool { return writing.Load() }
+	cb.SyncWritingNow = cb.SyncWriting
 	eng := New(cb)
 	defer eng.Stop()
 	if err := eng.Watch("game1", saveDir); err != nil {

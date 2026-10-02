@@ -92,6 +92,10 @@ type Manager struct {
 	// running past shutdown it wrote into a directory that was being deleted
 	// and recorded against a database that was already closed.
 	inFlight drain.Group
+	// PruneOnCreate checks each new snapshot against the older ones of its
+	// branch and removes those it holds entirely (content.go,
+	// PruneContainedBy). Off unless set: the daemon sets it.
+	PruneOnCreate bool
 	// sharedMu is held by a compaction and by the clean-up of shared files
 	// (shared.go): a compaction names shared files before any list does, and
 	// a clean-up running then would take them for unused. pendingRoots are
@@ -273,14 +277,14 @@ func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSys
 	// A copy taken before a sync replaces the save, of files a snapshot on this
 	// branch already holds: that one is the copy, and the save is not archived
 	// again (content.go). Syncs took one of these each time, mostly of a save
-	// already archived. Only when nothing automatic will remove it ahead of
-	// newer ones — pinned, taken by hand, or the branch's newest — or the save
-	// would be left with no copy once retention reached it. Snapshots the
+	// already archived. Only when that snapshot is the branch's newest: a
+	// branch switch puts back the newest, and retention removes older ones
+	// first — an older copy standing in would leave the save behind either way. Snapshots the
 	// game's changes or a person ask for are always taken: the watcher takes
 	// them only when something changed, and a person asked.
 	contentKey := ContentKey(captured)
 	if existing, ok, _ := m.Store.SnapshotByContent(gameID, branch, contentKey); !current && ok && ArchiveExists(existing.ZipPath) &&
-		(existing.Pinned || !existing.IsSystemAuto || m.isNewest(gameID, branch, existing.ID)) {
+		m.isNewest(gameID, branch, existing.ID) {
 		if m.Log != nil {
 			m.Log("info", fmt.Sprintf("%q holds the same files as snapshot %s; not archived again", game.Name, existing.ID))
 		}
@@ -302,6 +306,9 @@ func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSys
 	snapshotID := snap.ID
 	_ = m.Store.SetSnapshotContentHash(snapshotID, contentKey)
 	snap.ContentHash = contentKey
+	// Older automatic snapshots this one holds entirely are steps on the way
+	// to it (content.go).
+	defer m.PruneContainedBy(snap, captured)
 
 	// What this snapshot holds, file by file, recorded once and never
 	// revisited. It is what lets a later caller ask whether some exact content
@@ -771,6 +778,11 @@ func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
 	game, err := m.Store.GetGame(gameID)
 	if err != nil {
 		return store.Snapshot{}, err
+	}
+	// An id kept as an alias of the snapshot holding the same files
+	// (content.go) restores that snapshot.
+	if resolved, ok := m.Store.ResolveSnapshotID(snapshotID); ok {
+		snapshotID = resolved
 	}
 	snap, err := m.Store.GetSnapshot(snapshotID)
 	if err != nil || snap.GameID != gameID {

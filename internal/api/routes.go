@@ -640,10 +640,25 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, snap)
 }
 
+// snapshotID is the request's snapshot id, followed when it is kept as an
+// alias of the snapshot holding the same files (snapshot/content.go). For
+// reading a snapshot only: deleting or editing takes the id as given, so an
+// old id can never reach the snapshot that took its place.
+func (s *Server) snapshotID(r *http.Request) string {
+	return s.resolveID(chi.URLParam(r, "snapshotId"))
+}
+
+func (s *Server) resolveID(id string) string {
+	if resolved, ok := s.Daemon.Store.ResolveSnapshotID(id); ok {
+		return resolved
+	}
+	return id
+}
+
 // handleMergeDuplicates keeps every game's identical snapshots once, now
 // rather than at the next start (daemon.MergeSnapshotDuplicates).
 func (s *Server) handleMergeDuplicates(w http.ResponseWriter, r *http.Request) {
-	merged, freed := s.Daemon.MergeSnapshotDuplicates()
+	merged, freed := s.Daemon.MergeSnapshotDuplicates(true)
 	s.BroadcastGamesUpdate()
 	writeJSON(w, http.StatusOK, map[string]any{"merged": merged, "freedBytes": freed})
 }
@@ -1005,7 +1020,7 @@ func (s *Server) handleSyncResume(w http.ResponseWriter, r *http.Request) {
 // handlePreviewRestore says what restoring a snapshot would change, file by
 // file, without changing anything.
 func (s *Server) handlePreviewRestore(w http.ResponseWriter, r *http.Request) {
-	preview, err := s.Daemon.Snapshots.PreviewRestore(chi.URLParam(r, "gameId"), chi.URLParam(r, "snapshotId"))
+	preview, err := s.Daemon.Snapshots.PreviewRestore(chi.URLParam(r, "gameId"), s.snapshotID(r))
 	if err != nil {
 		writeError(w, notFoundToStatus(err), err.Error())
 		return
