@@ -615,22 +615,20 @@ func (e *Engine) syncByVersion(ctx context.Context, game store.Game, peer Peer,
 	}
 	if mine.Vector.genesisOnly() || theirs.Vector.genesisOnly() {
 		// A save from before versions existed, never compared with this one
-		// since: nothing recorded says which is newer. The files may, when
-		// they say it unmistakably (transitionNewer); then the older device
-		// takes the newer save whole, as any device behind does. Never file by
-		// file, which is how devices ended up holding mixtures of two saves
-		// that no game ever wrote. When the files do not say, the person is
-		// asked — or uses "Use this save everywhere" on the device that has
-		// the right one.
+		// since: nothing recorded says which is newer, so the files decide
+		// (transitionNewer) and the older device takes the newer save whole,
+		// as any device behind does — never file by file, which is how devices
+		// ended up holding mixtures of two saves that no game ever wrote. Only
+		// an exact tie is asked about.
 		switch transitionNewer(local, remote.Manifest, e.Store.GetAgreedHash(gameID, peer.ID)) {
 		case 1:
 			return pushTo()
 		case -1:
-			e.Log("info", fmt.Sprintf("%q: %s's save is the newer one in every file that differs — taking it whole",
+			e.Log("info", fmt.Sprintf("%q: %s's save holds the more recent work — taking it whole (this device's is kept in a snapshot)",
 				game.Name, peer.Name))
 			return e.pullVersion(ctx, game, peer, local, remote, theirs.Vector)
 		}
-		e.Log("warn", fmt.Sprintf("%q differs from %s's and neither is clearly the newer — asking", game.Name, peer.Name))
+		e.Log("warn", fmt.Sprintf("%q differs from %s's and neither holds more recent work — asking", game.Name, peer.Name))
 		e.registerConflict(gameID, peer, local, remote)
 		return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, true, nil
 	}
@@ -889,6 +887,66 @@ func transitionNewer(local, remote delta.Manifest, agreed string) int {
 	case l && !r:
 		return 1
 	case r && !l:
+		return -1
+	}
+	return newestWork(local, remote)
+}
+
+// newestWork settles two saves from before versions that neither rule above
+// could: the one holding the most recent work — the latest-written of the
+// files where they differ — is the save, and if that is a tie, the one newer
+// in more of those files. The other takes it whole, keeping a snapshot of its
+// own first.
+//
+// Before versions, devices that never ran a game held copies relayed from the
+// others at different times, and syncs file by file had left some holding
+// mixtures; those were asked about, about states nobody made. Taking the one
+// with the most recent work is what syncing is for — an older state is never
+// what anyone wants handed on — and whatever the other held stays in its
+// snapshot. Changes made since versions existed are not decided this way:
+// those are versions of their own, and a real conflict between them is asked.
+//
+// 0 only for an exact tie, which leaves it to a person.
+func newestWork(a, b delta.Manifest) int {
+	var aNewest, bNewest delta.Milli
+	aCount, bCount := 0, 0
+	consider := func(p string) {
+		af, inA := a.Files[p]
+		bf, inB := b.Files[p]
+		if inA && inB && af.Hash == bf.Hash {
+			return
+		}
+		if inA && af.MtimeMs > aNewest {
+			aNewest = af.MtimeMs
+		}
+		if inB && bf.MtimeMs > bNewest {
+			bNewest = bf.MtimeMs
+		}
+		if inA && inB {
+			switch {
+			case af.MtimeMs > bf.MtimeMs:
+				aCount++
+			case bf.MtimeMs > af.MtimeMs:
+				bCount++
+			}
+		}
+	}
+	for p := range a.Files {
+		consider(p)
+	}
+	for p := range b.Files {
+		if _, inA := a.Files[p]; !inA {
+			consider(p)
+		}
+	}
+	switch {
+	case aNewest > bNewest:
+		return 1
+	case bNewest > aNewest:
+		return -1
+	case aCount > bCount:
+		return 1
+	case bCount > aCount:
 		return -1
 	}
 	return 0
