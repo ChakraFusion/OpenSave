@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -166,6 +167,16 @@ func (t *routingTransport) FetchFileBatch(ctx context.Context, peer syncengine.P
 		return nil, syncengine.ErrBatchUnsupported
 	}
 	return b.FetchFileBatch(ctx, peer, gameID, root, files)
+}
+
+// ProbeSpeed tests LAN links only (syncengine.SpeedProber); the relay is the
+// slowest link whatever a test would say.
+func (t *routingTransport) ProbeSpeed(ctx context.Context, peer syncengine.Peer, n int) (int64, time.Duration, error) {
+	p, ok := t.lan.(syncengine.SpeedProber)
+	if peer.Wan() || !ok {
+		return 0, 0, errors.New("no speed test over the relay")
+	}
+	return p.ProbeSpeed(ctx, peer, n)
 }
 
 func (t *routingTransport) DeleteRemote(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef) error {
