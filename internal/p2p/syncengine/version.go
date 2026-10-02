@@ -549,8 +549,9 @@ func (e *Engine) syncByVersion(ctx context.Context, game store.Game, peer Peer,
 		return Result{Status: versionStatusWaiting, PeerID: peer.ID, PeerName: peer.Name}, true, nil
 	}
 	pushTo := func() (Result, bool, error) {
-		e.forgetLogOnce(gameID + "|" + peer.ID)
-		e.Log("info", fmt.Sprintf("%q: %s has an older version (%s, this device %s) — asking it to take this one",
+		// Once per state: a peer still taking it is asked again on every
+		// pass until it has, and that is not news each time.
+		e.logOnce(gameID+"|"+peer.ID, fmt.Sprintf("%q: %s has an older version (%s, this device %s) — asking it to take this one",
 			game.Name, peer.Name, theirs.Vector, mine.Vector))
 		e.Transport.TriggerPeerPull(peer, gameID)
 		return Result{Status: "triggered_peer_pull", Direction: "push", PeerID: peer.ID, PeerName: peer.Name}, true, nil
