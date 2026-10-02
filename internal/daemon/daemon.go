@@ -220,6 +220,9 @@ func New(opts Options) (*Daemon, error) {
 			_, err := snaps.Create(gameID, "", true)
 			return err
 		},
+		SyncWriting: func(gameID string) bool {
+			return d.P2P != nil && d.P2P.Sync != nil && d.P2P.Sync.BeingWritten(gameID)
+		},
 		OnChanged: func(gameID string) {
 			// A change made here, by the game or the user: a new version of
 			// the save, recorded before anyone is offered it.
