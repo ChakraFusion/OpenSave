@@ -125,7 +125,12 @@ func (e *Engine) expectedRate(peer Peer) float64 {
 
 // noteLinkRate records a transfer with a peer: bytes in d.
 func (e *Engine) noteLinkRate(peer Peer, bytes int64, d time.Duration) {
-	if bytes < minMeasureBytes || d < minMeasureTime {
+	e.recordLinkRate(peer, bytes, d, minMeasureTime)
+}
+
+// recordLinkRate records bytes in d, when d is at least minTime.
+func (e *Engine) recordLinkRate(peer Peer, bytes int64, d, minTime time.Duration) {
+	if bytes < minMeasureBytes || d < minTime || d <= 0 {
 		return
 	}
 	rate := float64(bytes) / d.Seconds()
@@ -201,6 +206,11 @@ func (e *Engine) ProbeLinkIfDue(ctx context.Context, peer Peer) bool {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	n, d, err := prober.ProbeSpeed(ctx, peer, probeBytes)
+	if err == nil && d < minMeasureTime {
+		// Over a home network the test is over before it measures much:
+		// once more, larger, for a figure worth having.
+		n, d, err = prober.ProbeSpeed(ctx, peer, 4*probeBytes)
+	}
 	if err != nil {
 		// A link never measured is tried again after probeRetry (see due
 		// above): the peer may simply not have been ready — or not yet on a
@@ -209,7 +219,9 @@ func (e *Engine) ProbeLinkIfDue(ctx context.Context, peer Peer) bool {
 		e.Log("info", fmt.Sprintf("speed test with %s did not finish: %v", peer.Name, err))
 		return true
 	}
-	e.noteLinkRate(peer, n, d)
+	// A test is a measurement however short: it moved nothing but the test,
+	// so no round trips of a sync's own are in it.
+	e.recordLinkRate(peer, n, d, time.Millisecond)
 	e.Log("info", fmt.Sprintf("connection to %s: %s/s (%s)", peer.Name, humanBytes(int64(e.Link(peer).BytesPerSec)), linkKind(peer)))
 	return true
 }
