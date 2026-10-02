@@ -270,6 +270,23 @@ func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSys
 		return store.Snapshot{}, &IncompleteError{Game: game.Name, Skipped: skipped}
 	}
 
+	// A copy taken before a sync replaces the save, of files a snapshot on this
+	// branch already holds: that one is the copy, and the save is not archived
+	// again (content.go). Syncs took one of these each time, mostly of a save
+	// already archived. Only when nothing automatic will remove it ahead of
+	// newer ones — pinned, taken by hand, or the branch's newest — or the save
+	// would be left with no copy once retention reached it. Snapshots the
+	// game's changes or a person ask for are always taken: the watcher takes
+	// them only when something changed, and a person asked.
+	contentKey := ContentKey(captured)
+	if existing, ok, _ := m.Store.SnapshotByContent(gameID, branch, contentKey); !current && ok && ArchiveExists(existing.ZipPath) &&
+		(existing.Pinned || !existing.IsSystemAuto || m.isNewest(gameID, branch, existing.ID)) {
+		if m.Log != nil {
+			m.Log("info", fmt.Sprintf("%q holds the same files as snapshot %s; not archived again", game.Name, existing.ID))
+		}
+		return existing, nil
+	}
+
 	if comment == "" {
 		if isSystemAuto {
 			comment = "Auto backup"
@@ -283,6 +300,8 @@ func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSys
 		return store.Snapshot{}, err
 	}
 	snapshotID := snap.ID
+	_ = m.Store.SetSnapshotContentHash(snapshotID, contentKey)
+	snap.ContentHash = contentKey
 
 	// What this snapshot holds, file by file, recorded once and never
 	// revisited. It is what lets a later caller ask whether some exact content

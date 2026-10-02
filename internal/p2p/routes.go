@@ -758,7 +758,7 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 		Versions:          true,
 	}
 	if latest, err := e.Snapshots.LatestSnapshot(gameID, ""); err == nil {
-		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
+		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment, ContentHash: latest.ContentHash}
 	}
 	// The asker already holds the state both devices last agreed on and says
 	// so; if this device still holds it too, "unchanged" is the whole answer.

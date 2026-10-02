@@ -58,6 +58,7 @@ func (s *Server) routes(r chi.Router) {
 	r.Patch("/api/games/{gameId}/snapshot/{snapshotId}", s.handleEditSnapshot)
 	r.Get("/api/games/{gameId}/sessions", s.handleGameSessions)
 	r.Get("/api/snapshots/check", s.handleSnapshotChecks)
+	r.Post("/api/snapshots/merge-duplicates", s.handleMergeDuplicates)
 	r.Get("/api/games/{gameId}/snapshot/{snapshotId}/compare/{otherId}", s.handleCompareSnapshots)
 	r.Post("/api/snapshots/check", s.handleVerifySnapshots)
 	r.Post("/api/games/{gameId}/session", s.handleMarkSession)
@@ -637,6 +638,14 @@ func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
 	s.Daemon.P2P.Sync.RecordActivity(store.ActivityEvent{GameID: gameID, Kind: store.ActivityRestored,
 		Detail: fmt.Sprintf("%s|%s", snap.ID, snap.Timestamp)})
 	writeJSON(w, http.StatusOK, snap)
+}
+
+// handleMergeDuplicates keeps every game's identical snapshots once, now
+// rather than at the next start (daemon.MergeSnapshotDuplicates).
+func (s *Server) handleMergeDuplicates(w http.ResponseWriter, r *http.Request) {
+	merged, freed := s.Daemon.MergeSnapshotDuplicates()
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, map[string]any{"merged": merged, "freedBytes": freed})
 }
 
 // handleUseSaveEverywhere makes this device's save the one every other device
