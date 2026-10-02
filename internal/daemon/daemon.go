@@ -1012,15 +1012,18 @@ func (d *Daemon) MergeSnapshotDuplicates() (merged int, freed int64) {
 		return 0, 0
 	}
 	for _, g := range games {
-		n, f, err := d.Snapshots.MergeDuplicates(g.ID)
-		if err != nil {
-			continue
+		if n, f, err := d.Snapshots.MergeDuplicates(g.ID); err == nil {
+			merged += n
+			freed += f
 		}
-		merged += n
-		freed += f
+		// And steps on the way to a newer snapshot that holds them whole.
+		if n, f, err := d.Snapshots.PruneContained(g.ID); err == nil {
+			merged += n
+			freed += f
+		}
 	}
 	if merged > 0 {
-		d.Log.Log("info", fmt.Sprintf("kept identical snapshots once: %d merged, %d MB freed", merged, freed>>20))
+		d.Log.Log("info", fmt.Sprintf("snapshots cleaned up: %d identical or held whole by a newer one, %d MB freed", merged, freed>>20))
 	}
 	return merged, freed
 }
