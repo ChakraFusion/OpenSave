@@ -26,6 +26,10 @@ type SnapshotInfo struct {
 	ID        string `json:"id"`
 	Timestamp string `json:"timestamp"`
 	Comment   string `json:"comment"`
+	// ContentHash names what the snapshot holds (snapshot.ContentKey): a
+	// device that already has a snapshot of exactly those files records this
+	// one's id as an alias of it rather than archiving the save again.
+	ContentHash string `json:"contentHash,omitempty"`
 }
 
 // ProtoMultiRoot is the protocol revision at which a peer understands games

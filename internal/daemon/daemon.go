@@ -83,6 +83,9 @@ type Daemon struct {
 	newGames   newGameState
 	// scanMu runs one save scan at a time. See ScanForSaves.
 	scanMu sync.Mutex
+	// mergeMu runs one merge of identical snapshots at a time
+	// (MergeSnapshotDuplicates).
+	mergeMu sync.Mutex
 
 	// uploads counts cloud mirrors still running, so Stop can wait for them
 	// rather than letting process exit truncate one.
@@ -263,6 +266,10 @@ func (d *Daemon) Start() error {
 	if err != nil {
 		return err
 	}
+	// Snapshots that hold the same files are kept once (snapshot/content.go).
+	// In the background, once things have settled: naming a snapshot taken
+	// before contents were recorded reads its whole archive.
+	time.AfterFunc(2*time.Minute, func() { d.MergeSnapshotDuplicates() })
 	// Switch games tracked under a made-up name get their real one, when an
 	// emulator here knows it by now.
 	d.nameSwitchGames()
@@ -980,6 +987,30 @@ func (d *Daemon) checkSavePathShape(abs string) error {
 		}
 	}
 	return nil
+}
+
+// MergeSnapshotDuplicates keeps every game's identical snapshots once
+// (snapshot.Manager.MergeDuplicates), one game at a time. Returns how many
+// were merged and the bytes freed.
+func (d *Daemon) MergeSnapshotDuplicates() (merged int, freed int64) {
+	d.mergeMu.Lock()
+	defer d.mergeMu.Unlock()
+	games, err := d.Store.ListGames()
+	if err != nil {
+		return 0, 0
+	}
+	for _, g := range games {
+		n, f, err := d.Snapshots.MergeDuplicates(g.ID)
+		if err != nil {
+			continue
+		}
+		merged += n
+		freed += f
+	}
+	if merged > 0 {
+		d.Log.Log("info", fmt.Sprintf("kept identical snapshots once: %d merged, %d MB freed", merged, freed>>20))
+	}
+	return merged, freed
 }
 
 // EnsureImportedSnapshot registers a snapshot restored from an .sscb
