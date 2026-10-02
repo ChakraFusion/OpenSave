@@ -98,12 +98,15 @@ func (s *Server) peersPayload() map[string]any {
 			AppVersion    string `json:"appVersion,omitempty"`
 			BuildTimeMs   int64  `json:"buildTimeMs,omitempty"`
 			HasNewerBuild bool   `json:"hasNewerBuild,omitempty"`
+			// NeedsUpdate: its OpenSave keeps no save versions, so this
+			// device takes nothing from it until it is updated.
+			NeedsUpdate bool `json:"needsUpdate,omitempty"`
 			// What actually protects traffic with this device. Sent per peer
 			// rather than described once in the interface, because the answer
 			// differs per pairing and the reader cannot work out which case
 			// they are in from a general statement.
 			p2p.PeerProtection
-		}{Peer: p, PeerProtection: s.Daemon.P2P.PeerProtection(p)}
+		}{Peer: p, PeerProtection: s.Daemon.P2P.PeerProtection(p), NeedsUpdate: s.Daemon.P2P.Sync.PeerNeedsUpdate(p.ID)}
 		if b, ok := builds[p.ID]; ok {
 			entry.AppVersion = b.AppVersion
 			entry.BuildTimeMs = b.BuildTimeMs

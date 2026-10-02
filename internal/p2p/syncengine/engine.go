@@ -155,6 +155,9 @@ type Engine struct {
 	versionMu  sync.Mutex
 	pullingNow map[string]bool
 	loggedOnce map[string]string
+	// peerVersions: per peer, whether its OpenSave keeps save versions
+	// (PeerNeedsUpdate).
+	peerVersions map[string]bool
 }
 
 // New creates an Engine.
@@ -353,7 +356,7 @@ func (e *Engine) SyncGame(ctx context.Context, gameID string, onlinePeers []Peer
 		// divergence from the NEXT sync, causing the peer to silently overwrite
 		// its own changes instead of detecting the conflict and asking.
 		switch res.Status {
-		case "conflict", "error", versionStatusWaiting:
+		case "conflict", "error", versionStatusWaiting, StatusPeerOutdatedApp:
 		case "peer_missing", "peer_awaiting_folder", "peer_holding":
 			// The two devices talked and finished, which is what the
 			// per-device stamp has always recorded. But nothing of THIS game
@@ -472,6 +475,19 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 			return Result{Status: "peer_missing", PeerID: peer.ID, PeerName: peer.Name}, nil
 		}
 		return Result{}, fmt.Errorf("fetch remote manifest: %w", err)
+	}
+
+	// 1b. A peer whose OpenSave keeps no save versions decides by the old file
+	// comparison: whatever its copy lacks, it reads as deleted, and a copy that
+	// arrived half-way spreads its gaps that way. Nothing is taken from it
+	// until it is updated — it can still take from here, and its deletions are
+	// refused where they arrive (handleDeleteFile).
+	e.notePeerApp(peer.ID, remoteData.KeepsVersions())
+	if game.AutoSync && !remoteData.KeepsVersions() {
+		e.logOnce(gameID+"|"+peer.ID, fmt.Sprintf(
+			"%q: %s runs an OpenSave without save versions — nothing is taken from it until it is updated",
+			game.Name, peer.Name))
+		return Result{Status: StatusPeerOutdatedApp, PeerID: peer.ID, PeerName: peer.Name}, nil
 	}
 
 	// 2. Branch alignment: local follows the remote's active branch.

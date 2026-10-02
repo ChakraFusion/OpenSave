@@ -927,6 +927,43 @@ func newerInEveryFile(a, b delta.Manifest) bool {
 	return differ
 }
 
+// StatusPeerOutdatedApp: the peer runs an OpenSave without save versions.
+// Nothing is taken from it until it is updated; it can still take from here.
+const StatusPeerOutdatedApp = "peer_outdated_app"
+
+// OldBuildDeleteMessage is the answer to a deletion asked for by a device
+// whose OpenSave does not keep save versions.
+const OldBuildDeleteMessage = "this device keeps save versions and takes no deletions from an OpenSave that does not — update OpenSave on the asking device"
+
+// notePeerApp records whether a peer's OpenSave keeps save versions, as its
+// last manifest answer said.
+func (e *Engine) notePeerApp(peerID string, versions bool) {
+	e.versionMu.Lock()
+	defer e.versionMu.Unlock()
+	if e.peerVersions == nil {
+		e.peerVersions = map[string]bool{}
+	}
+	e.peerVersions[peerID] = versions
+}
+
+// PeerNeedsUpdate reports whether a peer is known to run an OpenSave without
+// save versions — one this device takes nothing from — so the person can be
+// told to update it.
+func (e *Engine) PeerNeedsUpdate(peerID string) bool {
+	e.versionMu.Lock()
+	defer e.versionMu.Unlock()
+	v, known := e.peerVersions[peerID]
+	return known && !v
+}
+
+// RefusedOldBuildDelete logs, once per game and device, that a deletion asked
+// for by an OpenSave without save versions was refused.
+func (e *Engine) RefusedOldBuildDelete(gameID, from string) {
+	e.logOnce("refused|"+gameID+"|"+from, fmt.Sprintf(
+		"%s asked to delete files of %q; refused — its OpenSave does not keep save versions and decides by the old file comparison. Update it there.",
+		from, gameID))
+}
+
 // supersedes reports whether theirs is newer than this device's version and
 // than the version the open conflict is with: both sides of the question are
 // behind it.

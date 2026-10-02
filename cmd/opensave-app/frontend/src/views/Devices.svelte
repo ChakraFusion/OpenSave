@@ -99,6 +99,11 @@
             <span class="badge" class:online={peer.status === 'online'} class:offline={peer.status !== 'online'}>
               {peer.status}
             </span>
+            {#if peer.needsUpdate}
+              <span class="badge warn" title="Its OpenSave keeps no save versions: nothing is taken from it, and its deletions are refused, until it is updated">
+                needs update
+              </span>
+            {/if}
           </div>
           <div class="peer-meta">
             {peer.address === 'relay' ? 'internet relay' : `${peer.address}:${peer.port}`}

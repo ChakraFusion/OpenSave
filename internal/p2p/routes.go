@@ -674,6 +674,7 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 		Proto:             ServedProto(),
 		DeletionConfirmed: e.Sync.DeletionConfirmed(game.ID),
 		Version:           e.Sync.LocalVersion(game, manifest),
+		Versions:          true,
 	}
 	if latest, err := e.Snapshots.LatestSnapshot(gameID, ""); err == nil {
 		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
@@ -868,6 +869,11 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RelPath string `json:"relPath"`
 		Root    string `json:"root"`
+		// Versioned: the asking device keeps save versions. One that does
+		// not decides deletions by the old file comparison, which reads
+		// whatever its copy lacks as deleted — the deletions that emptied
+		// whole saves when a copy had arrived only half-way.
+		Versioned bool `json:"versioned"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RelPath == "" {
 		jsonError(w, http.StatusBadRequest, "relPath is required.")
@@ -877,6 +883,15 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	game, err := e.trackedGameForPeer(gameID)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "Game not found.")
+		return
+	}
+	if game.AutoSync && !body.Versioned {
+		from := clientIP(r)
+		if p, ok := e.peerByAddress(from); ok {
+			from = p.Name
+		}
+		e.Sync.RefusedOldBuildDelete(game.Name, from)
+		jsonError(w, http.StatusConflict, syncengine.OldBuildDeleteMessage)
 		return
 	}
 	base, ok := e.resolveServeRoot(gameID, game, body.Root)
@@ -1128,7 +1143,7 @@ func (e *Engine) resolveServeRoot(gameID string, game store.Game, root string) (
 // argument — the read still happens concurrently.
 var servedProto atomic.Int64
 
-func init() { servedProto.Store(syncengine.ProtoBatchFiles) }
+func init() { servedProto.Store(syncengine.ProtoVersions) }
 
 // ServedProto reports the protocol revision advertised to peers.
 func ServedProto() int { return int(servedProto.Load()) }

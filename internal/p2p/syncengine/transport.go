@@ -38,6 +38,12 @@ const ProtoMultiRoot = 1
 // small files (Project Zomboid map chunks) meant half a day for 50MB.
 const ProtoBatchFiles = 2
 
+// ProtoVersions is the revision at which a peer keeps save versions
+// (version.go). A peer below it decides by the old file comparison, which
+// reads whatever its copy lacks as deleted; nothing is taken from such a peer
+// or deleted on its word (OldBuildRefused).
+const ProtoVersions = 3
+
 // FileBlocksRequest asks for some blocks of one file, as one entry of a batch.
 type FileBlocksRequest struct {
 	RelPath      string `json:"relPath"`
@@ -100,6 +106,15 @@ type ManifestResponse struct {
 	// Version is the responder's version of the save (version.go), absent
 	// from builds that predate it and for games it does not version.
 	Version *VersionInfo `json:"version,omitempty"`
+	// Versions says the responder keeps save versions at all. The relay
+	// path sends it instead of a Proto, which there would also claim things
+	// that path does not serve.
+	Versions bool `json:"versions,omitempty"`
+}
+
+// KeepsVersions reports whether the responder keeps save versions.
+func (r ManifestResponse) KeepsVersions() bool {
+	return r.Versions || r.Proto >= ProtoVersions
 }
 
 // FileRef identifies one file inside one of a game's save locations.

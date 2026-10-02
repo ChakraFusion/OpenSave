@@ -197,6 +197,9 @@ type meshNode struct {
 	// blockBudget, when >= 0, is how many more files this device serves
 	// before every further block request fails: a pull that stops part-way.
 	blockBudget int
+	// proto is the protocol revision it answers with; below ProtoVersions it
+	// stands for an OpenSave that keeps no save versions.
+	proto int
 }
 
 func (n *meshNode) peer() Peer {
@@ -248,6 +251,7 @@ func (t *meshTransport) FetchManifest(ctx context.Context, peer Peer, gameID str
 		ActiveBranch:      game.ActiveBranch,
 		DeletionConfirmed: n.eng.DeletionConfirmed(gameID),
 		Version:           n.eng.LocalVersion(game, m),
+		Proto:             n.proto,
 	}, nil
 }
 
@@ -324,7 +328,7 @@ func newMesh(t *testing.T, names ...string) (*mesh, map[string]*meshNode) {
 		if err := st.CreateGame(store.Game{ID: "game1", Name: "Game One", SavePath: dir, AutoSync: true, MaxSnapshots: 50}); err != nil {
 			t.Fatal(err)
 		}
-		n := &meshNode{name: name, dir: dir, st: st, blockBudget: -1}
+		n := &meshNode{name: name, dir: dir, st: st, blockBudget: -1, proto: ProtoVersions}
 		n.eng = New(st, snapshot.New(st), &meshTransport{m: m, self: n})
 		m.nodes[n.peer().ID] = n
 		byName[name] = n
@@ -693,6 +697,35 @@ func TestVersions_AnUnnoticedChangeIsFoundWhenTheDevicesMeet(t *testing.T) {
 	settleAll(t, b, a)
 	if got := b.files(t)["slot.sav"]; got != a.files(t)["slot.sav"] {
 		t.Errorf("the unnoticed change never reached b")
+	}
+}
+
+// A device whose OpenSave keeps no save versions is never a source: its half
+// of a save is not taken, and nothing here changes on its account. It is
+// reported as needing an update.
+func TestVersions_NothingIsTakenFromAnOldBuild(t *testing.T) {
+	_, n := newMesh(t, "current", "old")
+	current, old := n["current"], n["old"]
+	writeMany(t, current.dir, "map", 10)
+	writeMany(t, old.dir, "map", 3)
+	write(t, old.dir, "only-old.bin", "x")
+	old.proto = ProtoBatchFiles
+	before := current.files(t)
+
+	res, err := syncPair(t, current, old)
+	if err != nil || res.Status != StatusPeerOutdatedApp {
+		t.Fatalf("sync with an old build: %+v, %v — want %s", res, err, StatusPeerOutdatedApp)
+	}
+	if !sameSave(current.files(t), before) {
+		t.Error("the save changed on account of a device without save versions")
+	}
+	if !current.eng.PeerNeedsUpdate(old.peer().ID) {
+		t.Error("the old build is not reported as needing an update")
+	}
+	old.proto = ProtoVersions
+	_, _ = syncPair(t, current, old)
+	if current.eng.PeerNeedsUpdate(old.peer().ID) {
+		t.Error("still reported as needing an update after it was updated")
 	}
 }
 
