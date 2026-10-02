@@ -139,75 +139,141 @@ func (m *Manager) contentHashOf(snap store.Snapshot) (string, error) {
 // was added since. The other way round is kept: a newer snapshot contained in
 // an older one is a save something was deleted from, on purpose. Pinned
 // snapshots and ones taken by hand are never removed.
+//
+// The largest snapshots are looked at first as the ones that may hold others —
+// they hold the most — and passes repeat until one removes nothing. After
+// that, each new snapshot is checked against the older ones as it is taken
+// (PruneContainedBy), which is all it takes to stay that way.
 func (m *Manager) PruneContained(gameID string) (removed int, freed int64, err error) {
+	for {
+		n, f, err := m.pruneContainedPass(gameID)
+		removed += n
+		freed += f
+		if err != nil || n == 0 {
+			return removed, freed, err
+		}
+	}
+}
+
+func (m *Manager) pruneContainedPass(gameID string) (removed int, freed int64, err error) {
 	snaps, err := m.Store.AllSnapshotsOfGame(gameID) // oldest first
 	if err != nil {
 		return 0, 0, err
 	}
 	byBranch := map[string][]store.Snapshot{}
+	counts := map[string]int{}
 	for _, s := range snaps {
-		if ArchiveExists(s.ZipPath) {
-			byBranch[s.BranchName] = append(byBranch[s.BranchName], s)
+		if !ArchiveExists(s.ZipPath) {
+			continue
 		}
+		files, ferr := m.filesOf(s)
+		if ferr != nil {
+			continue
+		}
+		counts[s.ID] = len(files)
+		byBranch[s.BranchName] = append(byBranch[s.BranchName], s)
 	}
 	for _, list := range byBranch {
+		order := make(map[string]int, len(list)) // position in time
+		for i, s := range list {
+			order[s.ID] = i
+		}
+		holders := append([]store.Snapshot(nil), list...)
+		sort.SliceStable(holders, func(i, j int) bool { return counts[holders[i].ID] > counts[holders[j].ID] })
 		gone := map[string]bool{}
-		sizes := map[string]int{}
-		// From the newest down: what a snapshot already removed held is held
-		// by the newer one that held it, so it need not be looked at as one.
-		for li := len(list) - 1; li > 0; li-- {
-			newer := list[li]
-			if gone[newer.ID] {
+		for _, holder := range holders {
+			if gone[holder.ID] || counts[holder.ID] == 0 {
 				continue
 			}
-			newerFiles, ferr := m.filesOf(newer)
-			if ferr != nil || len(newerFiles) == 0 {
+			holderFiles, ferr := m.filesOf(holder)
+			if ferr != nil {
 				continue
 			}
-			have := make(map[string]string, len(newerFiles))
-			for _, f := range newerFiles {
+			have := make(map[string]string, len(holderFiles))
+			for _, f := range holderFiles {
 				have[archiveName(f)] = f.Hash
 			}
-			for si := 0; si < li; si++ {
-				older := list[si]
-				if gone[older.ID] || older.Pinned || !older.IsSystemAuto {
-					continue
-				}
-				if n, ok := sizes[older.ID]; ok && n > len(newerFiles) {
+			for _, older := range list[:order[holder.ID]] {
+				if gone[older.ID] || older.Pinned || !older.IsSystemAuto || counts[older.ID] == 0 || counts[older.ID] > len(holderFiles) {
 					continue
 				}
 				olderFiles, ferr := m.filesOf(older)
-				if ferr != nil {
+				if ferr != nil || !containedIn(olderFiles, have) {
 					continue
 				}
-				sizes[older.ID] = len(olderFiles)
-				if len(olderFiles) == 0 || len(olderFiles) > len(newerFiles) {
-					continue
-				}
-				contained := true
-				for _, f := range olderFiles {
-					if have[archiveName(f)] != f.Hash {
-						contained = false
-						break
-					}
-				}
-				if !contained {
-					continue
+				identical := len(olderFiles) == len(holderFiles)
+				if identical {
+					_ = m.Store.RepointSnapshotAliases(older.ID, holder.ID)
 				}
 				f, derr := m.DeleteSnapshot(gameID, older.ID)
 				if derr != nil {
 					continue
 				}
+				if identical {
+					// The same files: its id still leads to them.
+					_ = m.Store.AddSnapshotAlias(older.ID, holder.ID)
+				}
 				gone[older.ID] = true
 				removed++
 				freed += f
 				if m.Log != nil {
-					m.Log("info", fmt.Sprintf("snapshot %s removed: every file of it is in the newer %s", older.ID, newer.ID))
+					m.Log("info", fmt.Sprintf("snapshot %s removed: every file of it is in the newer %s", older.ID, holder.ID))
 				}
 			}
 		}
 	}
 	return removed, freed, nil
+}
+
+func containedIn(files []store.CapturedFile, have map[string]string) bool {
+	for _, f := range files {
+		if have[archiveName(f)] != f.Hash {
+			return false
+		}
+	}
+	return true
+}
+
+// PruneContainedBy checks the older snapshots of snap's branch against snap,
+// just taken, and removes those it holds entirely (PruneContained). Only when
+// PruneOnCreate is set; in the background, counted for shutdown.
+func (m *Manager) PruneContainedBy(snap store.Snapshot, files []store.CapturedFile) {
+	if !m.PruneOnCreate || len(files) == 0 {
+		return
+	}
+	m.inFlight.Add()
+	go func() {
+		defer m.inFlight.Done()
+		have := make(map[string]string, len(files))
+		for _, f := range files {
+			have[archiveName(f)] = f.Hash
+		}
+		snaps, err := m.Store.ListSnapshots(snap.GameID, snap.BranchName)
+		if err != nil {
+			return
+		}
+		for _, older := range snaps {
+			if older.ID == snap.ID || older.Timestamp >= snap.Timestamp || older.Pinned || !older.IsSystemAuto ||
+				!ArchiveExists(older.ZipPath) {
+				continue
+			}
+			olderFiles, ferr := m.filesOf(older)
+			if ferr != nil || len(olderFiles) == 0 || len(olderFiles) > len(files) || !containedIn(olderFiles, have) {
+				continue
+			}
+			identical := len(olderFiles) == len(files)
+			if identical {
+				_ = m.Store.RepointSnapshotAliases(older.ID, snap.ID)
+			}
+			_, derr := m.DeleteSnapshot(snap.GameID, older.ID)
+			if derr == nil && identical {
+				_ = m.Store.AddSnapshotAlias(older.ID, snap.ID)
+			}
+			if derr == nil && m.Log != nil {
+				m.Log("info", fmt.Sprintf("snapshot %s removed: every file of it is in the newer %s", older.ID, snap.ID))
+			}
+		}
+	}()
 }
 
 // isNewest reports whether id is the newest snapshot on a game's branch.

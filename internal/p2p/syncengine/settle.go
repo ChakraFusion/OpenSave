@@ -150,12 +150,23 @@ const writeEcho = 10 * time.Second
 // and each one read as the game saving: an automatic snapshot of a half-pulled
 // save every few seconds, which pushed the real ones out of retention.
 func (e *Engine) BeingWritten(gameID string) bool {
-	e.settleMu.Lock()
-	defer e.settleMu.Unlock()
-	if g := e.gates[gameID]; g != nil && (g.writers > 0 || g.waitingWriters > 0) {
+	if e.WritingNow(gameID) {
 		return true
 	}
+	e.settleMu.Lock()
+	defer e.settleMu.Unlock()
 	return time.Since(e.writtenAt[gameID]) < writeEcho
+}
+
+// WritingNow reports whether a sync on this device is writing a game's save at
+// this moment — what the watcher waits out before looking at a burst, so it
+// never judges a save half-way between two states. Not the moments after:
+// a change the game makes then is the game's, and its snapshot is not held up.
+func (e *Engine) WritingNow(gameID string) bool {
+	e.settleMu.Lock()
+	defer e.settleMu.Unlock()
+	g := e.gates[gameID]
+	return g != nil && (g.writers > 0 || g.waitingWriters > 0)
 }
 
 // Reading holds the game's save still for a sync to read it: it waits until
