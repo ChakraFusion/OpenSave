@@ -834,19 +834,6 @@ func (e *Engine) handleFileBatch(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, http.StatusBadRequest, fmt.Sprintf("at most %d files per batch", fileBatchMaxFiles))
 		return
 	}
-	var requested int64
-	for _, f := range body.Files {
-		bs := f.BlockSize
-		if bs <= 0 {
-			bs = 64 * 1024
-		}
-		requested += int64(len(f.BlockIndices)) * int64(bs)
-	}
-	if requested > fileBatchMaxBytes {
-		jsonError(w, http.StatusBadRequest, "batch too large")
-		return
-	}
-
 	game, err := e.trackedGameForPeer(gameID)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "Game not found.")
@@ -858,6 +845,34 @@ func (e *Engine) handleFileBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	singleFile, _ := delta.ResolveLocalSaveFilePath(base)
+
+	// What the answer will hold: each file's requested blocks at its block
+	// size, but never more than the file itself. Counting every block at full
+	// size took 256 files of 4 KB for 16 MB — the whole limit — and refused
+	// any batch of small files with a few larger ones among them, which failed
+	// whole pulls of saves made of many small files.
+	var requested int64
+	for _, f := range body.Files {
+		bs := f.BlockSize
+		if bs <= 0 {
+			bs = 64 * 1024
+		}
+		n := int64(len(f.BlockIndices)) * int64(bs)
+		if f.RelPath != "" && delta.IsSafePath(base, f.RelPath) {
+			p := delta.LocalNameFor(base, f.RelPath)
+			if singleFile {
+				p = base
+			}
+			if info, err := os.Stat(p); err == nil && info.Size() < n {
+				n = info.Size()
+			}
+		}
+		requested += n
+	}
+	if requested > fileBatchMaxBytes {
+		jsonError(w, http.StatusBadRequest, "batch too large")
+		return
+	}
 	gz := wantsGzip(body.Encodings)
 
 	out := make([]syncengine.FileBlocks, 0, len(body.Files))
