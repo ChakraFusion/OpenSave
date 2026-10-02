@@ -102,12 +102,17 @@ type probeTransport struct {
 	*fakeTransport
 	fail  bool
 	calls int
+	// perMB is how long each MB takes; a second when unset.
+	perMB time.Duration
 }
 
 func (p *probeTransport) ProbeSpeed(ctx context.Context, peer Peer, n int) (int64, time.Duration, error) {
 	p.calls++
 	if p.fail {
 		return 0, 0, errors.New("peer returned 404")
+	}
+	if p.perMB > 0 {
+		return int64(n), time.Duration(n>>20) * p.perMB, nil
 	}
 	return int64(n), time.Second, nil
 }
@@ -141,6 +146,23 @@ func TestProbeLink_RetriesAFailureSoon(t *testing.T) {
 	}
 	if env.engine.ProbeLinkIfDue(context.Background(), p) {
 		t.Error("a freshly measured link was tested again")
+	}
+}
+
+// A home network finishes the test before it has measured much: it is run
+// again larger, and the result is kept — not discarded as too short, which
+// left the fastest link unmeasured and sorted behind the slow ones.
+func TestProbeLink_AFastLinkIsMeasured(t *testing.T) {
+	env := setupEngine(t)
+	pt := &probeTransport{fakeTransport: env.transport, perMB: 20 * time.Millisecond}
+	env.engine.Transport = pt
+	p := Peer{ID: "lan", Name: "LAN", Address: "192.168.178.20"}
+	env.engine.ProbeLinkIfDue(context.Background(), p)
+	if got := env.engine.Link(p).BytesPerSec; got < 20<<20 {
+		t.Errorf("a 50 MB/s link measured as %.0f B/s", got)
+	}
+	if pt.calls != 2 {
+		t.Errorf("%d test(s), want the short one and a larger one", pt.calls)
 	}
 }
 
