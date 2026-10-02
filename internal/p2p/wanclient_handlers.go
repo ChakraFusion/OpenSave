@@ -631,7 +631,7 @@ func (w *WanClient) serveManifest(route string, body json.RawMessage, peerID str
 		resp["version"] = v
 	}
 	if latest, err := w.engine.Snapshots.LatestSnapshot(gameID, ""); err == nil {
-		resp["latestSnapshot"] = syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
+		resp["latestSnapshot"] = syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment, ContentHash: latest.ContentHash}
 	} else {
 		resp["latestSnapshot"] = nil
 	}

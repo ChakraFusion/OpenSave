@@ -2019,8 +2019,17 @@ func (e *Engine) hasSnapshot(gameID string, game store.Game) bool {
 // recordMirrorSnapshot zips the (just-updated) local save under the peer's
 // snapshot id so both devices show the same history entry.
 func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer, remoteSnap SnapshotInfo, comment string) {
-	if _, err := e.Store.GetSnapshot(remoteSnap.ID); err == nil {
-		return // already mirrored
+	if _, known := e.Store.ResolveSnapshotID(remoteSnap.ID); known {
+		return // already mirrored, or known as the same files as one here
+	}
+	// The peer says what its snapshot holds: if a snapshot here holds exactly
+	// that, it is the same snapshot, and the save is not archived again.
+	if remoteSnap.ContentHash != "" {
+		if existing, ok, _ := e.Store.SnapshotByContent(gameID, game.ActiveBranch, remoteSnap.ContentHash); ok &&
+			snapshot.ArchiveExists(existing.ZipPath) {
+			_ = e.Store.AddSnapshotAlias(remoteSnap.ID, existing.ID)
+			return
+		}
 	}
 
 	settings, err := e.Store.GetSettings()
@@ -2045,8 +2054,24 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 	if rootsErr != nil {
 		mirrorRoots = nil
 	}
-	if _, err := snapshot.ZipRoots(game.SavePath, mirrorRoots, zipPath); err != nil {
+	skipped, captured, err := snapshot.ZipRootsCapturing(game.SavePath, mirrorRoots, zipPath)
+	if err != nil {
+		os.Remove(zipPath)
 		e.Log("warn", fmt.Sprintf("mirror snapshot zip failed: %v", err))
+		return
+	}
+	// Incomplete is not kept (snapshot.IncompleteError); the next sync with
+	// the peer records it again.
+	if len(skipped) > 0 {
+		os.Remove(zipPath)
+		e.Log("info", fmt.Sprintf("snapshot of %q from %s discarded: %d file(s) could not be read; taken again at the next sync",
+			game.Name, peer.Name, len(skipped)))
+		return
+	}
+	key := snapshot.ContentKey(captured)
+	if existing, ok, _ := e.Store.SnapshotByContent(gameID, game.ActiveBranch, key); ok && snapshot.ArchiveExists(existing.ZipPath) {
+		os.Remove(zipPath)
+		_ = e.Store.AddSnapshotAlias(remoteSnap.ID, existing.ID)
 		return
 	}
 	info, err := os.Stat(zipPath)
@@ -2054,7 +2079,7 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 		return
 	}
 
-	_ = e.Store.CreateSnapshot(store.Snapshot{
+	if err := e.Store.CreateSnapshot(store.Snapshot{
 		ID:           remoteSnap.ID,
 		GameID:       gameID,
 		BranchName:   game.ActiveBranch,
@@ -2063,7 +2088,10 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 		IsSystemAuto: true,
 		ZipPath:      zipPath,
 		SizeBytes:    info.Size(),
-	})
+		ContentHash:  key,
+	}); err == nil {
+		_ = e.Store.RecordSnapshotFiles(remoteSnap.ID, captured)
+	}
 }
 
 // humanBytes formats a byte count as a short human-readable string.
