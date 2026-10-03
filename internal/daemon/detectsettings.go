@@ -124,8 +124,8 @@ func (d *Daemon) DetectSettings(game store.Game) {
 	d.exclusionsChanged(game)
 	if len(taken) > 0 && !game.SyncDeviceSettings {
 		d.Log.Log("info", fmt.Sprintf("%q: %s %s this device's settings, not the save — each device keeps its own. "+
-			"Untick it under the game's \"Files that shouldn't sync\" to sync it after all.",
-			game.Name, strings.Join(taken, ", "), isAre(len(taken))))
+			"Untick %s under the game's \"Files that shouldn't sync\" to sync %s after all.",
+			game.Name, strings.Join(taken, ", "), isAre(len(taken)), itThem(len(taken)), itThem(len(taken))))
 	}
 	if len(given) > 0 {
 		d.Log.Log("warn", fmt.Sprintf("%q: %s changed along with the save, so %s part of the save after all — syncing again.",
@@ -246,4 +246,11 @@ func itThey(n int) string {
 		return "it is"
 	}
 	return "they are"
+}
+
+func itThem(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }

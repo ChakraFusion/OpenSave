@@ -26,6 +26,14 @@
   export let runner;
   const { busy, run } = runner;
 
+  // A game OpenSave cannot find here: its program, chosen by hand, says where
+  // it is installed and what runs when it is played (sessions, launch).
+  async function pickProgram() {
+    const exe = await native.selectFile(`Program of “${game.name}”`);
+    if (!exe) return;
+    await run(`Program set for ${game.name}`, () => api.patch(`/api/games/${game.id}`, { exePath: exe }));
+  }
+
   $: activity = $syncActivity[game.id];
 
   // Is my Deck up to date with THIS save? One entry per paired device, in
@@ -134,7 +142,12 @@
         · <span title={new Date(game.lastPlayedAt).toLocaleString()}>played {timeAgo(game.lastPlayedAt, now)}, {playLength(game.playtimeMs)} in all</span>
       {/if}
       {#if game.installed === 'not-found'}
-        · <span title="Steam on this PC does not have it, and it is in no folder games are kept in. Set its program under Configuration to launch it from somewhere else.">not found on this PC</span>
+        · <button
+          class="linkish"
+          disabled={$busy}
+          title="OpenSave cannot tell where this game is installed here, so it cannot see when it is being played. Choose its program to fix both."
+          on:click={pickProgram}>not found on this PC — choose its program</button
+        >
       {/if}
     </div>
     {#if syncedWith.length > 0}
@@ -232,6 +245,15 @@
 {/if}
 
 <style>
+  .linkish {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--accent-text);
+    text-decoration: underline;
+    cursor: pointer;
+  }
   .title-row {
     display: flex;
     align-items: center;

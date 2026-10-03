@@ -251,7 +251,14 @@ func New(opts Options) (*Daemon, error) {
 		},
 		SetLastManifestHash: s.SetLastManifestHash,
 		CreateSnapshot: func(gameID string) error {
-			_, err := snaps.Create(gameID, "", true)
+			// While a game is played, the watcher only snapshots at a
+			// checkpoint (sessions.go), named so, and gone once the
+			// session's end is kept.
+			comment := ""
+			if d.playingHere(gameID) {
+				comment = checkpointComment
+			}
+			_, err := snaps.Create(gameID, comment, true)
 			return err
 		},
 		SyncWriting: func(gameID string) bool {
