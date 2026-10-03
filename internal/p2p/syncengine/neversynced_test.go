@@ -80,7 +80,7 @@ func TestNeverSynced_AdoptingTheViewIsNotAVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	env.engine.AdoptNeverSyncedView("game1", m)
+	env.engine.AdoptExclusionView("game1", m, "", true)
 	env.engine.NoteLocalChange("game1")
 	rec, _ = env.store.GetGameVersion("game1")
 	if rec.Vector != vector {
@@ -97,7 +97,7 @@ func TestNeverSynced_AdoptingTheViewIsNotAVersion(t *testing.T) {
 	changed, _ := delta.BuildManifest(env.localDir)
 	rec.Hash = versionHashBeforeNeverSynced("", m)
 	_ = env.store.SaveGameVersion(rec)
-	env.engine.AdoptNeverSyncedView("game1", changed)
+	env.engine.AdoptExclusionView("game1", changed, "", true)
 	env.engine.NoteLocalChange("game1")
 	rec, _ = env.store.GetGameVersion("game1")
 	if rec.Vector == vector {

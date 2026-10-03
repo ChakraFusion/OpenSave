@@ -202,8 +202,13 @@ func filesKeyOf(m delta.Manifest, leaveOut func(string) bool) string {
 func (e *Engine) versionHashOf(gameID string, primary delta.Manifest) string {
 	text := ""
 	if game, err := e.Store.GetGame(gameID); err == nil {
-		text = game.SyncIgnore
+		text = e.IgnoreText(game)
 	}
+	return versionHashUnder(text, primary)
+}
+
+// versionHashUnder is versionHashOf under a given exclusion list.
+func versionHashUnder(text string, primary delta.Manifest) string {
 	tag := sha256.Sum256([]byte(text + "\x00" + delta.NeverSyncedList))
 	return hex.EncodeToString(tag[:4]) + ":" + filesKey(primary, ignore.Parse(text))
 }
@@ -218,25 +223,55 @@ func versionHashBeforeNeverSynced(rulesText string, primary delta.Manifest) stri
 	})
 }
 
-// AdoptNeverSyncedView re-takes the hash recorded with this device's version
-// of a game in the terms of delta.NeverSynced, when the save is the one it was
-// recorded for — the files no save is made of aside. Run once, when a build
-// with a new list starts, before anything compares: otherwise the only
-// difference, which files are counted, reads as the save changed here, and
-// every device names the same save a new version of its own at once.
-func (e *Engine) AdoptNeverSyncedView(gameID string, primary delta.Manifest) {
-	game, err := e.Store.GetGame(gameID)
-	if err != nil {
+// AdoptExclusionView re-takes the hash recorded with this device's version of
+// a game under what it is excluded by now (IgnoreText), when the save is the
+// one it was recorded for under oldText — the files excluded then or now
+// aside. Run when the exclusions change without anyone writing a rule (a new
+// build's delta.NeverSyncedList, the game database naming settings files),
+// before anything compares: otherwise the only difference, which files are
+// counted, reads as the save changed here, and every device names the same
+// save a new version of its own at once.
+//
+// beforeNeverSynced says the old hash was taken by a build that predates
+// delta.NeverSynced, and counted those files.
+func (e *Engine) AdoptExclusionView(gameID string, primary delta.Manifest, oldText string, beforeNeverSynced bool) {
+	if _, err := e.Store.GetGame(gameID); err != nil {
 		return
 	}
+	// The base agreed with each device, where it is still this save: the
+	// two agreed on it, and the files now left out leave them agreeing on
+	// the rest. One that no longer matches is a real change, left to count.
+	oldRules := ignore.Parse(oldText)
+	var oldView delta.Manifest
+	if beforeNeverSynced && oldRules.Empty() {
+		oldView = primary
+	} else if beforeNeverSynced {
+		oldView = filterManifestBy(primary, func(p string) bool { return !oldRules.Empty() && oldRules.Match(p) })
+	} else {
+		oldView = filterManifest(primary, oldRules)
+	}
+	if was, now := oldView.ManifestHash(), filterManifest(primary, e.rulesFor(gameID)).ManifestHash(); was != now {
+		if peers, err := e.Store.ListPeers(); err == nil {
+			for _, p := range peers {
+				if e.Store.GetAgreedHash(gameID, p.ID) == was {
+					_ = e.Store.SetAgreedHash(gameID, p.ID, now)
+				}
+			}
+		}
+	}
+
 	e.versionMu.Lock()
 	defer e.versionMu.Unlock()
 	gv, err := e.loadVersionLocked(gameID)
 	if err != nil || gv.rec.GameID == "" || gv.rec.Hash == "" {
 		return
 	}
-	if gv.rec.Hash == versionHashBeforeNeverSynced(game.SyncIgnore, primary) {
-		gv.rec.Hash = e.versionHashOf(gameID, primary)
+	was := versionHashUnder(oldText, primary)
+	if beforeNeverSynced {
+		was = versionHashBeforeNeverSynced(oldText, primary)
+	}
+	if now := e.versionHashOf(gameID, primary); gv.rec.Hash == was && was != now {
+		gv.rec.Hash = now
 		_ = e.saveVersionLocked(gv)
 	}
 }

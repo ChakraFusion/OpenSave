@@ -380,7 +380,7 @@ func (s *Server) handleUpdateGame(w http.ResponseWriter, r *http.Request) {
 
 	oldSavePath := game.SavePath
 	oldAutoSync := game.AutoSync
-	oldIgnore := game.SyncIgnore
+	oldIgnore := s.Daemon.IgnoreText(game)
 	oldAppID := game.AppID
 	if err := readJSON(r, &game); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -421,7 +421,7 @@ func (s *Server) handleUpdateGame(w http.ResponseWriter, r *http.Request) {
 		forgetCoverMiss(game.AppID)
 	}
 
-	if game.SyncIgnore != oldIgnore {
+	if s.Daemon.IgnoreText(game) != oldIgnore {
 		// The merge bases were computed over a save that included files the
 		// new rules exclude, so neither device could ever match them again —
 		// which reads as permanent divergence and prompts a conflict on every
@@ -456,6 +456,9 @@ func (s *Server) handleUpdateGame(w http.ResponseWriter, r *http.Request) {
 	if err := s.Daemon.Store.UpdateGame(game); err != nil {
 		writeError(w, notFoundToStatus(err), err.Error())
 		return
+	}
+	if s.Daemon.IgnoreText(game) != oldIgnore {
+		s.Daemon.NoteExclusions(game)
 	}
 
 	// Re-watch if the save location or autoSync flag changed.

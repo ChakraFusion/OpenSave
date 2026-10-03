@@ -69,6 +69,10 @@ type Daemon struct {
 	// Play sessions; see sessions.go.
 	sessions sessionState
 
+	// Device settings; see devicesettings.go.
+	devMu sync.Mutex
+	dev   devSettingsCache
+
 	// OnCloudOffers receives the saves from other devices' cloud backups
 	// that are waiting for an answer, whenever that list changes, and
 	// OnCloudPulled each one put in place without asking. See cloudsync.go.
@@ -168,6 +172,9 @@ func New(opts Options) (*Daemon, error) {
 
 	d.initSessions()
 
+	// A game's device settings are left out of syncing (devicesettings.go).
+	d.P2P.Sync.DeviceSettingsFor = d.deviceSettingsFor
+
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
 	// may read it half-way (syncengine/settle.go).
 	snaps.WriteGate = d.P2P.Sync.Writing
@@ -224,7 +231,7 @@ func New(opts Options) (*Daemon, error) {
 			if err != nil {
 				return ""
 			}
-			return game.SyncIgnore
+			return d.IgnoreText(game)
 		},
 		GetLastManifestHash: func(gameID string) (string, error) {
 			game, err := s.GetGame(gameID)
@@ -271,41 +278,6 @@ func New(opts Options) (*Daemon, error) {
 	return d, nil
 }
 
-// adoptNeverSyncedView re-takes, once per change of delta.NeverSyncedList,
-// the hashes recorded for every game under the previous list — each only when
-// the save is the one it was recorded for, so a real change still counts.
-//
-// Without it the first build with a new list sees every save holding one of
-// those files as changed: an auto-snapshot of a game nobody played, and a new
-// version of its own on every device at once, which the devices then disagree
-// over.
-func (d *Daemon) adoptNeverSyncedView(games []store.Game) {
-	const mark = "never_synced"
-	if d.Store.Mark(mark) == delta.NeverSyncedList {
-		return
-	}
-	for _, game := range games {
-		extra, err := d.Store.GameRootPaths(game.ID)
-		if err != nil {
-			extra = nil
-		}
-		m, failures, err := delta.BuildMultiManifest(game.SavePath, extra)
-		if err != nil || len(failures) > 0 {
-			continue // unreadable now; compared as it is when it is back
-		}
-		if game.LastManifestHash != "" &&
-			game.LastManifestHash == watcher.ContentHashBeforeNeverSynced(m, game.SyncIgnore) {
-			_ = d.Store.SetLastManifestHash(game.ID, watcher.ContentHash(m, game.SyncIgnore))
-		}
-		if d.P2P != nil && d.P2P.Sync != nil {
-			primary := m
-			primary.Extra = nil
-			d.P2P.Sync.AdoptNeverSyncedView(game.ID, primary)
-		}
-	}
-	_ = d.Store.SetMark(mark, delta.NeverSyncedList)
-}
-
 // Start begins watching every tracked game with auto-sync enabled.
 func (d *Daemon) Start() error {
 	// Deletion records expire. Swept once per launch rather than on a timer:
@@ -334,7 +306,7 @@ func (d *Daemon) Start() error {
 	delta.SetHashCacheBudgetForGames(len(games))
 
 	// Before anything is watched or compared.
-	d.adoptNeverSyncedView(games)
+	d.adoptExclusionView(games)
 
 	for _, game := range games {
 		// Backfill cover art for games tracked before covers existed (or

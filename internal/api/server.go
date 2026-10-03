@@ -567,11 +567,15 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		// Whether the art cached for this game is explicit, so the client can
 		// blur it until someone asks to see it. An <img src> cannot read a
 		// response header, so it travels with the game rather than the image.
-		"coverExplicit":  s.CoverIsExplicit(coverKeyFor(g)),
-		"syncIgnore":     g.SyncIgnore,
-		"branches":       branches,
-		"createdAt":      g.CreatedAt,
-		"lastSyncedWith": lastSyncedWith,
+		"coverExplicit": s.CoverIsExplicit(coverKeyFor(g)),
+		"syncIgnore":    g.SyncIgnore,
+		// The files the game database names as this game's settings, left
+		// out of syncing unless syncDeviceSettings (daemon/devicesettings.go).
+		"deviceSettings":     s.Daemon.DeviceSettings(g),
+		"syncDeviceSettings": g.SyncDeviceSettings,
+		"branches":           branches,
+		"createdAt":          g.CreatedAt,
+		"lastSyncedWith":     lastSyncedWith,
 		// The save folder is not there — gone, moved, or on a drive not
 		// plugged in. Nothing is watched or synced for it until it is back.
 		"savePathMissing": daemon.SaveFolderMissing(g.SavePath),
