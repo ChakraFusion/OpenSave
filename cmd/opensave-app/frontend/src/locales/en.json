@@ -228,5 +228,8 @@
   "snapshots.incomplete.more": {
     "one": " and one more file",
     "other": " and {n} more files"
-  }
+  },
+  "game.config.deviceSettings": "Device settings",
+  "game.config.syncDeviceSettings": "Sync these settings between devices too",
+  "game.config.deviceSettingsHint": "The game database lists these as this game's settings, not its save, so each device keeps its own (graphics, resolution). They are still in every snapshot."
 }
