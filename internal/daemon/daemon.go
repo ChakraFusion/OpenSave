@@ -38,6 +38,11 @@ type Options struct {
 	// DisableDiscovery skips UDP LAN discovery (tests pair peers manually
 	// and don't want broadcast traffic).
 	DisableDiscovery bool
+	// SyncEveryChange keeps and syncs every change made here as it comes,
+	// never holding a stretch of changes back as play when no session is seen
+	// (sessions.go, noteActivity). For tests of syncing itself, which change a
+	// save several times a minute and expect each change to travel.
+	SyncEveryChange bool
 }
 
 // Daemon is the assembled core. Access subsystems directly for operations
@@ -177,7 +182,7 @@ func New(opts Options) (*Daemon, error) {
 	d.P2P.Sync.ObserveSettings = d.observeSettings
 	// A game being played here is synced when its session ends
 	// (syncengine/playing.go).
-	d.P2P.Sync.Playing = func(gameID string) bool { return !d.PlayingSince(gameID).IsZero() }
+	d.P2P.Sync.Playing = func(gameID string) bool { return !d.PlayingSince(gameID).IsZero() || d.changingNow(gameID) }
 
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
 	// may read it half-way (syncengine/settle.go).

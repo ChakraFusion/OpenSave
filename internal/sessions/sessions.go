@@ -32,6 +32,10 @@ type Proc struct {
 	PID int
 	// Exe is the program's full path, where the system says.
 	Exe string
+	// Name is the program's file name, where the system gives no path: a
+	// game protected against tampering lets nobody read where it runs from,
+	// but the process list still says what it is called.
+	Name string
 	// Args is the command line, where the system says (Linux).
 	Args []string
 	// SteamAppID is the Steam app the process was started for, where Steam
@@ -49,6 +53,9 @@ type Target struct {
 	// Dirs are the game's install folders: anything running from inside one
 	// is the game.
 	Dirs []string
+	// Programs are the file names of the programs in the install folders, for
+	// a process known only by name (Proc.Name). Lower-case.
+	Programs []string
 }
 
 // Running reports which targets have a process running, from a list of
@@ -73,6 +80,17 @@ func matches(p Proc, t Target) bool {
 	}
 	if p.Exe != "" && t.Exe != "" && samePath(p.Exe, t.Exe) {
 		return true
+	}
+	if p.Exe == "" && p.Name != "" {
+		name := strings.ToLower(p.Name)
+		if t.Exe != "" && strings.EqualFold(filepath.Base(t.Exe), name) {
+			return true
+		}
+		for _, prog := range t.Programs {
+			if prog == name {
+				return true
+			}
+		}
 	}
 	for _, dir := range t.Dirs {
 		if dir == "" {
