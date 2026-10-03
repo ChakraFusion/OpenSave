@@ -166,6 +166,10 @@ type Engine struct {
 	// peerVersions: per peer, whether its OpenSave keeps save versions
 	// (PeerNeedsUpdate).
 	peerVersions map[string]bool
+	// DeviceSettingsFor returns the exclusion patterns for a game's device
+	// settings (presets/devicesettings.go), set by the daemon; nil leaves
+	// them syncing. See IgnoreText.
+	DeviceSettingsFor func(store.Game) []string
 	// unwritable: games whose save folder could not be written, and until
 	// when pulls into it wait (version.go).
 	unwritable map[string]time.Time
