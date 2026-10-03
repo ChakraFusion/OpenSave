@@ -1248,14 +1248,16 @@ func (m *Manager) recordDeletionsSince(gameID, branch, snapshotID string, captur
 		if err != nil || len(records) == 0 {
 			continue
 		}
+		var back []string
 		for _, f := range captured {
 			if f.Root != root {
 				continue
 			}
 			if _, remembered := records[f.Path]; remembered {
-				_ = m.Store.ClearDeletedFile(gameID, root, f.Path)
+				back = append(back, f.Path)
 			}
 		}
+		_ = m.Store.ClearDeletedFiles(gameID, root, back)
 	}
 }
 
