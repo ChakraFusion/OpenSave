@@ -383,6 +383,26 @@ func TestStretchWaitAdaptsToAutosaves(t *testing.T) {
 	}
 }
 
+// An emptied save is not play: no stretch holds it back from being asked
+// about and fetched back.
+func TestEmptiedSaveIsNotPlay(t *testing.T) {
+	d := newTestDaemon(t)
+	g, dir := sessionGame(t, d, "emptied")
+	d.holdSnapshotWhilePlaying(g.ID)
+	if !d.changingNow(g.ID) {
+		t.Fatal("setup: no stretch")
+	}
+	if err := os.Remove(filepath.Join(dir, "slot1.sav")); err != nil {
+		t.Fatal(err)
+	}
+	if d.holdSnapshotWhilePlaying(g.ID) {
+		t.Error("the change that emptied the save was held as play")
+	}
+	if d.changingNow(g.ID) || d.P2P.Sync.PlayingHere(g.ID) {
+		t.Error("an emptied save is still handled as being played")
+	}
+}
+
 // What a killed game leaves behind can keep its memory; it is no longer the
 // game once it has used no processor time for a minute. One still working —
 // a paused game draws its menu — stays.

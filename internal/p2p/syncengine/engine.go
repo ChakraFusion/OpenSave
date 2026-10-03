@@ -239,6 +239,13 @@ func isGameNotFound(err error) bool {
 // into one.
 const AwaitingFolderMessage = "This device has not been given a folder for this game yet"
 
+// FolderMissingMessage is what a device says when the folder it tracks a game
+// at is not there now — on a drive not plugged in, or moved. Nothing to
+// compare with, and nothing wrong to report over and over: it contains
+// AwaitingFolderMessage, so the asking device waits for it as it does for
+// a folder not yet chosen.
+const FolderMissingMessage = AwaitingFolderMessage + " here: the folder it was given is not on this device now"
+
 // isAwaitingFolder reports whether the peer is holding this game until someone
 // chooses where it lives there — as opposed to not tracking it at all.
 func isAwaitingFolder(err error) bool {
@@ -748,7 +755,8 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 
 	// A side that is merely behind the other has not diverged from it, whatever
 	// the clocks and the base say (OnlyBehind).
-	if DetectConflict(judged, remoteData.Manifest, lastSyncMs, agreedHash) &&
+	// Not while being put back: the other device's save is what is wanted.
+	if !fetchingBack && DetectConflict(judged, remoteData.Manifest, lastSyncMs, agreedHash) &&
 		!OnlyBehind(judged, remoteData.Manifest, lineageFiles) {
 		e.registerConflict(gameID, peer, localManifest, remoteData)
 		return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, nil
@@ -774,6 +782,9 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		}
 	}
 	decision := ComputeWithDeletions(localManifest, remoteData.Manifest, lineageFiles, lineageDirs, agreedHash, deleted)
+	if fetchingBack {
+		decision = putBackDecision(decision, remoteData.Manifest)
+	}
 
 	if !decision.HasChanges() {
 		e.persistLineage(gameID, peer.ID, localManifest, remoteData.Manifest)

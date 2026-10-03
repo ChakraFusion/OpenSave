@@ -740,6 +740,10 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest, failures, err := delta.BuildMultiManifest(game.SavePath, extra)
 	if err != nil {
+		if _, statErr := os.Stat(game.SavePath); statErr != nil {
+			jsonError(w, http.StatusNotFound, syncengine.FolderMissingMessage)
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, "manifest build failed: "+err.Error())
 		return
 	}

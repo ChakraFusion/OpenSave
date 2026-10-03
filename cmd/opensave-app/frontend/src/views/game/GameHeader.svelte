@@ -10,6 +10,7 @@
   import { timeAgo } from '../../lib/timeago.js';
   import { playLength } from '../../lib/format.js';
   import { canLaunch } from '../../lib/gameactions.js';
+  import Spinner from '../../components/ui/Spinner.svelte';
   import ArrowLeft from 'lucide-svelte/icons/arrow-left';
   import Play from 'lucide-svelte/icons/play';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
@@ -136,6 +137,9 @@
       {#if activity?.state === 'running'}
         · <span class="syncing">syncing {activity.percentage ?? 0}%</span>
       {/if}
+      {#if game.holdingChanges && !game.playingSince}
+        · <span class="playing" title="Its save keeps changing though the game is not seen running here, so it is handled as being played: nothing syncs until the save has been quiet for a while (10 minutes, longer for a game that saves less often).">changes held back while it seems to be played — synced once its save is quiet</span>
+      {/if}
       {#if game.playingSince}
         · <span class="playing">in session since {new Date(game.playingSince).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
       {:else if game.lastPlayedAt}
@@ -193,9 +197,17 @@
   <div class="missing emptied" role="status">
     <TriangleAlert size={16} />
     <div>
-      {#if game.emptied.state === 'fetching'}
+      {#if answering}
+        <strong><Spinner size={13} /> Putting the files back{game.emptied.putBackFrom ? ` from the snapshot of ${whenLabel(game.emptied.putBackFromTime)}` : ''}…</strong>
+        A large save takes a few minutes. Anything newer comes from your other devices afterwards.
+      {:else if game.emptied.state === 'fetching'}
         <strong>Putting the files back.</strong>
-        Some are still to come from your other devices; this game syncs as usual once they're all here.
+        {#if activity?.state === 'running'}
+          Fetching the rest from your other devices — {activity.percentage ?? 0}%.
+        {:else}
+          Some are still to come from your other devices: waiting for one of them to send them — it has to be
+          online. This game syncs as usual once they're all here.
+        {/if}
       {:else}
         <strong>Every save file in {emptiedWhere(game.emptied.locations)} was deleted on this device.</strong>
         Your other devices still have theirs, and nothing is synced until you choose.

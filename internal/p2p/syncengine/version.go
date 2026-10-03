@@ -389,6 +389,9 @@ func (e *Engine) refreshLocked(gv *gameVersion, game store.Game, local delta.Man
 	if gv.rec.Pulling || len(gv.vec) == 0 || gv.rec.Hash == "" || gv.rec.Hash == hash {
 		return false
 	}
+	if e.emptyingUnconfirmed(game.ID, local) {
+		return false
+	}
 	if sameSaveAs(gv.rec.Hash, hash) {
 		// Taken under other exclusion rules, so it cannot say whether the
 		// save changed: re-taken under the new ones. A change made at the
@@ -503,6 +506,9 @@ func (e *Engine) NoteLocalChange(gameID string) {
 			_ = e.saveVersionLocked(gv)
 		}
 		return
+	}
+	if e.emptyingUnconfirmed(gameID, m) {
+		return // not a version until someone says it was meant (hold.go)
 	}
 	if hash == gv.rec.Hash {
 		// Already a version: a sync noticed it first (refreshLocked), or the

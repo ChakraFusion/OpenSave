@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/sessions"
 	"github.com/opensave/opensave/internal/store"
 )
@@ -509,6 +510,12 @@ const checkpointEvery = 30 * time.Minute
 // since the last checkpoint. The end of the session, or of the stretch of
 // changes, keeps the save as it was left.
 func (d *Daemon) holdSnapshotWhilePlaying(gameID string) bool {
+	// An emptied save, or one held back after being emptied (hold.go), is not
+	// play: its own rules ask, and fetch it back when told to.
+	if d.emptiedOrHeld(gameID) {
+		d.endActivity(gameID)
+		return false
+	}
 	// A game known to be closed: kept and synced at once.
 	if d.notBeingPlayed(gameID) {
 		return false
@@ -877,6 +884,10 @@ func (d *Daemon) rememberInstallFolders(procs []sessions.Proc, targets []session
 // out the watcher's debounce. A sync landing in that gap would otherwise
 // send the change on the moment before it is held.
 func (d *Daemon) playingHere(gameID string) bool {
+	if d.PlayingSince(gameID).IsZero() && d.emptiedOrHeld(gameID) {
+		d.endActivity(gameID)
+		return false
+	}
 	if !d.PlayingSince(gameID).IsZero() || d.changingNow(gameID) {
 		return true
 	}
@@ -997,4 +1008,35 @@ func (d *Daemon) dropCheckpoints(game store.Game, since time.Time) {
 		}
 		_, _ = d.Snapshots.DeleteSnapshot(game.ID, s.ID)
 	}
+}
+
+// emptiedOrHeld reports a game whose save folder holds no save at its top —
+// emptied — or that is held back after being emptied (a deletion hold, in any
+// state). Neither is play: a stretch over it held the save back from being
+// asked about, and a save being fetched back from the other devices from
+// being fetched.
+func (d *Daemon) emptiedOrHeld(gameID string) bool {
+	if _, ok, err := d.Store.GetDeletionHold(gameID); err == nil && ok {
+		return true
+	}
+	game, err := d.Store.GetGame(gameID)
+	if err != nil || game.SavePath == "" {
+		return false
+	}
+	entries, err := os.ReadDir(game.SavePath)
+	if err != nil {
+		return false // a single-file save, or not there: not this case
+	}
+	for _, e := range entries {
+		if !delta.NeverSynced(e.Name()) {
+			return false
+		}
+	}
+	return true
+}
+
+// HoldingChanges reports a game whose changes are held back as play while no
+// session of it is seen (noteActivity), for the window to say so.
+func (d *Daemon) HoldingChanges(gameID string) bool {
+	return d.PlayingSince(gameID).IsZero() && d.changingNow(gameID)
 }
