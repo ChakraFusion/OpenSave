@@ -785,6 +785,12 @@ func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
 		snapshotID = resolved
 	}
 	snap, err := m.Store.GetSnapshot(snapshotID)
+	if err != nil {
+		// Removed in favour of the same files just now: its alias is there.
+		if resolved, ok := m.Store.ResolveSnapshotID(snapshotID); ok {
+			snap, err = m.Store.GetSnapshot(resolved)
+		}
+	}
 	if err != nil || snap.GameID != gameID {
 		return store.Snapshot{}, fmt.Errorf("snapshot %q not found for game %q", snapshotID, gameID)
 	}

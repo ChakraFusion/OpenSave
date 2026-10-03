@@ -97,7 +97,7 @@ func zipPathCapturing(sourcePath, outPath string, reuse *reuseSource) (skipped [
 		}
 		// OpenSave's own temporary file for a file being pulled: never part
 		// of the save, and gone by the time it is read.
-		if strings.HasSuffix(rel, delta.TmpSuffix) {
+		if strings.HasSuffix(rel, delta.TmpSuffix) || delta.NeverSynced(rel) {
 			return nil
 		}
 		info, infoErr := d.Info()

@@ -845,6 +845,12 @@ func (gw *gameWatch) eventRelevant(event fsnotify.Event) bool {
 	if strings.HasSuffix(name, ".opensave.tmp") {
 		return false
 	}
+	// A file the launcher rewrites on its own (Steam's remotecache.vdf, on
+	// every start) is not a save: it is never synced or snapshotted, so it
+	// does not wake the watcher either.
+	if delta.NeverSynced(name) {
+		return false
+	}
 	if gw.isFile {
 		return strings.EqualFold(
 			filepath.Clean(event.Name),

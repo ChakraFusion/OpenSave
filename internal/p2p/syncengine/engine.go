@@ -85,7 +85,7 @@ type Result struct {
 	// back until told whether that was meant (hold.go). peer_busy: the peer was
 	// still writing the game for a sync of its own; this one runs again when it
 	// has finished (settle.go).
-	Status    string `json:"status"` // in_sync | updated | updated_bidirectional | deletions_synced | triggered_peer_pull | conflict | peer_missing | peer_awaiting_folder | peer_holding | peer_busy
+	Status    string `json:"status"` // in_sync | updated | updated_bidirectional | deletions_synced | triggered_peer_pull | conflict | peer_missing | peer_awaiting_folder | peer_holding | peer_busy | unwritable
 	Direction string `json:"direction"`
 	PeerID    string `json:"peerId,omitempty"`
 	PeerName  string `json:"peerName,omitempty"`
@@ -166,6 +166,9 @@ type Engine struct {
 	// peerVersions: per peer, whether its OpenSave keeps save versions
 	// (PeerNeedsUpdate).
 	peerVersions map[string]bool
+	// unwritable: games whose save folder could not be written, and until
+	// when pulls into it wait (version.go).
+	unwritable map[string]time.Time
 }
 
 // New creates an Engine.
@@ -383,7 +386,7 @@ func (e *Engine) SyncGame(ctx context.Context, gameID string, onlinePeers []Peer
 		// divergence from the NEXT sync, causing the peer to silently overwrite
 		// its own changes instead of detecting the conflict and asking.
 		switch res.Status {
-		case "conflict", "error", versionStatusWaiting, StatusPeerOutdatedApp:
+		case "conflict", "error", versionStatusWaiting, StatusPeerOutdatedApp, "unwritable":
 		case "peer_missing", "peer_awaiting_folder", "peer_holding":
 			// The two devices talked and finished, which is what the
 			// per-device stamp has always recorded. But nothing of THIS game
@@ -2054,7 +2057,15 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 	if rootsErr != nil {
 		mirrorRoots = nil
 	}
-	skipped, captured, err := snapshot.ZipRootsCapturing(game.SavePath, mirrorRoots, zipPath)
+	var skipped []string
+	var captured []store.CapturedFile
+	if e.Snapshots != nil {
+		// Unchanged files copied from the newest snapshot, not compressed
+		// again: seconds rather than minutes for a large save.
+		skipped, captured, err = e.Snapshots.ArchiveSaveTo(gameID, game.ActiveBranch, zipPath)
+	} else {
+		skipped, captured, err = snapshot.ZipRootsCapturing(game.SavePath, mirrorRoots, zipPath)
+	}
 	if err != nil {
 		os.Remove(zipPath)
 		e.Log("warn", fmt.Sprintf("mirror snapshot zip failed: %v", err))
