@@ -17,6 +17,7 @@
   import Pencil from 'lucide-svelte/icons/pencil';
   import Star from 'lucide-svelte/icons/star';
   import TriangleAlert from 'lucide-svelte/icons/triangle-alert';
+  import Info from 'lucide-svelte/icons/info';
   import { collections, isFavourite, toggleFavourite } from '../../lib/collections.js';
 
   export let game;
@@ -188,7 +189,18 @@
   </div>
 {/if}
 
-{#if game.savePathMissing && !editPath}
+{#if game.savePathMissing && game.saveDriveMissing && !editPath}
+  <!-- The drive itself isn't on this device: the game lives on another PC's
+       D:\ or E:\. Nothing was lost here, so this informs rather than warns. -->
+  <div class="missing elsewhere" role="status">
+    <Info size={16} />
+    <div>
+      <strong>This game isn't on this device.</strong>
+      Its saves are on {game.savePath.slice(0, 2)}, which this PC doesn't have, so it's skipped here and keeps syncing
+      between your other devices. If it is installed here, point the game at its save folder with Edit.
+    </div>
+  </div>
+{:else if game.savePathMissing && !editPath}
   <!-- The folder is not there. It is not created again: an empty folder in
        its place would read as every file deleted, and syncing that would
        delete them on your other devices too. -->
@@ -287,6 +299,13 @@
   }
   .missing strong {
     color: var(--text);
+  }
+  .missing.elsewhere {
+    border-color: var(--border);
+    background: transparent;
+  }
+  .missing.elsewhere :global(svg) {
+    color: var(--text-faint);
   }
   .emptied-actions {
     display: flex;
