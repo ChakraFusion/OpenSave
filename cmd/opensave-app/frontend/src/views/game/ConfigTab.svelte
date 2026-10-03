@@ -169,8 +169,14 @@
       <div class="field device-block">
         <label for="c-devsettings">Device settings</label>
         <ul class="device-settings">
-          {#each deviceSettings as p}
-            <li><code>{p.replace(/^\//, '')}</code></li>
+          {#each deviceSettings as s}
+            <li class:given-back={s.source === 'save'}>
+              <code>{s.pattern.replace(/^!?\//, '')}</code>
+              <span class="source">
+                {#if s.source === 'database'}game database{:else if s.source === 'detected'}detected
+                  — {s.reason}{:else}syncs again — {s.reason}{/if}
+              </span>
+            </li>
           {/each}
         </ul>
       </div>
@@ -179,8 +185,10 @@
         Sync these settings between devices too
       </label>
       <span class="hint device-hint">
-        The game database lists these as this game's settings, not its save, so each device
-        keeps its own (graphics, resolution). They are still in every snapshot.
+        These are this game's settings, not its save — named by the game database or found by
+        what they hold — so each device keeps its own (graphics, resolution). They are still in
+        every snapshot. A file that turns out to change along with the save syncs again by
+        itself; to sync one yourself, untick it under “Pick from your save folder” below.
       </span>
     {/if}
     <SyncIgnoreEditor {game} bind:value={cfg.syncIgnore} severalFolders={locations.length > 0} />
@@ -236,6 +244,14 @@
   }
   .device-settings code {
     font-size: 0.9em;
+  }
+  .device-settings .source {
+    font-size: 0.82em;
+    color: var(--text-faint);
+    margin-left: 6px;
+  }
+  .device-settings .given-back code {
+    text-decoration: line-through;
   }
   .device-block {
     margin-bottom: 4px !important;
