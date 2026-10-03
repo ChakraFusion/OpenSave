@@ -572,10 +572,14 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		// The save folder is not there — gone, moved, or on a drive not
 		// plugged in. Nothing is watched or synced for it until it is back.
 		"savePathMissing": daemon.SaveFolderMissing(g.SavePath),
-		"lastPlayedAt":    lastPlayed,
-		"playingSince":    playingSince,
-		"playtimeMs":      play.PlaytimeMs,
-		"playSessions":    play.Sessions,
+		// …and of those, the ones whose whole drive is absent here: the game
+		// lives on another device's D:\ or E:\, which is not a problem to
+		// warn about (daemon.SaveDriveMissing).
+		"saveDriveMissing": daemon.SaveFolderMissing(g.SavePath) && daemon.SaveDriveMissing(g.SavePath),
+		"lastPlayedAt":     lastPlayed,
+		"playingSince":     playingSince,
+		"playtimeMs":       play.PlaytimeMs,
+		"playSessions":     play.Sessions,
 		// Whether the game is installed on this device: "found", "not-found",
 		// or "" when there is no telling (daemon.InstallState). A game that is
 		// not here is one nobody plays here, which is why it shows no play.
