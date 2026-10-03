@@ -168,6 +168,9 @@ type Engine struct {
 	// manifest arrives, to watch how the files left out as the game's
 	// settings change (daemon/detectsettings.go). Set by the daemon.
 	ObserveSettings func(game store.Game, peerID string, remote delta.Manifest)
+	// Playing reports whether a game is being played on this device
+	// (playing.go). Set by the daemon from its play sessions.
+	Playing func(gameID string) bool
 	// unwritable: games whose save folder could not be written, and until
 	// when pulls into it wait (version.go).
 	unwritable map[string]time.Time
@@ -276,6 +279,10 @@ func (e *Engine) SyncGame(ctx context.Context, gameID string, onlinePeers []Peer
 	// by a peer — so this is the one place a pause has to stop them.
 	if e.Paused != nil && e.Paused() {
 		return nil, ErrPaused
+	}
+	// A game being played here is synced when the session ends (playing.go).
+	if e.PlayingHere(gameID) {
+		return nil, ErrPlayingHere
 	}
 	// A save emptied here is not synced until someone says whether that was
 	// meant (hold.go).
@@ -395,7 +402,7 @@ func (e *Engine) SyncGame(ctx context.Context, gameID string, onlinePeers []Peer
 		// divergence from the NEXT sync, causing the peer to silently overwrite
 		// its own changes instead of detecting the conflict and asking.
 		switch res.Status {
-		case "conflict", "error", versionStatusWaiting, StatusPeerOutdatedApp, "unwritable":
+		case "conflict", "error", versionStatusWaiting, StatusPeerOutdatedApp, "unwritable", "peer_playing":
 		case "peer_missing", "peer_awaiting_folder", "peer_holding":
 			// The two devices talked and finished, which is what the
 			// per-device stamp has always recorded. But nothing of THIS game
@@ -501,6 +508,12 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		// The peer is still writing this game for a sync of its own, and
 		// would otherwise have described a save half-way between two states
 		// (settle.go). SyncGame asks again once it has finished.
+		// Being played there: its save comes when the session ends, sent by
+		// that device. Before isSettling, whose message this one contains.
+		if isPlaying(err) {
+			e.logOnce(gameID+"|playing|"+peer.ID, fmt.Sprintf("%s is playing %q right now; its save follows when the session ends", peer.Name, game.Name))
+			return Result{Status: "peer_playing", PeerID: peer.ID, PeerName: peer.Name}, nil
+		}
 		if isSettling(err) {
 			e.Log("info", fmt.Sprintf("%s is still applying a sync of %q; asking again when it has finished", peer.Name, game.Name))
 			return Result{Status: "peer_busy", PeerID: peer.ID, PeerName: peer.Name}, nil

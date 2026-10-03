@@ -42,6 +42,9 @@ type sessionState struct {
 	list func() ([]sessions.Proc, error)
 
 	mu sync.Mutex
+	// checkpoint is when each playing game last had a snapshot taken while
+	// it was played (holdSnapshotWhilePlaying).
+	checkpoint map[string]time.Time
 	// startHash is each playing game's save as it was when play began, to
 	// tell afterwards whether the session changed it.
 	startHash map[string]string
@@ -365,6 +368,7 @@ func (d *Daemon) sessionEnded(gameID string, started, ended time.Time) {
 	d.sessions.mu.Lock()
 	startHash := d.sessions.startHash[gameID]
 	delete(d.sessions.startHash, gameID)
+	delete(d.sessions.checkpoint, gameID)
 	seen := d.sessions.seen[gameID]
 	delete(d.sessions.seen, gameID)
 	d.sessions.mu.Unlock()
@@ -454,4 +458,40 @@ func (d *Daemon) endOpenSessions() {
 			_ = d.Store.AddPlaySession(id, since.UnixMilli(), now.UnixMilli())
 		}
 	}
+}
+
+// checkpointEvery is how often a game being played gets a snapshot of its
+// save: one per autosave pushed the snapshots worth keeping out, and none
+// until the session ends leaves nothing behind a crash.
+const checkpointEvery = 30 * time.Minute
+
+// holdSnapshotWhilePlaying tells the watcher not to snapshot a change to a
+// game being played, unless checkpointEvery has passed since play began or
+// since the last checkpoint. The session's end keeps the save as it was left
+// (sessionEnded).
+func (d *Daemon) holdSnapshotWhilePlaying(gameID string) bool {
+	since := d.PlayingSince(gameID)
+	if since.IsZero() {
+		return false
+	}
+	d.sessions.mu.Lock()
+	defer d.sessions.mu.Unlock()
+	if d.sessions.checkpoint == nil {
+		d.sessions.checkpoint = map[string]time.Time{}
+	}
+	now := time.Now()
+	if !checkpointDue(since, d.sessions.checkpoint[gameID], now) {
+		return true
+	}
+	d.sessions.checkpoint[gameID] = now
+	return false
+}
+
+// checkpointDue says whether checkpointEvery has passed since play began, or
+// since the last checkpoint when there was one.
+func checkpointDue(since, last, now time.Time) bool {
+	if last.Before(since) {
+		last = since
+	}
+	return now.Sub(last) >= checkpointEvery
 }
