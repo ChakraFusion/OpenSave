@@ -56,8 +56,9 @@ type sessionState struct {
 	// gap: the longest time seen between two changes of each game's save in
 	// a stretch (activity.maxGap).
 	gap map[string]time.Duration
-	// cpu: each process's processor time at the last poll (activeProcesses).
-	cpu map[int]time.Duration
+	// cpu: each process's processor time at the last poll, and when it last
+	// used any (activeProcesses).
+	cpu map[int]procSeen
 	// endedAt: when each game's last session ended (holdSnapshotWhilePlaying).
 	endedAt map[string]time.Time
 	// startHash is each playing game's save as it was when play began, to
@@ -891,18 +892,51 @@ func (d *Daemon) playingHere(gameID string) bool {
 // kept a session open for as long as it lingered, holding the save back
 // from syncing after the game was long gone.
 func (d *Daemon) activeProcesses(procs []sessions.Proc) []sessions.Proc {
+	return d.activeProcessesAt(procs, time.Now())
+}
+
+// procSeen is a process's processor time at the last poll, and when it was
+// last seen using any.
+type procSeen struct {
+	cpu  time.Duration
+	busy time.Time
+}
+
+// idleFor is how long a process may use no processor time at all before it
+// is no longer the game, however much memory it holds: what a game leaves
+// behind when it is closed or killed can keep its memory, and kept a session
+// open with it. A game being played uses some all the time — a paused one
+// still draws its menu.
+const idleFor = time.Minute
+
+// busyCPU is the processor time between two polls that counts as using any.
+const busyCPU = 20 * time.Millisecond
+
+func (d *Daemon) activeProcessesAt(procs []sessions.Proc, now time.Time) []sessions.Proc {
 	d.sessions.mu.Lock()
 	defer d.sessions.mu.Unlock()
 	prev := d.sessions.cpu
-	next := make(map[int]time.Duration, len(procs))
+	next := make(map[int]procSeen, len(procs))
 	out := procs[:0:0]
 	for _, p := range procs {
-		if p.Measured {
-			next[p.PID] = p.CPU
-		}
 		before, seen := prev[p.PID]
-		if sessions.Idle(p, before, seen) {
+		if sessions.Idle(p, before.cpu, seen) {
+			if p.Measured {
+				next[p.PID] = procSeen{cpu: p.CPU, busy: before.busy}
+			}
 			continue
+		}
+		if !p.Measured {
+			out = append(out, p) // cannot be told: counted
+			continue
+		}
+		s := procSeen{cpu: p.CPU, busy: before.busy}
+		if !seen || p.CPU-before.cpu >= busyCPU {
+			s.busy = now // new, or working
+		}
+		next[p.PID] = s
+		if now.Sub(s.busy) > idleFor {
+			continue // holding memory, doing nothing
 		}
 		out = append(out, p)
 	}
