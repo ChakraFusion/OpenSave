@@ -283,3 +283,102 @@ func TestInstallFolderNames(t *testing.T) {
 		}
 	}
 }
+
+// A process doing nothing does not keep a session open; once a game's
+// sessions are seen here, a change while it is closed is sent at once.
+func TestSessionEndsWhenOnlyAStubIsLeft(t *testing.T) {
+	d := newTestDaemon(t)
+	g, _ := sessionGame(t, d, "stub")
+	running := sessions.Proc{PID: 9, Exe: g.ExePath, Measured: true, Memory: 2 << 30, CPU: time.Second}
+	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{running}, nil }
+	d.PollSessions()
+	if d.PlayingSince(g.ID).IsZero() {
+		t.Fatal("setup: the game was not seen running")
+	}
+	// The game closed; a stub of the same program lingers, doing nothing.
+	stub := sessions.Proc{PID: 9, Exe: g.ExePath, Measured: true, Memory: 800 << 10, CPU: time.Second}
+	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{stub}, nil }
+	d.PollSessions()
+	since := d.PlayingSince(g.ID)
+	d.sessions.tracker.Finish(g.ID, since.Add(time.Hour)) // past the grace the tracker allows
+	d.PollSessions()
+	if !d.PlayingSince(g.ID).IsZero() {
+		t.Fatal("a lingering stub keeps the session open")
+	}
+	if d.holdSnapshotWhilePlaying(g.ID) {
+		t.Error("a change right after the session ended was held")
+	}
+	if !d.recognised(g.ID) {
+		t.Error("a game with a recorded session is not recognised")
+	}
+}
+
+// A session's checkpoints are gone once the save it left is kept: one
+// snapshot per session, not one per half hour.
+func TestSessionEndDropsItsCheckpoints(t *testing.T) {
+	d := newTestDaemon(t)
+	g, dir := sessionGame(t, d, "checkpointed")
+	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{{PID: 3, Exe: g.ExePath}}, nil }
+	d.PollSessions()
+	since := d.PlayingSince(g.ID)
+	if since.IsZero() {
+		t.Fatal("setup: not playing")
+	}
+	for i, data := range []string{"half an hour in", "an hour in"} {
+		if err := os.WriteFile(filepath.Join(dir, "slot1.sav"), []byte(data), 0o666); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := d.Snapshots.Create(g.ID, checkpointComment, true); err != nil {
+			t.Fatalf("checkpoint %d: %v", i, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "slot1.sav"), []byte("as it was left"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	d.sessions.tracker.Finish(g.ID, since.Add(90*time.Minute))
+
+	got := snapComments(t, d, g.ID)
+	if len(got) != 1 || got[0] != "After playing (1 h 30 min)" {
+		t.Errorf("snapshots = %q, want only the session's", got)
+	}
+}
+
+// In a session, a change is the session's: no stretch is started alongside
+// it, whose timer once cleared the session's last checkpoint and let nearly
+// every autosave after the first half hour through as a new one.
+func TestSessionChangesStartNoStretch(t *testing.T) {
+	d := newTestDaemon(t)
+	g, _ := sessionGame(t, d, "in-session")
+	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{{PID: 4, Exe: g.ExePath}}, nil }
+	d.PollSessions()
+	if d.PlayingSince(g.ID).IsZero() {
+		t.Fatal("setup: not playing")
+	}
+	for i := 0; i < 3; i++ {
+		if !d.holdSnapshotWhilePlaying(g.ID) {
+			t.Fatalf("autosave %d in a fresh session was snapshotted", i)
+		}
+	}
+	if d.changingNow(g.ID) {
+		t.Error("a stretch runs alongside the session")
+	}
+}
+
+// A game that autosaves every ten minutes keeps its stretch open: the wait
+// is twice the longest gap seen, within bounds.
+func TestStretchWaitAdaptsToAutosaves(t *testing.T) {
+	for _, c := range []struct {
+		a    activity
+		want time.Duration
+	}{
+		{activity{changes: 1}, firstChangeWait},
+		{activity{changes: 2, maxGap: time.Minute}, quietAfter},
+		{activity{changes: 3, maxGap: 10 * time.Minute}, 20 * time.Minute},
+		{activity{changes: 1, maxGap: 10 * time.Minute}, 20 * time.Minute},
+		{activity{changes: 4, maxGap: time.Hour}, maxQuiet},
+	} {
+		if got := c.a.quietFor(); got != c.want {
+			t.Errorf("%d changes, gap %v: wait %v, want %v", c.a.changes, c.a.maxGap, got, c.want)
+		}
+	}
+}
