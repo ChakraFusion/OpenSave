@@ -107,6 +107,31 @@ func (s *Store) ClearDeletedFile(gameID, root, path string) error {
 	return nil
 }
 
+// ClearDeletedFiles forgets the deletions recorded for paths of one save
+// location, in one transaction: one at a time, each its own write to disk,
+// the quarter of a million of a large save took a quarter of an hour.
+func (s *Store) ClearDeletedFiles(gameID, root string, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	tx, err := s.db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Preparex(`DELETE FROM deleted_files WHERE game_id = ? AND root = ? AND path = ?`)
+	if err != nil {
+		return fmt.Errorf("prepare clear deletion records: %w", err)
+	}
+	defer stmt.Close()
+	for _, p := range paths {
+		if _, err := stmt.Exec(gameID, root, p); err != nil {
+			return fmt.Errorf("clear deletion record for %s: %w", p, err)
+		}
+	}
+	return tx.Commit()
+}
+
 // ClearDeletedFilesForGame forgets every deletion recorded for a game, for use
 // when it is untracked — the records describe a folder this device no longer
 // has an opinion about.
