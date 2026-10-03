@@ -618,6 +618,9 @@ func (w *WanClient) serveManifest(route string, body json.RawMessage, peerID str
 
 	manifest, err := delta.BuildManifest(game.SavePath)
 	if err != nil {
+		if _, statErr := os.Stat(game.SavePath); statErr != nil {
+			return 404, map[string]string{"error": syncengine.FolderMissingMessage}
+		}
 		return 500, map[string]string{"error": err.Error()}
 	}
 	w.engine.Sync.NoteServed(game.ID, peerID, manifest) // syncengine/served.go

@@ -585,8 +585,11 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		"saveDriveMissing": daemon.SaveFolderMissing(g.SavePath) && daemon.SaveDriveMissing(g.SavePath),
 		"lastPlayedAt":     lastPlayed,
 		"playingSince":     playingSince,
-		"playtimeMs":       play.PlaytimeMs,
-		"playSessions":     play.Sessions,
+		// Changes to it are held back as play though no session of it is seen
+		// (daemon/sessions.go): said, so nothing seems stuck.
+		"holdingChanges": s.Daemon.HoldingChanges(g.ID),
+		"playtimeMs":     play.PlaytimeMs,
+		"playSessions":   play.Sessions,
 		// Whether the game is installed on this device: "found", "not-found",
 		// or "" when there is no telling (daemon.InstallState). A game that is
 		// not here is one nobody plays here, which is why it shows no play.
