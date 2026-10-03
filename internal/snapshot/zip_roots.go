@@ -145,7 +145,7 @@ func archiveInto(w *zip.Writer, sourcePath, prefix, root string, reuse *reuseSou
 			return err
 		}
 		// OpenSave's own temporary file for a file being pulled (zip.go).
-		if strings.HasSuffix(rel, delta.TmpSuffix) {
+		if strings.HasSuffix(rel, delta.TmpSuffix) || delta.NeverSynced(rel) {
 			return nil
 		}
 		info, infoErr := d.Info()

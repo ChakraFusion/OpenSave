@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -28,6 +29,20 @@ import (
 // must exclude them, or an interrupted patch's leftover would sync to the
 // peer as a real file (and cascade into name.opensave.tmp.opensave.tmp).
 const TmpSuffix = ".opensave.tmp"
+
+// NeverSynced reports whether a file in a save folder is never part of the
+// save, on any device.
+//
+// remotecache.vdf is Steam's record of what Steam Cloud has uploaded for a
+// game, kept beside the game's files in Steam's userdata folder — which is
+// where a game whose saves live in Steam Cloud is tracked. It describes this
+// device's Steam, not the save: syncing it hands Steam another machine's
+// bookkeeping. And that folder is under Program Files, where writing needs
+// rights OpenSave does not have, so the copy failed with "access denied" on
+// every pass, from every device.
+func NeverSynced(rel string) bool {
+	return strings.EqualFold(path.Base(rel), "remotecache.vdf")
+}
 
 // staleTmpAge is how old a leftover TmpSuffix file must be before the
 // manifest walk garbage-collects it. Generous enough that a patch actively
@@ -361,6 +376,10 @@ func buildManifest(root string) (Manifest, error) {
 			if time.Since(walkInfo.ModTime()) > staleTmpAge {
 				_ = os.Remove(path)
 			}
+			return nil
+		}
+		// A file no device's save is made of (NeverSynced).
+		if NeverSynced(rel) {
 			return nil
 		}
 

@@ -203,15 +203,15 @@ func (m *Manager) pruneContainedPass(gameID string) (removed int, freed int64, e
 				}
 				identical := len(olderFiles) == len(holderFiles)
 				if identical {
+					// The same files: its id still leads to them. Before the
+					// delete, so no moment exists where the id leads nowhere;
+					// while the row is there it still resolves to itself.
 					_ = m.Store.RepointSnapshotAliases(older.ID, holder.ID)
+					_ = m.Store.AddSnapshotAlias(older.ID, holder.ID)
 				}
 				f, derr := m.DeleteSnapshot(gameID, older.ID)
 				if derr != nil {
 					continue
-				}
-				if identical {
-					// The same files: its id still leads to them.
-					_ = m.Store.AddSnapshotAlias(older.ID, holder.ID)
 				}
 				gone[older.ID] = true
 				removed++
@@ -263,17 +263,38 @@ func (m *Manager) PruneContainedBy(snap store.Snapshot, files []store.CapturedFi
 			}
 			identical := len(olderFiles) == len(files)
 			if identical {
+				// Aliased before the delete (see PruneContained).
 				_ = m.Store.RepointSnapshotAliases(older.ID, snap.ID)
-			}
-			_, derr := m.DeleteSnapshot(snap.GameID, older.ID)
-			if derr == nil && identical {
 				_ = m.Store.AddSnapshotAlias(older.ID, snap.ID)
 			}
+			_, derr := m.DeleteSnapshot(snap.GameID, older.ID)
 			if derr == nil && m.Log != nil {
 				m.Log("info", fmt.Sprintf("snapshot %s removed: every file of it is in the newer %s", older.ID, snap.ID))
 			}
 		}
 	}()
+}
+
+// ArchiveSaveTo archives a game's save — every location — into zipPath the way
+// a snapshot here is archived: files unchanged since the branch's newest
+// snapshot are copied from it rather than compressed again (reuse.go). For a
+// snapshot recorded under another device's id after a sync; compressing a save
+// of a quarter-million files from scratch kept a finished pull at 100% for
+// minutes.
+func (m *Manager) ArchiveSaveTo(gameID, branch, zipPath string) (skipped []string, captured []store.CapturedFile, err error) {
+	m.inFlight.Add()
+	defer m.inFlight.Done()
+	game, err := m.Store.GetGame(gameID)
+	if err != nil {
+		return nil, nil, err
+	}
+	extra, rootsErr := m.Store.GameRootPaths(gameID)
+	if rootsErr != nil {
+		extra = nil
+	}
+	reuse := m.openReuseSource(gameID, branch)
+	defer reuse.Close()
+	return zipRootsCapturing(game.SavePath, extra, zipPath, reuse)
 }
 
 // isNewest reports whether id is the newest snapshot on a game's branch.
@@ -335,11 +356,11 @@ func (m *Manager) MergeDuplicates(gameID string) (merged int, freed int64, err e
 				continue
 			}
 			_ = m.Store.RepointSnapshotAliases(s.ID, keep.ID)
+			_ = m.Store.AddSnapshotAlias(s.ID, keep.ID)
 			f, err := m.DeleteSnapshot(gameID, s.ID)
 			if err != nil {
 				continue
 			}
-			_ = m.Store.AddSnapshotAlias(s.ID, keep.ID)
 			merged++
 			freed += f
 			if m.Log != nil {

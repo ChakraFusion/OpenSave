@@ -2,8 +2,8 @@ package p2p
 
 import (
 	"compress/gzip"
-	"crypto/rand"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"

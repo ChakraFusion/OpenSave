@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"sort"
 	"strings"
 	"time"
@@ -672,6 +673,12 @@ func (e *Engine) pullVersion(ctx context.Context, game store.Game, peer Peer,
 	local delta.Manifest, remote ManifestResponse, adopt VersionVector) (Result, bool, error) {
 
 	gameID := game.ID
+	if until, blocked := e.unwritableUntil(gameID); blocked {
+		// Said once when it happened (below); waiting is the answer until then.
+		e.logOnce(gameID+"|unwritable", fmt.Sprintf("%q: waiting until %s before writing to its save folder again",
+			game.Name, until.Format("15:04")))
+		return Result{Status: "unwritable", PeerID: peer.ID, PeerName: peer.Name}, true, nil
+	}
 	if len(remote.Manifest.Files) == 0 && len(local.Files) > 0 && !remote.DeletionConfirmed {
 		// The newer version is an empty folder nobody has confirmed emptying.
 		e.Log("info", fmt.Sprintf("%q holds none of %q's save files now, and has not confirmed deleting them — keeping this device's copies",
@@ -738,6 +745,14 @@ func (e *Engine) pullVersion(ctx context.Context, game store.Game, peer Peer,
 	if len(d.FilesToPull) > 0 {
 		if err := e.pullFiles(ctx, peer, gameID, game, primaryRootOf(game), local, remote, d.FilesToPull); err != nil {
 			applied()
+			if errors.Is(err, fs.ErrPermission) {
+				// Not something the next pass fixes: the folder needs other
+				// rights (one under Program Files does). Said once, plainly,
+				// and tried again later rather than on every pass.
+				e.markUnwritable(gameID)
+				e.Log("error", fmt.Sprintf("%q: the save folder %s cannot be written (%v). Give OpenSave write access to it, or track the game at another folder. Trying again in %s.",
+					game.Name, game.SavePath, err, unwritableRetry))
+			}
 			return Result{}, true, fmt.Errorf("taking %s's version of %q did not finish (it is resumed on the next sync): %w", peer.Name, game.Name, err)
 		}
 	}
@@ -783,6 +798,30 @@ func (e *Engine) pullVersion(ctx context.Context, game store.Game, peer Peer,
 		return Result{Status: "in_sync", Direction: "none", PeerID: peer.ID, PeerName: peer.Name}, true, nil
 	}
 	return Result{Status: "updated", Direction: "pull", PeerID: peer.ID, PeerName: peer.Name}, true, nil
+}
+
+// unwritableRetry is how long a game whose save folder could not be written
+// waits before a pull into it is tried again.
+const unwritableRetry = 30 * time.Minute
+
+func (e *Engine) markUnwritable(gameID string) {
+	e.versionMu.Lock()
+	defer e.versionMu.Unlock()
+	if e.unwritable == nil {
+		e.unwritable = map[string]time.Time{}
+	}
+	e.unwritable[gameID] = time.Now().Add(unwritableRetry)
+}
+
+func (e *Engine) unwritableUntil(gameID string) (time.Time, bool) {
+	e.versionMu.Lock()
+	defer e.versionMu.Unlock()
+	until, ok := e.unwritable[gameID]
+	if !ok || time.Now().After(until) {
+		delete(e.unwritable, gameID)
+		return time.Time{}, false
+	}
+	return until, true
 }
 
 // setPulling marks a pull towards a newer version as running, so the files it

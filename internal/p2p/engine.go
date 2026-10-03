@@ -138,7 +138,6 @@ type Engine struct {
 	answered  map[string]bool
 	startedMs int64
 
-
 	// Lineage refreshes already running after a peer-applied deletion, keyed
 	// by game+peer. Deletions arrive one file at a time, and each one leaves
 	// the merge-base needing to be re-derived — so clearing a save folder of

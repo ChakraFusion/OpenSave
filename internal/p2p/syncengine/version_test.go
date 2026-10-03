@@ -348,7 +348,7 @@ func (t *meshTransport) DeleteRemote(ctx context.Context, peer Peer, ref FileRef
 	return os.RemoveAll(filepath.Join(n.dir, filepath.FromSlash(ref.RelPath)))
 }
 
-func (t *meshTransport) TriggerPeerPull(peer Peer, gameID string)                          {}
+func (t *meshTransport) TriggerPeerPull(peer Peer, gameID string)                                 {}
 func (t *meshTransport) ReportSyncEvent(peer Peer, gameID, eventType string, data map[string]any) {}
 
 func newMesh(t *testing.T, names ...string) (*mesh, map[string]*meshNode) {
