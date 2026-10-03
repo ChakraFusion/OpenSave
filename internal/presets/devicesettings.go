@@ -22,6 +22,12 @@ type DeviceSettings struct {
 	byName   map[string]indexedGame
 	protonIx map[string][]string
 	bases    func([]string) []string
+	// all is every game in the index, for looking one up by what is on
+	// disk (gamedb.go); blocked, the folders no save location may be.
+	all     []indexedGame
+	blocked map[string]bool
+	// byInstall: games by install folder name, built when first asked.
+	byInstall map[string][]indexedGame
 }
 
 // DeviceSettings loads the manifest index once for any number of lookups.
@@ -35,6 +41,7 @@ func (sc *Scanner) DeviceSettings() *DeviceSettings {
 		return nil
 	}
 	ds := &DeviceSettings{sc: sc, byID: map[string]indexedGame{}, byName: map[string]indexedGame{}}
+	ds.all = idx
 	for _, g := range idx {
 		if len(g.Config) == 0 && len(g.Paths) == 0 {
 			continue
@@ -48,6 +55,11 @@ func (sc *Scanner) DeviceSettings() *DeviceSettings {
 	}
 	if sc.goos() == "linux" {
 		ds.protonIx = sc.protonPrefixIndex()
+	}
+	if sc.goos() == "windows" {
+		ds.blocked = blockedRoots(windowsPathVars())
+	} else {
+		ds.blocked = linuxBlockedRoots(sc.linuxHome())
 	}
 	ds.bases = sc.installBaseCandidates()
 	return ds
