@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Deleted rows give their space back to the disk: the file shrinks, rather
@@ -41,4 +42,54 @@ func TestCompactGivesSpaceBack(t *testing.T) {
 		t.Errorf("file %d bytes after deleting everything, %d before: nothing given back", after.Size(), full.Size())
 	}
 	s.Close()
+}
+
+// Clearing a large save's deletion records is one transaction, not one write
+// to disk per file.
+func TestClearDeletedFilesIsOneTransaction(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "opensave.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.CreateGame(Game{ID: "g", Name: "g", SavePath: t.TempDir(), ActiveBranch: "main"}); err != nil {
+		t.Fatal(err)
+	}
+	var files []DeletedFile
+	var paths []string
+	for i := 0; i < 50000; i++ {
+		p := fmt.Sprintf("map/%d/%d.bin", i/100, i)
+		files = append(files, DeletedFile{Path: p, Hash: "h"})
+		paths = append(paths, p)
+	}
+	if err := s.RecordDeletedFiles("g", files); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := s.ClearDeletedFiles("g", "", paths); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	left, _ := s.DeletedFiles("g", "")
+	if len(left) != 0 {
+		t.Errorf("%d records left", len(left))
+	}
+	if took > 10*time.Second {
+		t.Errorf("clearing 50,000 records took %v", took)
+	}
+	t.Logf("cleared 50,000 deletion records in %v", took)
+}
+
+// The database writes through a write-ahead log, not a rollback journal
+// created and deleted for every write.
+func TestDatabaseUsesWAL(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "opensave.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var mode string
+	if err := s.db.Get(&mode, `PRAGMA journal_mode`); err != nil || mode != "wal" {
+		t.Errorf("journal_mode = %q (%v), want wal", mode, err)
+	}
 }

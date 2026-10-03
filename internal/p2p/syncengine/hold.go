@@ -387,8 +387,8 @@ func (e *Engine) PutBack(gameID string) (fetching int, err error) {
 	}
 	for root, files := range hold.Files() {
 		var missing []string
+		_ = e.Store.ClearDeletedFiles(gameID, root, files)
 		for _, f := range files {
-			_ = e.Store.ClearDeletedFile(gameID, root, f)
 			if _, ok := x.present[root][f]; !ok {
 				missing = append(missing, f)
 			}
