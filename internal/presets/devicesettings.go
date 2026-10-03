@@ -2,7 +2,6 @@ package presets
 
 import (
 	"path"
-	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -106,7 +105,10 @@ func (ds *DeviceSettings) Patterns(name, appID string, roots []string) []string 
 // Case-insensitive, as exclusion rules are.
 func relativeUnder(root, pattern string) (string, bool) {
 	split := func(p string) []string {
-		p = strings.ToLower(filepath.ToSlash(filepath.Clean(p)))
+		// Either separator on every system: a pattern written for Windows
+		// (Ludusavi's data, a Proton prefix) is matched on Linux too, and
+		// path.Match would read a backslash as an escape.
+		p = strings.ToLower(path.Clean(strings.ReplaceAll(p, `\`, "/")))
 		var parts []string
 		for _, c := range strings.Split(p, "/") {
 			if c != "" {
