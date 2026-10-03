@@ -418,6 +418,21 @@ func (d *Daemon) Start() error {
 		}
 	})
 
+	// The database file gives back the space of what was deleted from it
+	// (store/compact.go), hourly.
+	d.P2P.GoSync(func(ctx context.Context) {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				d.Store.Compact()
+			}
+		}
+	})
+
 	// Find each game's settings by what they hold (detectsettings.go): a few
 	// minutes after start, then hourly for whatever is due.
 	d.P2P.GoSync(func(ctx context.Context) {
