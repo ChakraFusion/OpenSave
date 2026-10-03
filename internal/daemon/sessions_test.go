@@ -231,3 +231,36 @@ func TestSessionHoldsSnapshotsAndSyncWhilePlaying(t *testing.T) {
 		}
 	}
 }
+
+// A game whose program is not seen: one change is kept and synced at once; a
+// second soon after begins a stretch handled as play — held, not synced —
+// until the save has stayed unchanged for quietAfter, when it is kept once.
+func TestActivityWithoutASessionIsHandledAsPlay(t *testing.T) {
+	d := newTestDaemon(t)
+	g, dir := sessionGame(t, d, "unseen")
+	if d.holdSnapshotWhilePlaying(g.ID) {
+		t.Fatal("a single change was held")
+	}
+	if !d.holdSnapshotWhilePlaying(g.ID) {
+		t.Fatal("a second change soon after was not held")
+	}
+	if !d.changingNow(g.ID) || !d.P2P.Sync.PlayingHere(g.ID) {
+		t.Fatal("a game changing its save is not handled as being played")
+	}
+	before := len(snapComments(t, d, g.ID))
+	if err := os.WriteFile(filepath.Join(dir, "slot1.sav"), []byte("left like this"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	// Quiet for longer than quietAfter.
+	d.sessions.mu.Lock()
+	d.sessions.active[g.ID].last = time.Now().Add(-quietAfter - time.Second)
+	d.sessions.mu.Unlock()
+	d.activityQuiet(g.ID)
+	if d.changingNow(g.ID) || d.P2P.Sync.PlayingHere(g.ID) {
+		t.Error("still handled as being played after the save went quiet")
+	}
+	if got := snapComments(t, d, g.ID); len(got) != before+1 {
+		t.Errorf("snapshots %q: want one more, keeping the save as it was left", got)
+	}
+}

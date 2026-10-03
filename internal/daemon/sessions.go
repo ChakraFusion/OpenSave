@@ -45,6 +45,14 @@ type sessionState struct {
 	// checkpoint is when each playing game last had a snapshot taken while
 	// it was played (holdSnapshotWhilePlaying).
 	checkpoint map[string]time.Time
+	// programs: what programsIn found in each install folder.
+	programs map[string]programList
+	// active: stretches of changes no session accounts for (noteActivity);
+	// warned: games already said to change with no program seen.
+	active map[string]*activity
+	warned map[string]bool
+	// lastChange: when each game's save last changed here.
+	lastChange map[string]time.Time
 	// startHash is each playing game's save as it was when play began, to
 	// tell afterwards whether the session changed it.
 	startHash map[string]string
@@ -150,6 +158,9 @@ func (d *Daemon) sessionTargets() ([]sessions.Target, map[string]bool, error) {
 		dir, viaSteam := installFolder(g, byAppID, byFolder)
 		if dir != "" {
 			t.Dirs = append(t.Dirs, dir)
+		}
+		for _, dir := range t.Dirs {
+			t.Programs = append(t.Programs, d.programsIn(dir)...)
 		}
 		// Steam launches the games it has installed; the rest need a
 		// program to start them, and none was given.
@@ -365,6 +376,9 @@ func (d *Daemon) sessionStarted(gameID string, at time.Time) {
 }
 
 func (d *Daemon) sessionEnded(gameID string, started, ended time.Time) {
+	// The session's end keeps the save and syncs it; a stretch of changes
+	// it overlapped would otherwise hold the sync back for quietAfter more.
+	d.endActivity(gameID)
 	d.sessions.mu.Lock()
 	startHash := d.sessions.startHash[gameID]
 	delete(d.sessions.startHash, gameID)
@@ -466,13 +480,19 @@ func (d *Daemon) endOpenSessions() {
 const checkpointEvery = 30 * time.Minute
 
 // holdSnapshotWhilePlaying tells the watcher not to snapshot a change to a
-// game being played, unless checkpointEvery has passed since play began or
-// since the last checkpoint. The session's end keeps the save as it was left
-// (sessionEnded).
+// game being played — in a session, or changing with no session seen
+// (noteActivity) — unless checkpointEvery has passed since play began or
+// since the last checkpoint. The end of the session, or of the stretch of
+// changes, keeps the save as it was left.
 func (d *Daemon) holdSnapshotWhilePlaying(gameID string) bool {
+	// Every change made here counts, session seen or not (noteActivity).
+	start, stretch := d.noteActivity(gameID)
 	since := d.PlayingSince(gameID)
 	if since.IsZero() {
-		return false
+		if !stretch {
+			return false
+		}
+		since = start
 	}
 	d.sessions.mu.Lock()
 	defer d.sessions.mu.Unlock()
@@ -494,4 +514,192 @@ func checkpointDue(since, last, now time.Time) bool {
 		last = since
 	}
 	return now.Sub(last) >= checkpointEvery
+}
+
+// Programs that come with a game without being it: installers, crash
+// reporters, redistributables, anti-cheat services. A process known only by
+// name is never matched by one of these — every game ships the same few.
+var notTheGame = []string{
+	"unins", "setup", "install", "crash", "report", "redist", "vcredist", "vc_redist", "dxsetup",
+	"directx", "prereq", "launcher", "easyanticheat", "eac", "battleye", "beservice", "update",
+	"patch", "config", "settings", "helper", "service", "cef", "webhelper", "dotnet", "physx",
+}
+
+// programsIn lists the programs in a game's install folder by file name,
+// lower-case, for a process known only by name (sessions.Proc.Name). Read at
+// most every installDirsFresh, three folders deep.
+func (d *Daemon) programsIn(dir string) []string {
+	d.sessions.mu.Lock()
+	if c, ok := d.sessions.programs[dir]; ok && time.Since(c.at) < installDirsFresh {
+		d.sessions.mu.Unlock()
+		return c.names
+	}
+	d.sessions.mu.Unlock()
+
+	var names []string
+	root := filepath.Clean(dir)
+	depth := strings.Count(root, string(filepath.Separator))
+	_ = filepath.WalkDir(root, func(p string, e os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if e.IsDir() {
+			if strings.Count(filepath.Clean(p), string(filepath.Separator))-depth >= 3 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := strings.ToLower(e.Name())
+		if !strings.HasSuffix(name, ".exe") || len(names) >= 64 {
+			return nil
+		}
+		for _, w := range notTheGame {
+			if strings.Contains(name, w) {
+				return nil
+			}
+		}
+		names = append(names, name)
+		return nil
+	})
+
+	d.sessions.mu.Lock()
+	if d.sessions.programs == nil {
+		d.sessions.programs = map[string]programList{}
+	}
+	d.sessions.programs[dir] = programList{at: time.Now(), names: names}
+	d.sessions.mu.Unlock()
+	return names
+}
+
+type programList struct {
+	at    time.Time
+	names []string
+}
+
+// quietAfter is how long a game's save must stay unchanged before a stretch
+// of changes no session accounts for is over: longer than the gap between
+// two autosaves of the games measured (Crimson Desert: up to six minutes).
+const quietAfter = 10 * time.Minute
+
+// activity is a stretch of changes to a game's save while no session of it
+// was seen: a game whose program cannot be told apart, or is not installed
+// where this device looks. It is handled as a session — not synced either
+// way, a checkpoint at most every checkpointEvery — and when the save has
+// stayed unchanged for quietAfter, it is kept and synced as a session's end
+// would be.
+type activity struct {
+	start, last time.Time
+	timer       *time.Timer
+}
+
+// noteActivity records a change to a game's save made here (not by a sync).
+// A change within quietAfter of the one before begins a stretch, or goes on
+// with one: it returns when the stretch began, and whether there is one. A
+// change on its own — a game that saves once, as it is closed — is not one,
+// and is kept and synced straight away, as every change was before.
+func (d *Daemon) noteActivity(gameID string) (time.Time, bool) {
+	now := time.Now()
+	d.sessions.mu.Lock()
+	defer d.sessions.mu.Unlock()
+	if d.sessions.active == nil {
+		d.sessions.active = map[string]*activity{}
+	}
+	if d.sessions.lastChange == nil {
+		d.sessions.lastChange = map[string]time.Time{}
+	}
+	prev, seen := d.sessions.lastChange[gameID]
+	d.sessions.lastChange[gameID] = now
+	a := d.sessions.active[gameID]
+	if a == nil {
+		if !seen || now.Sub(prev) >= quietAfter || d.opts.SyncEveryChange {
+			return now, false
+		}
+		a = &activity{start: prev}
+		d.sessions.active[gameID] = a
+		a.timer = time.AfterFunc(quietAfter, func() { d.activityQuiet(gameID) })
+		if d.PlayingSince(gameID).IsZero() && !d.sessions.warned[gameID] {
+			if d.sessions.warned == nil {
+				d.sessions.warned = map[string]bool{}
+			}
+			d.sessions.warned[gameID] = true
+			name := gameID
+			if g, err := d.Store.GetGame(gameID); err == nil {
+				name = g.Name
+			}
+			go d.Log.Log("info", fmt.Sprintf("%q is changing its save, but its program is not seen running here — "+
+				"handled as being played: kept and synced once it has not changed for %s", name, spokenLength(quietAfter)))
+		}
+	} else {
+		a.timer.Reset(quietAfter)
+	}
+	a.last = now
+	return a.start, true
+}
+
+// changingNow reports a game in a stretch of changes (noteActivity).
+func (d *Daemon) changingNow(gameID string) bool {
+	d.sessions.mu.Lock()
+	defer d.sessions.mu.Unlock()
+	_, ok := d.sessions.active[gameID]
+	return ok
+}
+
+// endActivity forgets a stretch of changes; a session's end takes over.
+func (d *Daemon) endActivity(gameID string) {
+	d.sessions.mu.Lock()
+	if a := d.sessions.active[gameID]; a != nil {
+		a.timer.Stop()
+		delete(d.sessions.active, gameID)
+	}
+	d.sessions.mu.Unlock()
+}
+
+// activityQuiet ends a stretch of changes once the save has stayed unchanged
+// for quietAfter: the save as it was left is kept and goes to the other
+// devices, as at the end of a session.
+func (d *Daemon) activityQuiet(gameID string) {
+	d.sessions.mu.Lock()
+	a := d.sessions.active[gameID]
+	if a == nil {
+		d.sessions.mu.Unlock()
+		return
+	}
+	if wait := quietAfter - time.Since(a.last); wait > 0 {
+		a.timer.Reset(wait)
+		d.sessions.mu.Unlock()
+		return
+	}
+	delete(d.sessions.active, gameID)
+	delete(d.sessions.checkpoint, gameID)
+	start, last := a.start, a.last
+	d.sessions.mu.Unlock()
+
+	if !d.PlayingSince(gameID).IsZero() {
+		return // a session is open after all; its end keeps the save
+	}
+	game, err := d.Store.GetGame(gameID)
+	if err != nil {
+		return
+	}
+	if hash, err := d.currentContentHash(game); err == nil && hash != game.LastManifestHash {
+		comment := "Auto backup"
+		if last.Sub(start) >= shortestSession {
+			comment = fmt.Sprintf("After playing (%s)", spokenLength(last.Sub(start)))
+		}
+		if err := d.markSessionEnd(game, hash, start, comment); err != nil {
+			d.Log.Log("warn", fmt.Sprintf("could not keep %q as it was left: %v", game.Name, err))
+			return
+		}
+	}
+	d.P2P.Sync.NoteLocalChange(gameID)
+	d.Log.Log("info", fmt.Sprintf("%q has not changed its save for %s; sending it to your other devices",
+		game.Name, spokenLength(quietAfter)))
+	if d.OnGameChanged != nil {
+		d.OnGameChanged(gameID)
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		_, _ = d.P2P.SyncGame(ctx, gameID)
+	}()
 }

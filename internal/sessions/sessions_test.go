@@ -105,3 +105,16 @@ func TestListFindsThisProcess(t *testing.T) {
 		t.Errorf("this process (%d, %s) was not found among %d: %v", os.Getpid(), self, len(procs), running)
 	}
 }
+
+// A game protected against tampering keeps its path from everyone; its
+// process is still recognised by name, among its install folder's programs.
+func TestRunning_ProtectedProcessByName(t *testing.T) {
+	target := Target{GameID: "cd", Dirs: []string{`C:\Games\Crimson Desert`}, Programs: []string{"crimsondesert.exe"}}
+	procs := []Proc{{PID: 11, Name: "explorer.exe"}, {PID: 12, Name: "CrimsonDesert.exe"}}
+	if got := Running(procs, []Target{target}); got["cd"] != 12 {
+		t.Errorf("Running = %v, want the protected process recognised by name", got)
+	}
+	if got := Running([]Proc{{PID: 13, Name: "game.exe"}}, []Target{target}); len(got) != 0 {
+		t.Errorf("a program not in the game's folder was taken for it: %v", got)
+	}
+}
