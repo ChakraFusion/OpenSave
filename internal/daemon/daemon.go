@@ -760,6 +760,12 @@ func (d *Daemon) TrackGame(game store.Game) (store.Game, error) {
 		return store.Game{}, err
 	}
 	game.SavePath = abs
+	// Nor a folder inside another game's, or holding one: the same files
+	// would be watched, snapshotted and synced twice, under two games that
+	// each think them theirs.
+	if other, ok := d.overlappingGame(abs); ok {
+		return store.Game{}, fmt.Errorf("%q already tracks %s, which this folder is inside or holds — track one or the other", other.Name, other.SavePath)
+	}
 
 	// Fresh track from the UI (no id supplied): derive the id from the name,
 	// but disambiguate collisions so a second save location for a same-named
