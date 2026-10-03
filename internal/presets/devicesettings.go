@@ -124,3 +124,19 @@ func coversEverything(rel string) bool {
 	first := strings.SplitN(rel, "/", 2)[0]
 	return strings.Trim(first, "*") == "" || first == "*.*"
 }
+
+// InstallNames returns the names the game database knows a game's install
+// folder by ("Crimson Desert"), found by App ID or name.
+func (ds *DeviceSettings) InstallNames(name, appID string) []string {
+	if ds == nil {
+		return nil
+	}
+	g, ok := ds.byID[appID]
+	if !ok || appID == "" {
+		g, ok = ds.byName[normalizeGameName(stripNameSuffixes(name))]
+	}
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), g.Installs...)
+}

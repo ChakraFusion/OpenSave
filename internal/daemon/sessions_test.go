@@ -199,9 +199,6 @@ func TestSpokenLength(t *testing.T) {
 func TestSessionHoldsSnapshotsAndSyncWhilePlaying(t *testing.T) {
 	d := newTestDaemon(t)
 	g, _ := sessionGame(t, d, "autosaving")
-	if d.holdSnapshotWhilePlaying(g.ID) {
-		t.Fatal("held while nothing is being played")
-	}
 	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{{PID: 7, Exe: g.ExePath}}, nil }
 	d.PollSessions()
 	if d.PlayingSince(g.ID).IsZero() {
@@ -232,18 +229,28 @@ func TestSessionHoldsSnapshotsAndSyncWhilePlaying(t *testing.T) {
 	}
 }
 
-// A game whose program is not seen: one change is kept and synced at once; a
-// second soon after begins a stretch handled as play — held, not synced —
-// until the save has stayed unchanged for quietAfter, when it is kept once.
+// A game whose program is not seen: a change is held, not synced, and kept
+// once the save has stayed unchanged for firstChangeWait; a second soon after
+// makes it a stretch, which ends after quietAfter unchanged.
 func TestActivityWithoutASessionIsHandledAsPlay(t *testing.T) {
 	d := newTestDaemon(t)
 	g, dir := sessionGame(t, d, "unseen")
-	if d.holdSnapshotWhilePlaying(g.ID) {
-		t.Fatal("a single change was held")
+	if !d.holdSnapshotWhilePlaying(g.ID) {
+		t.Fatal("a single change was not held")
 	}
+	d.sessions.mu.Lock()
+	if q := d.sessions.active[g.ID].quietFor(); q != firstChangeWait {
+		t.Errorf("a single change waits %v, want %v", q, firstChangeWait)
+	}
+	d.sessions.mu.Unlock()
 	if !d.holdSnapshotWhilePlaying(g.ID) {
 		t.Fatal("a second change soon after was not held")
 	}
+	d.sessions.mu.Lock()
+	if q := d.sessions.active[g.ID].quietFor(); q != quietAfter {
+		t.Errorf("a stretch waits %v, want %v", q, quietAfter)
+	}
+	d.sessions.mu.Unlock()
 	if !d.changingNow(g.ID) || !d.P2P.Sync.PlayingHere(g.ID) {
 		t.Fatal("a game changing its save is not handled as being played")
 	}
@@ -262,5 +269,17 @@ func TestActivityWithoutASessionIsHandledAsPlay(t *testing.T) {
 	}
 	if got := snapComments(t, d, g.ID); len(got) != before+1 {
 		t.Errorf("snapshots %q: want one more, keeping the save as it was left", got)
+	}
+}
+
+// The names a game's install folder is recognised by: never a generic folder,
+// and the game's own name only when it could hardly be another folder's.
+func TestInstallFolderNames(t *testing.T) {
+	d := newTestDaemon(t)
+	for name, want := range map[string]bool{"Crimson Desert": true, "Rust": false, "Games": false, "Satisfactory": true} {
+		got := d.installFolderNames(store.Game{ID: name, Name: name})
+		if (len(got) > 0) != want {
+			t.Errorf("%q: folder names %v, want some = %v", name, got, want)
+		}
 	}
 }
