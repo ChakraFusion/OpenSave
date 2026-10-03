@@ -126,6 +126,11 @@ type Callbacks struct {
 	// SyncWritingNow reports whether a sync is writing the game at this
 	// moment: the watcher looks at the burst once it has finished. May be nil.
 	SyncWritingNow func(gameID string) bool
+	// HoldSnapshot reports whether a change should not be snapshotted now:
+	// the game is being played, and a checkpoint was taken recently. The
+	// change is not recorded as captured either, so the next one, or the end
+	// of the session, still sees it. May be nil.
+	HoldSnapshot func(gameID string) bool
 }
 
 // syncWriting reports whether a sync is or was just writing a game
@@ -918,6 +923,9 @@ func (e *Engine) handleChangeFrom(ctx context.Context, gw *gameWatch, ownOnly bo
 			e.log("warn", fmt.Sprintf("failed to record manifest hash for %q: %v", gw.gameID, err))
 		}
 		return
+	}
+	if e.cb.HoldSnapshot != nil && e.cb.HoldSnapshot(gw.gameID) {
+		return // being played: kept by the session (a checkpoint, or its end)
 	}
 
 	for attempt := 1; attempt <= snapshotMaxRetries; attempt++ {

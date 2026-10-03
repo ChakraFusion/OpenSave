@@ -193,3 +193,41 @@ func TestSpokenLength(t *testing.T) {
 		}
 	}
 }
+
+// While a game is played, a change to its save is snapshotted once per
+// checkpointEvery, not at every autosave; and it is not synced either way.
+func TestSessionHoldsSnapshotsAndSyncWhilePlaying(t *testing.T) {
+	d := newTestDaemon(t)
+	g, _ := sessionGame(t, d, "autosaving")
+	if d.holdSnapshotWhilePlaying(g.ID) {
+		t.Fatal("held while nothing is being played")
+	}
+	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{{PID: 7, Exe: g.ExePath}}, nil }
+	d.PollSessions()
+	if d.PlayingSince(g.ID).IsZero() {
+		t.Fatal("setup: not playing")
+	}
+	if !d.holdSnapshotWhilePlaying(g.ID) {
+		t.Error("an autosave right after the game started was snapshotted")
+	}
+	if !d.P2P.Sync.PlayingHere(g.ID) {
+		t.Error("the sync engine does not know the game is being played")
+	}
+	// Checkpoints: half an hour after play began, then half an hour after
+	// the last one.
+	start := time.Now()
+	for _, c := range []struct {
+		last  time.Time
+		after time.Duration
+		want  bool
+	}{
+		{time.Time{}, 10 * time.Minute, false},
+		{time.Time{}, checkpointEvery, true},
+		{start.Add(40 * time.Minute), 50 * time.Minute, false},
+		{start.Add(40 * time.Minute), 70 * time.Minute, true},
+	} {
+		if got := checkpointDue(start, c.last, start.Add(c.after)); got != c.want {
+			t.Errorf("checkpoint due %v after start (last %v) = %v, want %v", c.after, c.last, got, c.want)
+		}
+	}
+}
