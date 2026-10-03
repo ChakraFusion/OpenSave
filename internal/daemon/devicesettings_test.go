@@ -151,3 +151,24 @@ func TestRetrackFromPeer_NotAtAFolderWithoutASave(t *testing.T) {
 		t.Error("not restored at a folder holding its save")
 	}
 }
+
+// A folder inside a tracked game's folder, or holding it, is not tracked as
+// another game: the same files would sync twice.
+func TestTrackGame_RefusesAFolderInsideAnother(t *testing.T) {
+	d := newTestDaemon(t)
+	outer := t.TempDir()
+	inner := filepath.Join(outer, "Saves")
+	if err := os.MkdirAll(inner, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.TrackGame(store.Game{Name: "Duckov", SavePath: outer}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.TrackGame(store.Game{Name: "Escape From Duckov", SavePath: inner}); err == nil {
+		t.Error("a folder inside a tracked game's was tracked as another game")
+	}
+	other := t.TempDir()
+	if _, err := d.TrackGame(store.Game{Name: "Unrelated", SavePath: other}); err != nil {
+		t.Errorf("an unrelated folder was refused: %v", err)
+	}
+}

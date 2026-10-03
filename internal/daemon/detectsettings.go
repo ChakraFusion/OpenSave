@@ -58,6 +58,7 @@ func (d *Daemon) detectSettingsDue(ctx context.Context) {
 				continue
 			}
 		}
+		game = d.linkToGameDatabase(game)
 		d.DetectSettings(game)
 		_ = d.Store.SetMark(settingsDetectMark(game.ID), want+"@"+time.Now().UTC().Format(time.RFC3339))
 	}

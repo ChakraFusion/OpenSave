@@ -100,6 +100,26 @@
     if (dir) savePath = dir;
   }
 
+  // The game is tracked already under another entry: give that one what the
+  // game database knows instead of tracking the same folder twice.
+  async function link() {
+    if (!picked?.trackedId || adding) return;
+    adding = true;
+    try {
+      const body = { name: picked.name };
+      if (picked.appId) body.appId = picked.appId;
+      if (exePath) body.exePath = exePath;
+      await api.patch(`/api/games/${picked.trackedId}`, body);
+      toast(`“${picked.trackedName}” is now ${picked.name}`, 'success');
+      dispatch('close');
+      navigate('game', { gameId: picked.trackedId });
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      adding = false;
+    }
+  }
+
   async function track() {
     if (!name.trim() || !savePath || adding) return;
     adding = true;
@@ -133,9 +153,9 @@
         {:else}
           <div class="list">
             {#each running as g (g.exe)}
-              <button class="row" disabled={g.tracked} on:click={() => choose(g, g.exe)}>
+              <button class="row" disabled={g.tracked && !g.trackedId} on:click={() => choose(g, g.exe)}>
                 <span class="row-name">{g.name}</span>
-                <span class="row-sub">{g.tracked ? 'already tracked' : g.installDir || g.exe}</span>
+                <span class="row-sub">{g.trackedName ? `tracked as “${g.trackedName}”` : g.tracked ? 'already tracked' : g.installDir || g.exe}</span>
               </button>
             {/each}
           </div>
@@ -153,7 +173,7 @@
               <button class="row" on:click={() => choose(g)}>
                 <span class="row-name">{g.name}</span>
                 <span class="row-sub">
-                  {g.savePaths?.length ? g.savePaths[0] : 'no saves found on this PC'}
+                  {g.trackedName ? `tracked as “${g.trackedName}”` : g.savePaths?.length ? g.savePaths[0] : 'no saves found on this PC'}
                 </span>
               </button>
             {/each}
@@ -180,6 +200,16 @@
         </div>
       </div>
       {#if note}<p class="hint">{note}</p>{/if}
+      {#if picked.trackedId}
+        <div class="already">
+          <p class="hint">
+            Already tracked here as <strong>“{picked.trackedName}”</strong>, at the same save folder. Tracked again it would
+            sync the same files twice; link that entry to {picked.name || 'this game'} instead — its name, cover art,
+            settings and seeing it played come from the game database.
+          </p>
+          <button class="btn" disabled={adding} on:click={link}>Link “{picked.trackedName}” to {picked.name}</button>
+        </div>
+      {/if}
 
       <div class="field">
         <span class="label">Save folder</span>
@@ -209,7 +239,7 @@
     <span />
     <div class="actions">
       <button class="btn" on:click={() => dispatch('close')}>Cancel</button>
-      <button class="btn primary" disabled={!picked || !name.trim() || !savePath || adding} on:click={track}>
+      <button class="btn primary" disabled={!picked || picked.trackedId || !name.trim() || !savePath || adding} on:click={track}>
         {adding ? 'Adding…' : 'Start tracking'}
       </button>
     </div>
@@ -321,6 +351,15 @@
   }
   .hint {
     margin: 0;
+  }
+  .already {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
   }
   .actions {
     display: flex;
