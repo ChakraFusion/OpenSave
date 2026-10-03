@@ -30,6 +30,10 @@ func (s *Server) routes(r chi.Router) {
 
 	r.Get("/api/games", s.handleListGames)
 	r.Post("/api/games", s.handleTrackGame)
+	// The game database, for tracking a game by hand (daemon/gamedb.go).
+	r.Get("/api/gamedb/search", s.handleGameDBSearch)
+	r.Get("/api/gamedb/identify", s.handleGameDBIdentify)
+	r.Get("/api/gamedb/running", s.handleGameDBRunning)
 	r.Get("/api/suggest-name", s.handleSuggestName)
 	r.Post("/api/games/untrack-bulk", s.handleBulkUntrack)
 
@@ -345,6 +349,8 @@ func (s *Server) handleTrackGame(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		SavePath string `json:"savePath"`
 		AppID    string `json:"appId"`
+		// ExePath: the game's program, when it was picked by it.
+		ExePath string `json:"exePath"`
 	}
 	if err := readJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -355,7 +361,7 @@ func (s *Server) handleTrackGame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	game, err := s.Daemon.TrackGame(store.Game{Name: body.Name, SavePath: body.SavePath, AppID: body.AppID})
+	game, err := s.Daemon.TrackGame(store.Game{Name: body.Name, SavePath: body.SavePath, AppID: body.AppID, ExePath: body.ExePath})
 	if err != nil {
 		// Duplicates (id or path) are conflicts; anything else the daemon
 		// rejects is bad input.

@@ -311,9 +311,11 @@ func FolderOf(p Proc, t Target) string {
 	}
 	dir := filepath.Dir(p.Exe)
 	for dir != "" && dir != filepath.Dir(dir) {
-		name := FolderName(filepath.Base(dir))
+		// Without spaces: the game database writes "ProjectZomboid" for a
+		// folder anyone else calls "Project Zomboid".
+		name := strings.ReplaceAll(FolderName(filepath.Base(dir)), " ", "")
 		for _, want := range t.FolderNames {
-			if name == want {
+			if name == strings.ReplaceAll(want, " ", "") {
 				return dir
 			}
 		}

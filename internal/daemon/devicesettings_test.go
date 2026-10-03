@@ -126,3 +126,28 @@ func TestObserveSettings_GivesBackWhatChangesLikeASave(t *testing.T) {
 		}
 	}
 }
+
+// A game re-tracked on another device is not restored here at a folder that
+// never held a save — only Steam's own file — but at one that does.
+func TestRetrackFromPeer_NotAtAFolderWithoutASave(t *testing.T) {
+	d := newTestDaemon(t)
+	empty := t.TempDir()
+	if err := os.WriteFile(filepath.Join(empty, "remotecache.vdf"), []byte("steam"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Store.AddUntrackedTombstone("pal", "Pal", empty)
+	d.retrackFromPeer("pal")
+	if _, err := d.Store.GetGame("pal"); err == nil {
+		t.Error("restored at a folder holding only Steam's file")
+	}
+
+	saves := t.TempDir()
+	if err := os.WriteFile(filepath.Join(saves, "world.sav"), []byte("progress"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	_ = d.Store.AddUntrackedTombstone("real", "Real", saves)
+	d.retrackFromPeer("real")
+	if _, err := d.Store.GetGame("real"); err != nil {
+		t.Error("not restored at a folder holding its save")
+	}
+}

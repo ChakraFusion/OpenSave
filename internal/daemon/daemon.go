@@ -1355,6 +1355,14 @@ func (d *Daemon) retrackFromPeer(gameID string) {
 		d.Log.Log("info", fmt.Sprintf("game %q re-tracked on a paired device; its old folder here (%s) is gone, so it will be placed afresh", gameID, savePath))
 		return
 	}
+	// Nor at one that holds no save: a game untracked because it was tracked
+	// where it never saved (a Steam folder of Steam's own files) and tracked
+	// again where it does on the other device must not come back here at
+	// the empty folder. Placed afresh, it follows the other device's.
+	if holdsNoSave(savePath) {
+		d.Log.Log("info", fmt.Sprintf("game %q re-tracked on a paired device; its old folder here (%s) held no save, so it will be placed afresh", gameID, savePath))
+		return
+	}
 	if name == "" {
 		name = gameID
 	}
