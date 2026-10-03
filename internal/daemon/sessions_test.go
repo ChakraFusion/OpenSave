@@ -383,8 +383,8 @@ func TestStretchWaitAdaptsToAutosaves(t *testing.T) {
 	}
 }
 
-// An emptied save is not play: no stretch holds it back from being asked
-// about and fetched back.
+// An emptied save is not play — no stretch holds it back from being asked
+// about and fetched back — and is not snapshotted either.
 func TestEmptiedSaveIsNotPlay(t *testing.T) {
 	d := newTestDaemon(t)
 	g, dir := sessionGame(t, d, "emptied")
@@ -395,8 +395,10 @@ func TestEmptiedSaveIsNotPlay(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "slot1.sav")); err != nil {
 		t.Fatal(err)
 	}
-	if d.holdSnapshotWhilePlaying(g.ID) {
-		t.Error("the change that emptied the save was held as play")
+	// Not snapshotted (an empty folder is no state worth keeping), but not
+	// as play: no stretch begins over it.
+	if !d.holdSnapshotWhilePlaying(g.ID) {
+		t.Error("the emptied save was snapshotted")
 	}
 	if d.changingNow(g.ID) || d.P2P.Sync.PlayingHere(g.ID) {
 		t.Error("an emptied save is still handled as being played")

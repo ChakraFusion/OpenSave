@@ -588,8 +588,10 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		// Changes to it are held back as play though no session of it is seen
 		// (daemon/sessions.go): said, so nothing seems stuck.
 		"holdingChanges": s.Daemon.HoldingChanges(g.ID),
-		"playtimeMs":     play.PlaytimeMs,
-		"playSessions":   play.Sessions,
+		// A restore of it under way, and how far it has come.
+		"restoring":    s.Daemon.RestoringNow(g.ID),
+		"playtimeMs":   play.PlaytimeMs,
+		"playSessions": play.Sessions,
 		// Whether the game is installed on this device: "found", "not-found",
 		// or "" when there is no telling (daemon.InstallState). A game that is
 		// not here is one nobody plays here, which is why it shows no play.

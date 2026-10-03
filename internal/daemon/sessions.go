@@ -511,9 +511,16 @@ const checkpointEvery = 30 * time.Minute
 func (d *Daemon) holdSnapshotWhilePlaying(gameID string) bool {
 	// An emptied save, or one held back after being emptied (hold.go), is not
 	// play: its own rules ask, and fetch it back when told to.
+	//
+	// Nor is it snapshotted: an emptied folder holds nothing worth keeping,
+	// and one part-way through being put back — a restore stopped half-way,
+	// files still coming from the other devices — is a save no device ever
+	// had. The save is kept once it is whole again (snapshotPutBack). Asked
+	// about at once all the same.
 	if d.emptiedOrHeld(gameID) {
 		d.endActivity(gameID)
-		return false
+		_, _ = d.P2P.Sync.CheckHold(gameID, false)
+		return true
 	}
 	// A game known to be closed: kept and synced at once.
 	if d.notBeingPlayed(gameID) {

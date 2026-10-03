@@ -11,6 +11,7 @@
   import { playLength } from '../../lib/format.js';
   import { canLaunch } from '../../lib/gameactions.js';
   import Spinner from '../../components/ui/Spinner.svelte';
+  import { restoreProgressText } from '../../lib/restoreprogress.js';
   import ArrowLeft from 'lucide-svelte/icons/arrow-left';
   import Play from 'lucide-svelte/icons/play';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
@@ -137,6 +138,9 @@
       {#if activity?.state === 'running'}
         · <span class="syncing">syncing {activity.percentage ?? 0}%</span>
       {/if}
+      {#if game.restoring && !answering}
+        · <span class="syncing"><Spinner size={11} /> {restoreProgressText(game.restoring)}</span>
+      {/if}
       {#if game.holdingChanges && !game.playingSince}
         · <span class="playing" title="Its save keeps changing though the game is not seen running here, so it is handled as being played: nothing syncs until the save has been quiet for a while (10 minutes, longer for a game that saves less often).">changes held back while it seems to be played — synced once its save is quiet</span>
       {/if}
@@ -199,7 +203,8 @@
     <div>
       {#if answering}
         <strong><Spinner size={13} /> Putting the files back{game.emptied.putBackFrom ? ` from the snapshot of ${whenLabel(game.emptied.putBackFromTime)}` : ''}…</strong>
-        A large save takes a few minutes. Anything newer comes from your other devices afterwards.
+        {#if game.restoring}{restoreProgressText(game.restoring)}.{:else}A large save takes a few minutes.{/if}
+        Anything newer comes from your other devices afterwards.
       {:else if game.emptied.state === 'fetching'}
         <strong>Putting the files back.</strong>
         {#if activity?.state === 'running'}

@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"archive/zip"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opensave/opensave/internal/iopar"
 	"github.com/opensave/opensave/internal/store"
 )
 
@@ -34,6 +36,14 @@ var ErrDamaged = errors.New("snapshot is damaged")
 // by its parts: its own small files read in full, and every shared file it
 // names read back against the hash of the bytes it was stored with.
 func VerifyArchive(path string) error {
+	return VerifyArchiveProgress(path, nil)
+}
+
+// VerifyArchiveProgress is VerifyArchive telling progress how far it is. The
+// entries are read as many at a time as suits the drive the archive is on
+// (iopar): each is a small read of its own, and one after another a large
+// save's quarter of a million of them took minutes.
+func VerifyArchiveProgress(path string, progress Progress) error {
 	r, err := zip.OpenReader(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -45,15 +55,25 @@ func VerifyArchive(path string) error {
 		return fmt.Errorf("%w: its archive cannot be opened: %v", ErrDamaged, err)
 	}
 	defer r.Close()
+	var files []*zip.File
 	for _, f := range r.File {
-		if f.FileInfo().IsDir() {
-			continue
+		if !f.FileInfo().IsDir() {
+			files = append(files, f)
 		}
+	}
+	var report func(done, total int)
+	if progress != nil {
+		report = func(done, total int) { progress(PhaseChecking, done, total) }
+	}
+	_, err = iopar.RunKind(context.Background(), driveKindOf(path), len(files), func(i int) error {
+		f := files[i]
 		rc, err := f.Open()
 		if err != nil {
 			return fmt.Errorf("%w: %s cannot be read: %v", ErrDamaged, f.Name, err)
 		}
-		_, err = io.Copy(io.Discard, rc)
+		buf := copyBuffers.Get().(*[]byte)
+		_, err = io.CopyBuffer(io.Discard, rc, *buf)
+		copyBuffers.Put(buf)
 		rc.Close()
 		if err != nil {
 			if errors.Is(err, zip.ErrChecksum) {
@@ -61,8 +81,9 @@ func VerifyArchive(path string) error {
 			}
 			return fmt.Errorf("%w: %s cannot be read: %v", ErrDamaged, f.Name, err)
 		}
-	}
-	return nil
+		return nil
+	}, report)
+	return err
 }
 
 // Verify checks one snapshot and records what it found.

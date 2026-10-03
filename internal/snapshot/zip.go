@@ -266,6 +266,11 @@ func newSnapshotWriter(out io.Writer) *zip.Writer {
 // directory and extracts into it — both matching unzipDirectory() in the
 // JS app.
 func UnzipTo(zipPath, targetPath string) error {
+	return UnzipToProgress(zipPath, targetPath, nil)
+}
+
+// UnzipToProgress is UnzipTo telling progress how far it is.
+func UnzipToProgress(zipPath, targetPath string, progress Progress) error {
 	// Defence in depth, not the load-bearing guard. Extraction does not
 	// restore the archived modification time — the written file gets the
 	// current one — so the hash cache would notice on its own today. It is
@@ -326,12 +331,11 @@ func UnzipTo(zipPath, targetPath string) error {
 		}
 	}
 
+	jobs := make([]extractJob, 0, len(r.File))
 	for _, entry := range r.File {
-		if err := extractEntry(entry, destDir); err != nil {
-			return err
-		}
+		jobs = append(jobs, extractJob{f: entry, destDir: destDir, rel: entry.Name})
 	}
-	return nil
+	return extractAll(jobs, destDir, progress)
 }
 
 func extractEntry(entry *zip.File, destDir string) error {

@@ -171,6 +171,10 @@ type Engine struct {
 	// Playing reports whether a game is being played on this device
 	// (playing.go). Set by the daemon from its play sessions.
 	Playing func(gameID string) bool
+	// OnPutBack runs when every file of an emptied save is back, put back or
+	// by hand: no snapshot was taken of it meanwhile, so the save is kept as
+	// it is now. Set by the daemon.
+	OnPutBack func(gameID string)
 	// unwritable: games whose save folder could not be written, and until
 	// when pulls into it wait (version.go).
 	unwritable map[string]time.Time

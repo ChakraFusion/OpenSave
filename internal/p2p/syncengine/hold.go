@@ -300,6 +300,11 @@ func (e *Engine) CheckHold(gameID string, serving bool) (held bool, err error) {
 	case has:
 		if x.back(hold.Files()) {
 			_ = e.Store.ClearDeletionHold(gameID)
+			// The save is whole again: kept as it is now (OnPutBack), the
+			// first snapshot of it since it was emptied.
+			if e.OnPutBack != nil {
+				go e.OnPutBack(gameID)
+			}
 			if hold.State == store.HoldAsking {
 				e.Log("success", fmt.Sprintf("every save file of %q is back, so nothing is held back any more", game.Name))
 			} else {
@@ -400,6 +405,9 @@ func (e *Engine) PutBack(gameID string) (fetching int, err error) {
 	}
 	if fetching == 0 {
 		err = e.Store.ClearDeletionHold(gameID)
+		if err == nil && e.OnPutBack != nil {
+			go e.OnPutBack(gameID) // whole again already
+		}
 	} else {
 		err = e.Store.SetDeletionHoldState(gameID, store.HoldFetching)
 	}
