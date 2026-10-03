@@ -271,6 +271,41 @@ func New(opts Options) (*Daemon, error) {
 	return d, nil
 }
 
+// adoptNeverSyncedView re-takes, once per change of delta.NeverSyncedList,
+// the hashes recorded for every game under the previous list — each only when
+// the save is the one it was recorded for, so a real change still counts.
+//
+// Without it the first build with a new list sees every save holding one of
+// those files as changed: an auto-snapshot of a game nobody played, and a new
+// version of its own on every device at once, which the devices then disagree
+// over.
+func (d *Daemon) adoptNeverSyncedView(games []store.Game) {
+	const mark = "never_synced"
+	if d.Store.Mark(mark) == delta.NeverSyncedList {
+		return
+	}
+	for _, game := range games {
+		extra, err := d.Store.GameRootPaths(game.ID)
+		if err != nil {
+			extra = nil
+		}
+		m, failures, err := delta.BuildMultiManifest(game.SavePath, extra)
+		if err != nil || len(failures) > 0 {
+			continue // unreadable now; compared as it is when it is back
+		}
+		if game.LastManifestHash != "" &&
+			game.LastManifestHash == watcher.ContentHashBeforeNeverSynced(m, game.SyncIgnore) {
+			_ = d.Store.SetLastManifestHash(game.ID, watcher.ContentHash(m, game.SyncIgnore))
+		}
+		if d.P2P != nil && d.P2P.Sync != nil {
+			primary := m
+			primary.Extra = nil
+			d.P2P.Sync.AdoptNeverSyncedView(game.ID, primary)
+		}
+	}
+	_ = d.Store.SetMark(mark, delta.NeverSyncedList)
+}
+
 // Start begins watching every tracked game with auto-sync enabled.
 func (d *Daemon) Start() error {
 	// Deletion records expire. Swept once per launch rather than on a timer:
@@ -297,6 +332,9 @@ func (d *Daemon) Start() error {
 	// hundred — and too small is the expensive direction, because the cache
 	// then evicts entries it is about to want and starts re-reading saves.
 	delta.SetHashCacheBudgetForGames(len(games))
+
+	// Before anything is watched or compared.
+	d.adoptNeverSyncedView(games)
 
 	for _, game := range games {
 		// Backfill cover art for games tracked before covers existed (or

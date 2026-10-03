@@ -40,9 +40,21 @@ const TmpSuffix = ".opensave.tmp"
 // bookkeeping. And that folder is under Program Files, where writing needs
 // rights OpenSave does not have, so the copy failed with "access denied" on
 // every pass, from every device.
+//
+// Left out where decisions are made — what to sync, what a version is, what
+// a snapshot holds — and NOT from the manifest a device builds and serves: a
+// device on an older build would read the gap as the file deleted, and
+// delete its own copy (the same reasoning as exclusion rules,
+// syncengine/ignore.go).
 func NeverSynced(rel string) bool {
 	return strings.EqualFold(path.Base(rel), "remotecache.vdf")
 }
+
+// NeverSyncedList names what NeverSynced leaves out. It goes into the tag of
+// a version's hash, so changing the list re-takes the hash quietly on every
+// device, like changing a game's exclusion rules — instead of every device
+// calling the same save a new version of its own at once.
+const NeverSyncedList = "remotecache.vdf"
 
 // staleTmpAge is how old a leftover TmpSuffix file must be before the
 // manifest walk garbage-collects it. Generous enough that a patch actively
@@ -378,11 +390,6 @@ func buildManifest(root string) (Manifest, error) {
 			}
 			return nil
 		}
-		// A file no device's save is made of (NeverSynced).
-		if NeverSynced(rel) {
-			return nil
-		}
-
 		entry, err := cachedHashFile(path, walkInfo)
 		if err != nil {
 			// Deleted after the walk listed it and before it could be read.

@@ -167,9 +167,13 @@ func genesisKey(m delta.Manifest) string {
 // content hashes, nothing else — not folders, not times. Excluded paths are
 // left out.
 func filesKey(m delta.Manifest, rules ignore.Rules) string {
+	return filesKeyOf(m, func(p string) bool { return excluded(rules, p) })
+}
+
+func filesKeyOf(m delta.Manifest, leaveOut func(string) bool) string {
 	paths := make([]string, 0, len(m.Files))
 	for p := range m.Files {
-		if rules.Empty() || !rules.Match(p) {
+		if !leaveOut(p) {
 			paths = append(paths, p)
 		}
 	}
@@ -194,14 +198,48 @@ func filesKey(m delta.Manifest, rules ignore.Rules) string {
 // either: it changes the filtered hash on every device at once, and each took
 // that as a change of its own, so the next sync asked about a divergence
 // nobody made. A hash taken under other rules is re-taken, not compared
-// (sameSaveAs).
+// (sameSaveAs). The files no save is made of (delta.NeverSyncedList) are in
+// the tag for the same reason.
 func (e *Engine) versionHashOf(gameID string, primary delta.Manifest) string {
 	text := ""
 	if game, err := e.Store.GetGame(gameID); err == nil {
 		text = game.SyncIgnore
 	}
-	tag := sha256.Sum256([]byte(text))
+	tag := sha256.Sum256([]byte(text + "\x00" + delta.NeverSyncedList))
 	return hex.EncodeToString(tag[:4]) + ":" + filesKey(primary, ignore.Parse(text))
+}
+
+// versionHashBeforeNeverSynced is versionHashOf as builds before
+// delta.NeverSynced took it: the rules alone in the tag, those files counted.
+func versionHashBeforeNeverSynced(rulesText string, primary delta.Manifest) string {
+	tag := sha256.Sum256([]byte(rulesText))
+	rules := ignore.Parse(rulesText)
+	return hex.EncodeToString(tag[:4]) + ":" + filesKeyOf(primary, func(p string) bool {
+		return !rules.Empty() && rules.Match(p)
+	})
+}
+
+// AdoptNeverSyncedView re-takes the hash recorded with this device's version
+// of a game in the terms of delta.NeverSynced, when the save is the one it was
+// recorded for — the files no save is made of aside. Run once, when a build
+// with a new list starts, before anything compares: otherwise the only
+// difference, which files are counted, reads as the save changed here, and
+// every device names the same save a new version of its own at once.
+func (e *Engine) AdoptNeverSyncedView(gameID string, primary delta.Manifest) {
+	game, err := e.Store.GetGame(gameID)
+	if err != nil {
+		return
+	}
+	e.versionMu.Lock()
+	defer e.versionMu.Unlock()
+	gv, err := e.loadVersionLocked(gameID)
+	if err != nil || gv.rec.GameID == "" || gv.rec.Hash == "" {
+		return
+	}
+	if gv.rec.Hash == versionHashBeforeNeverSynced(game.SyncIgnore, primary) {
+		gv.rec.Hash = e.versionHashOf(gameID, primary)
+		_ = e.saveVersionLocked(gv)
+	}
 }
 
 // sameSaveAs reports whether a hash recorded with a version still describes
@@ -769,9 +807,7 @@ func (e *Engine) pullVersion(ctx context.Context, game store.Game, peer Peer,
 		return Result{}, true, err
 	}
 	freshHash := e.versionHashOf(gameID, fresh)
-	if rules := e.rulesFor(gameID); !rules.Empty() {
-		fresh = filterManifest(fresh, rules)
-	}
+	fresh = filterManifest(fresh, e.rulesFor(gameID))
 	changedSince := false
 	if !sameFiles(fresh, remote.Manifest) {
 		if !changedSincePulled(primaryRootOf(game).Path, fresh, remote.Manifest, d) {

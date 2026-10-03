@@ -1130,23 +1130,54 @@ func (e *Engine) log(level, msg string) {
 // against that recorded value, so it has to compute it this way — one
 // definition, or the question gets two answers.
 func ContentHash(m delta.Manifest, ignoreRules string) string {
-	if rules := ignore.Parse(ignoreRules); !rules.Empty() {
-		m = filterForHash(m, rules)
+	rules := ignore.Parse(ignoreRules)
+	leaveOut := func(p string) bool {
+		return delta.NeverSynced(p) || (!rules.Empty() && rules.Match(p))
 	}
-	return m.ContentHash()
+	if rules.Empty() && !leavesAnyOut(m, leaveOut) {
+		return m.ContentHash() // the same value, without the copy
+	}
+	return filterForHash(m, leaveOut).ContentHash()
+}
+
+func leavesAnyOut(m delta.Manifest, leaveOut func(string) bool) bool {
+	for p := range m.Files {
+		if leaveOut(p) {
+			return true
+		}
+	}
+	for _, root := range m.Extra {
+		for p := range root.Files {
+			if leaveOut(p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// ContentHashBeforeNeverSynced is ContentHash as builds before
+// delta.NeverSynced took it, with those files counted: what a value recorded
+// by one of them is compared with, to tell whether the save changed since.
+func ContentHashBeforeNeverSynced(m delta.Manifest, ignoreRules string) string {
+	rules := ignore.Parse(ignoreRules)
+	if rules.Empty() {
+		return m.ContentHash()
+	}
+	return filterForHash(m, rules.Match).ContentHash()
 }
 
 // filterForHash drops excluded paths before the content hash is taken, so the
 // value recorded here means the same thing the sync engine means by it.
-func filterForHash(m delta.Manifest, rules ignore.Rules) delta.Manifest {
+func filterForHash(m delta.Manifest, leaveOut func(string) bool) delta.Manifest {
 	out := delta.Manifest{Files: make(map[string]delta.FileEntry, len(m.Files))}
 	for p, entry := range m.Files {
-		if !rules.Match(p) {
+		if !leaveOut(p) {
 			out.Files[p] = entry
 		}
 	}
 	for _, d := range m.Dirs {
-		if !rules.Match(d) {
+		if !leaveOut(d) {
 			out.Dirs = append(out.Dirs, d)
 		}
 	}
@@ -1155,12 +1186,12 @@ func filterForHash(m delta.Manifest, rules ignore.Rules) delta.Manifest {
 		for name, root := range m.Extra {
 			sub := delta.RootManifest{Files: make(map[string]delta.FileEntry, len(root.Files))}
 			for p, entry := range root.Files {
-				if !rules.Match(p) {
+				if !leaveOut(p) {
 					sub.Files[p] = entry
 				}
 			}
 			for _, d := range root.Dirs {
-				if !rules.Match(d) {
+				if !leaveOut(d) {
 					sub.Dirs = append(sub.Dirs, d)
 				}
 			}
