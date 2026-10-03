@@ -74,6 +74,9 @@ type Daemon struct {
 	// Play sessions; see sessions.go.
 	sessions sessionState
 
+	// Restores under way; see restoreprogress.go.
+	restoring restoreState
+
 	// Device settings; see devicesettings.go.
 	devMu sync.Mutex
 	dev   devSettingsCache
@@ -177,12 +180,17 @@ func New(opts Options) (*Daemon, error) {
 
 	d.initSessions()
 
+	// How far a restore has come, for the window (restoreprogress.go).
+	snaps.OnRestoreProgress = d.noteRestoreProgress
+
 	// A game's device settings are left out of syncing (devicesettings.go).
 	d.P2P.Sync.DeviceSettingsFor = d.deviceSettingsFor
 	d.P2P.Sync.ObserveSettings = d.observeSettings
 	// A game being played here is synced when its session ends
 	// (syncengine/playing.go).
 	d.P2P.Sync.Playing = d.playingHere
+	// An emptied save whole again is kept (emptied.go).
+	d.P2P.Sync.OnPutBack = d.snapshotPutBack
 
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
 	// may read it half-way (syncengine/settle.go).

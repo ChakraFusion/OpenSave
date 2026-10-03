@@ -290,3 +290,44 @@ func TestEmptiedFolder_PutBackTakesTheOtherDevicesSaveAndVersion(t *testing.T) {
 		}
 	}
 }
+
+// Emptying a save and putting it back leaves no snapshot of the empty folder
+// or of the save part-way back; the save whole again is kept as "Put back".
+func TestEmptiedFolder_NoSnapshotOfTheEmptyOrHalfSave(t *testing.T) {
+	a, b, gameID := emptiedAndHeld(t, "Emptied Snapshots Game")
+	a.API(http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]string{"answer": "restore"}, nil)
+	syncBothWays(t, gameID, a, b)
+
+	var games map[string]struct {
+		Branches map[string]struct {
+			Snapshots []struct {
+				Comment   string `json:"comment"`
+				SizeBytes int64  `json:"sizeBytes"`
+			} `json:"snapshots"`
+		} `json:"branches"`
+	}
+	var comments []string
+	if !testutil.WaitFor(15*time.Second, func() bool {
+		a.API(http.MethodGet, "/api/games", nil, &games)
+		comments = comments[:0]
+		putBack := false
+		for _, br := range games[gameID].Branches {
+			for _, s := range br.Snapshots {
+				comments = append(comments, s.Comment)
+				if s.Comment == "Put back" {
+					putBack = true
+				}
+			}
+		}
+		return putBack
+	}) {
+		t.Errorf("no snapshot of the save put back; snapshots: %q", comments)
+	}
+	for _, br := range games[gameID].Branches {
+		for _, s := range br.Snapshots {
+			if s.SizeBytes < 100 {
+				t.Errorf("a snapshot of the emptied folder was kept: %q, %d bytes", s.Comment, s.SizeBytes)
+			}
+		}
+	}
+}

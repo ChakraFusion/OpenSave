@@ -212,6 +212,11 @@ func rootOfEntry(entry string) (string, bool) {
 // restore — the operation someone reaches for when things have already gone
 // wrong.
 func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []string, err error) {
+	return UnzipRootsProgress(zipPath, primary, extra, nil)
+}
+
+// UnzipRootsProgress is UnzipRoots telling progress how far it is.
+func UnzipRootsProgress(zipPath, primary string, extra map[string]string, progress Progress) (unplaced []string, err error) {
 	// Every location this can write into, dropped from the hash cache. See
 	// UnzipTo for why this is defence in depth rather than the guard that is
 	// currently doing the work.
@@ -227,7 +232,7 @@ func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []st
 		return nil, err
 	}
 	if len(roots) == 0 {
-		return nil, UnzipTo(zipPath, primary)
+		return nil, UnzipToProgress(zipPath, primary, progress)
 	}
 
 	r, err := zip.OpenReader(zipPath)
@@ -264,6 +269,7 @@ func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []st
 
 	cleared := map[string]bool{}
 	missing := map[string]bool{}
+	var jobs []extractJob
 	for _, f := range r.File {
 		name, isRoot := rootOfEntry(f.Name)
 		target := primary
@@ -299,9 +305,10 @@ func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []st
 				continue
 			}
 		}
-		if err := extractEntryAs(f, target, entry); err != nil {
-			return nil, err
-		}
+		jobs = append(jobs, extractJob{f: f, destDir: target, rel: entry})
+	}
+	if err := extractAll(jobs, primary, progress); err != nil {
+		return nil, err
 	}
 
 	for name := range missing {
