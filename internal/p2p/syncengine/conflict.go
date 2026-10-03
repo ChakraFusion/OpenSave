@@ -204,10 +204,9 @@ func (e *Engine) markResolvedLocal(ctx context.Context, gameID string, peer Peer
 	} else {
 		e.Log("info", fmt.Sprintf("could not read %s's save while resolving %q (%v) — nothing is recorded as shared, so nothing it lacks is taken as deleted", peer.Name, gameID, err))
 	}
-	if rules := e.rulesFor(gameID); !rules.Empty() {
-		files = filterPathList(files, rules)
-		dirs = filterPathList(dirs, rules)
-	}
+	rules := e.rulesFor(gameID)
+	files = filterPathList(files, rules)
+	dirs = filterPathList(dirs, rules)
 	if err := e.Store.SetSyncState(gameID, peer.ID, files, dirs); err != nil {
 		e.Log("warn", fmt.Sprintf("persist sync lineage failed: %v", err))
 	}
