@@ -51,6 +51,7 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	s.compactOnOpen()
 	// The file holds the device's private key, the Google tokens and the
 	// vault keys. SQLite creates it with the process umask, which is usually
 	// world-readable; the directory around it is private now, but the file
