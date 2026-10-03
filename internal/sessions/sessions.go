@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // Proc is a running process, as much of it as matching needs.
@@ -53,6 +54,11 @@ type Target struct {
 	// Dirs are the game's install folders: anything running from inside one
 	// is the game.
 	Dirs []string
+	// FolderNames are names the game's install folder goes by, for a game
+	// installed where no library lists it ("G:GamesCrimson Desert"):
+	// a program running from inside a folder of one of these names is the
+	// game. Normalised with FolderName.
+	FolderNames []string
 	// Programs are the file names of the programs in the install folders, for
 	// a process known only by name (Proc.Name). Lower-case.
 	Programs []string
@@ -91,6 +97,9 @@ func matches(p Proc, t Target) bool {
 				return true
 			}
 		}
+	}
+	if p.Exe != "" && FolderOf(p, t) != "" {
+		return true
 	}
 	for _, dir := range t.Dirs {
 		if dir == "" {
@@ -270,3 +279,37 @@ func (t *Tracker) Finish(gameID string, at time.Time) {
 // List returns the processes running now. Where the system cannot say, it
 // returns none and an error, and nothing is ever seen playing.
 func List() ([]Proc, error) { return listProcesses() }
+
+// FolderName normalises a folder or game name for comparing the two: lower
+// case, letters, digits and single spaces.
+func FolderName(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(name) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+		default:
+			b.WriteRune(' ')
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// FolderOf returns the folder, among those above a process's program, that
+// is named as one of a target's install folders (Target.FolderNames), or "".
+func FolderOf(p Proc, t Target) string {
+	if p.Exe == "" || len(t.FolderNames) == 0 {
+		return ""
+	}
+	dir := filepath.Dir(p.Exe)
+	for dir != "" && dir != filepath.Dir(dir) {
+		name := FolderName(filepath.Base(dir))
+		for _, want := range t.FolderNames {
+			if name == want {
+				return dir
+			}
+		}
+		dir = filepath.Dir(dir)
+	}
+	return ""
+}
