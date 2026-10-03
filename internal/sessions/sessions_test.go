@@ -118,3 +118,23 @@ func TestRunning_ProtectedProcessByName(t *testing.T) {
 		t.Errorf("a program not in the game's folder was taken for it: %v", got)
 	}
 }
+
+// A game installed in a folder no library lists is found by the folder's
+// name, wherever that folder is.
+func TestRunning_ByInstallFolderName(t *testing.T) {
+	target := Target{GameID: "cd", FolderNames: []string{FolderName("Crimson Desert")}}
+	procs := []Proc{
+		{PID: 5, Exe: `C:\Windows\explorer.exe`},
+		{PID: 6, Exe: `G:\Games\Crimson Desert\bin64\CrimsonDesert.exe`},
+	}
+	if got := Running(procs, []Target{target}); got["cd"] != 6 {
+		t.Fatalf("Running = %v, want the game found by its folder", got)
+	}
+	if dir := FolderOf(procs[1], target); dir != `G:\Games\Crimson Desert` {
+		t.Errorf("FolderOf = %q", dir)
+	}
+	other := []Proc{{PID: 7, Exe: `G:\Games\Crimson Desert Tools\editor.exe`}}
+	if got := Running(other, []Target{target}); len(got) != 0 {
+		t.Errorf("a folder whose name only begins the same was taken for the game: %v", got)
+	}
+}

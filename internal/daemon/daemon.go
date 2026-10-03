@@ -193,7 +193,7 @@ func New(opts Options) (*Daemon, error) {
 	d.P2P.Sync.DeviceSettingsFor = d.deviceSettingsFor
 	// A game being played here is synced when its session ends
 	// (syncengine/playing.go).
-	d.P2P.Sync.Playing = func(gameID string) bool { return !d.PlayingSince(gameID).IsZero() || d.changingNow(gameID) }
+	d.P2P.Sync.Playing = d.playingHere
 	d.P2P.Sync.ObserveSettings = d.observeSettings
 
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
