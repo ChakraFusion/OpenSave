@@ -221,3 +221,39 @@ func TestMergeDuplicates(t *testing.T) {
 		t.Errorf("a second pass merged %d more", again)
 	}
 }
+
+// A session's named snapshot, then the watcher's copy of the same save a
+// moment later: the copy takes its place and keeps its name.
+func TestPruneContainedBy_AnIdenticalCopyKeepsTheName(t *testing.T) {
+	env := setup(t)
+	env.mgr.PruneOnCreate = true
+	writeSave(t, env.saveDir, "slot1.sav", "after an evening")
+	named, err := env.mgr.Create("game1", "After playing (1 h)", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.store.SetSnapshotNote(named.ID, "boss beaten"); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := env.mgr.Create("game1", "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copied.ID == named.ID {
+		t.Skip("the copy was not taken: nothing to replace")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := env.store.GetSnapshot(named.ID); err != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	kept, err := env.store.GetSnapshot(copied.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if kept.Comment != "After playing (1 h)" || kept.Note != "boss beaten" {
+		t.Errorf("the snapshot kept is called %q (note %q), want the name and note of the one it replaced", kept.Comment, kept.Note)
+	}
+}

@@ -293,7 +293,7 @@ func (m *Manager) createOnBranchFrom(gameID, branch, from, comment string, isSys
 
 	if comment == "" {
 		if isSystemAuto {
-			comment = "Auto backup"
+			comment = defaultAutoComment
 		} else {
 			comment = "Manual snapshot"
 		}
