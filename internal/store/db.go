@@ -91,6 +91,10 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 
+	if err := s.renameForkMigrations(); err != nil {
+		return err
+	}
+
 	entries, err := fs.ReadDir(migrationsFS, "migrations")
 	if err != nil {
 		return fmt.Errorf("read embedded migrations: %w", err)
@@ -134,4 +138,38 @@ func (s *Store) migrate() error {
 		}
 	}
 	return nil
+}
+
+// forkMigrationNames maps the names earlier builds of this fork gave its
+// migrations to the names they have upstream (Liquid-co/OpenSave PRs #27,
+// #30, #31, #32, #33), where they follow 0037_game_root_mapped. The files
+// carry the upstream names now; a database these builds created recorded
+// them under the old ones.
+var forkMigrationNames = map[string]string{
+	"0037_game_versions.sql":        "0039_game_versions.sql",
+	"0039_snapshot_content.sql":     "0040_snapshot_content.sql",
+	"0040_marks.sql":                "0041_marks.sql",
+	"0041_sync_device_settings.sql": "0042_sync_device_settings.sql",
+	"0042_settings_files.sql":       "0043_settings_files.sql",
+}
+
+// renameForkMigrations records migrations applied under the fork's old names
+// under their upstream names, once, so they are not applied a second time -
+// creating a table or adding a column that is already there fails, and the
+// database would not open. In one transaction, so a database is renamed
+// whole or not at all.
+func (s *Store) renameForkMigrations() error {
+	tx, err := s.db.Beginx()
+	if err != nil {
+		return fmt.Errorf("begin renaming migrations: %w", err)
+	}
+	defer tx.Rollback()
+	for old, renamed := range forkMigrationNames {
+		if _, err := tx.Exec(`UPDATE schema_migrations SET name = ? WHERE name = ?
+			AND NOT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ?)`,
+			renamed, old, renamed); err != nil {
+			return fmt.Errorf("rename migration %s: %w", old, err)
+		}
+	}
+	return tx.Commit()
 }
