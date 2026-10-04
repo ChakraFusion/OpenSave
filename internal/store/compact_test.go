@@ -74,7 +74,9 @@ func TestClearDeletedFilesIsOneTransaction(t *testing.T) {
 	if len(left) != 0 {
 		t.Errorf("%d records left", len(left))
 	}
-	if took > 10*time.Second {
+	// Generous: CI runs this under the race detector on shared runners, where
+	// one statement per file took 10s; what this guards against took minutes.
+	if took > 30*time.Second {
 		t.Errorf("clearing 50,000 records took %v", took)
 	}
 	t.Logf("cleared 50,000 deletion records in %v", took)
