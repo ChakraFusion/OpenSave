@@ -581,7 +581,7 @@ jobs:
 
             **Tested:** Windows, on four PCs over LAN and VPN. Linux, macOS, Flatpak and the Decky plugin are built by the same workflow and pass the unit and end-to-end tests on Linux, but haven't been tried by hand.
 
-            **Updates:** the built-in update check still points at Liquid-co/OpenSave. This build calls itself `2.4.1-fixes.1`, a pre-release, so an official release can be offered as an update, which returns you to the official build.
+            **Updates:** the built-in update check still points at Liquid-co/OpenSave. This build calls itself `${{ github.ref_name }}`, a pre-release, so an official release can be offered as an update, which returns you to the official build.
 
             **Before trying it:** OpenSave keeps a snapshot before replacing any save, but back up saves you care about all the same. Devices on this build and on official 2.4.1 can be paired; nothing is taken from a device without save versions, and its deletions are refused.
 
