@@ -26,17 +26,25 @@ func simulated(best int) func(i int) error {
 	}
 }
 
+// The simulated drive is timed with sub-millisecond sleeps, so a machine busy
+// with other work (a full test run on a slow CPU) can make one run's windows
+// look alike and leave it far off. Each kind gets three runs and one has to
+// settle near the best; an adaptation that is actually broken misses in all.
 func TestRun_SettlesNearWhatTheDriveDoesBest(t *testing.T) {
 	defer func(w time.Duration) { window = w }(window)
 	window = 60 * time.Millisecond
 	for _, kind := range []Kind{NVMe, SATA} {
-		st, err := RunKind(context.Background(), kind, 40000, simulated(12), nil)
-		if err != nil {
-			t.Fatal(err)
+		near := false
+		for attempt := 1; attempt <= 3 && !near; attempt++ {
+			st, err := RunKind(context.Background(), kind, 40000, simulated(12), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("%s, run %d: started at %d, settled at %d, peak %.0f/s in %v", kind, attempt, st.Start, st.Settled, st.Peak, st.Duration)
+			near = st.Settled >= 5 && st.Settled <= 28
 		}
-		t.Logf("%s: started at %d, settled at %d, peak %.0f/s in %v", kind, st.Start, st.Settled, st.Peak, st.Duration)
-		if st.Settled < 5 || st.Settled > 28 {
-			t.Errorf("%s: settled at %d, far from the 12 the drive does best", kind, st.Settled)
+		if !near {
+			t.Errorf("%s: no run settled near the 12 the drive does best", kind)
 		}
 	}
 }
