@@ -109,7 +109,9 @@ func (s *Store) ClearDeletedFile(gameID, root, path string) error {
 
 // ClearDeletedFiles forgets the deletions recorded for paths of one save
 // location, in one transaction: one at a time, each its own write to disk,
-// the quarter of a million of a large save took a quarter of an hour.
+// the quarter of a million of a large save took a quarter of an hour. Paths go
+// clearDeletedChunk at a time, so that is a few hundred statements, not one
+// per file.
 func (s *Store) ClearDeletedFiles(gameID, root string, paths []string) error {
 	if len(paths) == 0 {
 		return nil
@@ -119,18 +121,26 @@ func (s *Store) ClearDeletedFiles(gameID, root string, paths []string) error {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Preparex(`DELETE FROM deleted_files WHERE game_id = ? AND root = ? AND path = ?`)
-	if err != nil {
-		return fmt.Errorf("prepare clear deletion records: %w", err)
-	}
-	defer stmt.Close()
-	for _, p := range paths {
-		if _, err := stmt.Exec(gameID, root, p); err != nil {
-			return fmt.Errorf("clear deletion record for %s: %w", p, err)
+	for len(paths) > 0 {
+		n := min(len(paths), clearDeletedChunk)
+		args := make([]any, 0, n+2)
+		args = append(args, gameID, root)
+		for _, p := range paths[:n] {
+			args = append(args, p)
 		}
+		q := `DELETE FROM deleted_files WHERE game_id = ? AND root = ? AND path IN (?` +
+			strings.Repeat(",?", n-1) + `)`
+		if _, err := tx.Exec(q, args...); err != nil {
+			return fmt.Errorf("clear deletion records: %w", err)
+		}
+		paths = paths[n:]
 	}
 	return tx.Commit()
 }
+
+// clearDeletedChunk is how many paths one statement of ClearDeletedFiles
+// names: well under SQLite's limit on bound parameters.
+const clearDeletedChunk = 500
 
 // ClearDeletedFilesForGame forgets every deletion recorded for a game, for use
 // when it is untracked — the records describe a folder this device no longer
