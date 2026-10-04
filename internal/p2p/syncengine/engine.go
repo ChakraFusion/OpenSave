@@ -1816,6 +1816,7 @@ func (e *Engine) pullFiles(ctx context.Context, peer Peer, gameID string, game s
 		if remoteFile.MtimeMs > 0 {
 			mtime := time.UnixMilli(int64(remoteFile.MtimeMs))
 			_ = os.Chtimes(localFilePath, mtime, mtime)
+			owntouch.Settled(localFilePath)
 		}
 		pulled = append(pulled, relPath)
 		e.Log("info", "file updated: "+relPath)

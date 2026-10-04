@@ -85,3 +85,25 @@ func TestRecent_AFileDeletedAfterOurWriteIsNotOurs(t *testing.T) {
 		t.Error("a file OpenSave removed was not reported as its own")
 	}
 }
+
+// A game saving over a file OpenSave has just pulled is the game's change
+// however soon it comes - inside the slack a time comparison allows too.
+func TestRecent_AWriteRightAfterASettledPullIsNotOurs(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "progress.sav")
+	Mark(file)
+	if err := os.WriteFile(file, []byte("from A"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	Settled(file)
+	if !Recent(file) {
+		t.Fatal("the file OpenSave pulled is not reported as ours")
+	}
+	// Same size, a moment later: only the time tells them apart.
+	time.Sleep(20 * time.Millisecond)
+	if err := os.WriteFile(file, []byte("from B"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if Recent(file) {
+		t.Error("a save written straight after the pull was taken for OpenSave's")
+	}
+}

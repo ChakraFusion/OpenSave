@@ -82,6 +82,7 @@ func replaceWithRetry(tmpPath, filePath string) error {
 		// known as a change OpenSave made (owntouch).
 		owntouch.Mark(filePath)
 		if err = renameFile(tmpPath, filePath); err == nil {
+			owntouch.Settled(filePath)
 			return nil
 		}
 	}

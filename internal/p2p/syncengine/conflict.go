@@ -238,6 +238,7 @@ func (e *Engine) touchSaveMtimes(gameID, root string) {
 	if !info.IsDir() {
 		owntouch.Mark(root)
 		_ = os.Chtimes(root, now, now)
+		owntouch.Settled(root)
 		return
 	}
 	_ = filepath.Walk(root, func(path string, fi os.FileInfo, walkErr error) error {
@@ -246,6 +247,7 @@ func (e *Engine) touchSaveMtimes(gameID, root string) {
 		}
 		owntouch.Mark(path)
 		_ = os.Chtimes(path, now, now)
+		owntouch.Settled(path)
 		return nil
 	})
 }

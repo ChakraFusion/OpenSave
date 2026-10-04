@@ -29,10 +29,14 @@ var (
 	marked = map[string]mark{}
 )
 
-// mark is when OpenSave touched a path, and whether it removed it.
+// mark is when OpenSave touched a path, whether it removed it, and - once
+// OpenSave is done with a file (Settled) - the time and size it left it with.
 type mark struct {
 	at      time.Time
 	removed bool
+	settled bool
+	mod     time.Time
+	size    int64
 }
 
 func key(path string) string {
@@ -53,6 +57,25 @@ func Mark(path string) { record(path, false) }
 // OpenSave has just written and a game or a person then deleted is their
 // change, and has to sync and be snapshotted as one.
 func MarkRemoved(path string) { record(path, true) }
+
+// Settled records the time and size OpenSave has left a file it marked with,
+// once it is done with it (written, renamed into place, re-dated). From then on
+// the file is OpenSave's only while it still has exactly those: a game saving
+// over it a moment later - inside any slack a time comparison would need - is
+// the game's change.
+func Settled(path string) {
+	fi, err := os.Lstat(path)
+	if err != nil || fi.IsDir() {
+		return
+	}
+	k := key(path)
+	mu.Lock()
+	defer mu.Unlock()
+	if m, ok := marked[k]; ok {
+		m.settled, m.mod, m.size = true, fi.ModTime(), fi.Size()
+		marked[k] = m
+	}
+}
 
 func record(path string, removed bool) {
 	if path == "" {
@@ -86,7 +109,10 @@ const slack = 2 * time.Second
 // no new version to hand to anyone. Whatever OpenSave leaves behind is dated
 // no later than its mark (a pulled file keeps the time it was written to its
 // temporary name, or is given the peer's; re-dating sets now), so a file
-// dated later was written by someone else. A path that is gone is OpenSave's
+// dated later was written by someone else. Once OpenSave is done with a file
+// (Settled) the test is exact: the time and size it left, or not ours - the
+// slack would take a game's save within two seconds of a pull for the pull's.
+// A path that is gone is OpenSave's
 // only if OpenSave removed it (MarkRemoved): one it wrote and someone then
 // deleted is theirs. A folder carries no save of its own, so its mark is
 // enough.
@@ -103,6 +129,9 @@ func Recent(path string) bool {
 	}
 	if fi.IsDir() {
 		return true
+	}
+	if m.settled {
+		return fi.ModTime().Equal(m.mod) && fi.Size() == m.size
 	}
 	return !fi.ModTime().After(m.at.Add(slack))
 }
