@@ -744,8 +744,12 @@ func (e *Engine) pullVersion(ctx context.Context, game store.Game, peer Peer,
 	}
 	applied()
 
-	// Only a save that is now exactly the peer's takes its version.
-	fresh, err := e.ReadManifest(ctx, gameID, game.SavePath)
+	// Only a save that is now exactly the peer's takes its version. Read
+	// straight from disk, not through the gate (settle.go): this sync is the
+	// one that wrote it, and after following a peer onto a branch it still
+	// holds the save — waiting for that would wait for itself until the
+	// sync's time ran out.
+	fresh, err := delta.BuildManifest(game.SavePath)
 	if err != nil {
 		return Result{}, true, err
 	}
