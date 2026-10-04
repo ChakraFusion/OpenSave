@@ -122,18 +122,24 @@ func TestRunning_ProtectedProcessByName(t *testing.T) {
 // A game installed in a folder no library lists is found by the folder's
 // name, wherever that folder is.
 func TestRunning_ByInstallFolderName(t *testing.T) {
+	// Paths as this system writes them: a process's program is a native path.
+	root := string(filepath.Separator)
+	if runtime.GOOS == "windows" {
+		root = `G:\`
+	}
+	games := filepath.Join(root, "Games")
 	target := Target{GameID: "cd", FolderNames: []string{FolderName("Crimson Desert")}}
 	procs := []Proc{
-		{PID: 5, Exe: `C:\Windows\explorer.exe`},
-		{PID: 6, Exe: `G:\Games\Crimson Desert\bin64\CrimsonDesert.exe`},
+		{PID: 5, Exe: filepath.Join(root, "Windows", "explorer.exe")},
+		{PID: 6, Exe: filepath.Join(games, "Crimson Desert", "bin64", "CrimsonDesert.exe")},
 	}
 	if got := Running(procs, []Target{target}); got["cd"] != 6 {
 		t.Fatalf("Running = %v, want the game found by its folder", got)
 	}
-	if dir := FolderOf(procs[1], target); dir != `G:\Games\Crimson Desert` {
+	if dir := FolderOf(procs[1], target); dir != filepath.Join(games, "Crimson Desert") {
 		t.Errorf("FolderOf = %q", dir)
 	}
-	other := []Proc{{PID: 7, Exe: `G:\Games\Crimson Desert Tools\editor.exe`}}
+	other := []Proc{{PID: 7, Exe: filepath.Join(games, "Crimson Desert Tools", "editor.exe")}}
 	if got := Running(other, []Target{target}); len(got) != 0 {
 		t.Errorf("a folder whose name only begins the same was taken for the game: %v", got)
 	}
