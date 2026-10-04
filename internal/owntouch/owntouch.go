@@ -26,8 +26,14 @@ const window = 2 * time.Minute
 
 var (
 	mu     sync.Mutex
-	marked = map[string]time.Time{}
+	marked = map[string]mark{}
 )
+
+// mark is when OpenSave touched a path, and whether it removed it.
+type mark struct {
+	at      time.Time
+	removed bool
+}
 
 func key(path string) string {
 	p := filepath.Clean(path)
@@ -40,18 +46,26 @@ func key(path string) string {
 // Mark records that OpenSave itself just created, wrote, removed or re-dated
 // path. Its parent folder is marked too: creating or removing an entry is an
 // event on the folder as well.
-func Mark(path string) {
+func Mark(path string) { record(path, false) }
+
+// MarkRemoved records that OpenSave itself is about to remove path. Only a
+// path marked this way counts as OpenSave's when it is found gone: a file
+// OpenSave has just written and a game or a person then deleted is their
+// change, and has to sync and be snapshotted as one.
+func MarkRemoved(path string) { record(path, true) }
+
+func record(path string, removed bool) {
 	if path == "" {
 		return
 	}
 	now := time.Now()
 	mu.Lock()
 	defer mu.Unlock()
-	marked[key(path)] = now
-	marked[key(filepath.Dir(path))] = now
+	marked[key(path)] = mark{at: now, removed: removed}
+	marked[key(filepath.Dir(path))] = mark{at: now}
 	if len(marked) > 50000 {
-		for k, at := range marked {
-			if now.Sub(at) > window {
+		for k, m := range marked {
+			if now.Sub(m.at) > window {
 				delete(marked, k)
 			}
 		}
@@ -72,18 +86,23 @@ const slack = 2 * time.Second
 // no new version to hand to anyone. Whatever OpenSave leaves behind is dated
 // no later than its mark (a pulled file keeps the time it was written to its
 // temporary name, or is given the peer's; re-dating sets now), so a file
-// dated later was written by someone else. A path that is gone was removed by
-// OpenSave; a folder carries no save of its own, so its mark is enough.
+// dated later was written by someone else. A path that is gone is OpenSave's
+// only if OpenSave removed it (MarkRemoved): one it wrote and someone then
+// deleted is theirs. A folder carries no save of its own, so its mark is
+// enough.
 func Recent(path string) bool {
 	mu.Lock()
-	at, ok := marked[key(path)]
+	m, ok := marked[key(path)]
 	mu.Unlock()
-	if !ok || time.Since(at) > window {
+	if !ok || time.Since(m.at) > window {
 		return false
 	}
 	fi, err := os.Lstat(path)
-	if err != nil || fi.IsDir() {
+	if err != nil {
+		return m.removed
+	}
+	if fi.IsDir() {
 		return true
 	}
-	return !fi.ModTime().After(at.Add(slack))
+	return !fi.ModTime().After(m.at.Add(slack))
 }

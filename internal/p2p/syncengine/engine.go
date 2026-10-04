@@ -1536,7 +1536,7 @@ func (e *Engine) applyLocalDeletions(gameID string, root syncRoot, d Decision) {
 		// spelling this disk actually holds.
 		full := delta.LocalNameFor(root.Path, relPath)
 		_ = os.Chmod(full, 0o666)
-		owntouch.Mark(full)
+		owntouch.MarkRemoved(full)
 		if err := os.Remove(full); err == nil {
 			e.Log("info", "deleted locally (peer deleted): "+relPath)
 		}
@@ -1551,7 +1551,7 @@ func (e *Engine) applyLocalDeletions(gameID string, root syncRoot, d Decision) {
 		}
 		full := delta.LocalNameFor(root.Path, relDir)
 		if info, err := os.Stat(full); err == nil && info.IsDir() {
-			owntouch.Mark(full)
+			owntouch.MarkRemoved(full)
 			if err := os.Remove(full); err == nil { // only removes empty dirs, matching rmdirSync
 				e.Log("info", "deleted directory locally (peer deleted): "+relDir)
 			}

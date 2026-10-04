@@ -1035,7 +1035,7 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 		}
 		// Empty dirs only, for a folder, like rmdirSync.
 		// A change made at a peer's request, not by the game (owntouch).
-		owntouch.Mark(full)
+		owntouch.MarkRemoved(full)
 		if os.Remove(full) == nil && (info.IsDir() || entry.Hash != "") {
 			e.Sync.NotePeerDeletion(game.ID, body.Root, body.RelPath, entry, info.IsDir())
 		}

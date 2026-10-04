@@ -378,7 +378,7 @@ func (e *Engine) overwriteLocalWithRemote(ctx context.Context, gameID string, pe
 		}
 		full := filepath.Join(game.SavePath, filepath.FromSlash(relPath))
 		_ = os.Chmod(full, 0o666)
-		owntouch.Mark(full)
+		owntouch.MarkRemoved(full)
 		_ = os.Remove(full)
 	}
 

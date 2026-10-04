@@ -14,6 +14,12 @@ func TestMarkAndRecent(t *testing.T) {
 		t.Fatal("unmarked path reported as ours")
 	}
 	Mark(file)
+	if err := os.MkdirAll(filepath.Dir(file), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("pulled"), 0o666); err != nil {
+		t.Fatal(err)
+	}
 	if !Recent(file) {
 		t.Error("marked path not reported as ours")
 	}
@@ -47,5 +53,35 @@ func TestRecent_AWriteAfterTheMarkIsNotOurs(t *testing.T) {
 	}
 	if Recent(file) {
 		t.Error("a save written after OpenSave's was taken for OpenSave's")
+	}
+}
+
+// A file OpenSave has just written, then deleted by a game or a person, is
+// their deletion: it has to sync and be snapshotted. Only a path OpenSave
+// removed itself is its own when found gone.
+func TestRecent_AFileDeletedAfterOurWriteIsNotOurs(t *testing.T) {
+	dir := t.TempDir()
+	pulled := filepath.Join(dir, "pulled.sav")
+	Mark(pulled)
+	if err := os.WriteFile(pulled, []byte("from the peer"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(pulled); err != nil {
+		t.Fatal(err)
+	}
+	if Recent(pulled) {
+		t.Error("a file deleted by someone else after OpenSave wrote it was taken for OpenSave's")
+	}
+
+	removed := filepath.Join(dir, "removed.sav")
+	if err := os.WriteFile(removed, []byte("old"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	MarkRemoved(removed)
+	if err := os.Remove(removed); err != nil {
+		t.Fatal(err)
+	}
+	if !Recent(removed) {
+		t.Error("a file OpenSave removed was not reported as its own")
 	}
 }
