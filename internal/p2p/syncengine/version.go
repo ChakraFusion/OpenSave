@@ -13,6 +13,7 @@ import (
 
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/ignore"
+	"github.com/opensave/opensave/internal/owntouch"
 	"github.com/opensave/opensave/internal/store"
 )
 
@@ -752,8 +753,12 @@ func (e *Engine) pullVersion(ctx context.Context, game store.Game, peer Peer,
 	if rules := e.rulesFor(gameID); !rules.Empty() {
 		fresh = filterManifest(fresh, rules)
 	}
+	changedSince := false
 	if !sameFiles(fresh, remote.Manifest) {
-		return Result{}, true, fmt.Errorf("taking %s's version of %q did not finish: the save still differs; it is resumed on the next sync", peer.Name, game.Name)
+		if !changedSincePulled(primaryRootOf(game).Path, fresh, remote.Manifest, d) {
+			return Result{}, true, fmt.Errorf("taking %s's version of %q did not finish: the save still differs; it is resumed on the next sync", peer.Name, game.Name)
+		}
+		changedSince = true
 	}
 
 	e.versionMu.Lock()
@@ -765,10 +770,19 @@ func (e *Engine) pullVersion(ctx context.Context, game store.Game, peer Peer,
 		gv.adopt(adopt, theirs)
 		gv.rec.Hash = freshHash
 		gv.rec.Pulling = false
-		_ = e.saveVersionLocked(gv)
 		e.Log("success", fmt.Sprintf("%q now holds version %s from %s", game.Name, gv.vec, peer.Name))
+		if changedSince {
+			// The peer's version arrived whole, and was then changed here -
+			// the game saving straight after the pull. That is a version of
+			// this device's own, made from theirs, and goes back to them.
+			e.bumpLocked(&gv, game.Name, freshHash)
+		}
+		_ = e.saveVersionLocked(gv)
 	}
 	e.versionMu.Unlock()
+	if changedSince {
+		e.Transport.TriggerPeerPull(peer, gameID)
+	}
 
 	// The file comparison's own records, so it agrees if it is ever asked.
 	e.persistLineage(gameID, peer.ID, fresh, remote.Manifest)
@@ -1112,4 +1126,48 @@ func (e *Engine) UseSaveEverywhere(gameID string) (VersionVector, error) {
 	}
 	e.Log("info", fmt.Sprintf("%q: this device's save is to be used everywhere — version %s", game.Name, vec))
 	return vec, nil
+}
+
+// changedSincePulled reports a pull that finished and whose save was then
+// changed here: every way the save now differs from the peer's is a file the
+// pull wrote or removed, and someone other than OpenSave has written it, or
+// put it back, since (owntouch). A game saving the moment a pull is done
+// leaves exactly that.
+//
+// Anything else - a file the pull did not touch, or one it touched that is
+// still as OpenSave left it - is a pull that stopped part-way, resumed on the
+// next sync as before. Without this, the save the game had just written was
+// taken for the unfinished part of the pull and replaced with the peer's on
+// the next sync; only the snapshot taken before replacing it still held it.
+func changedSincePulled(root string, fresh, remote delta.Manifest, d Decision) bool {
+	touched := make(map[string]bool, len(d.FilesToPull)+len(d.FilesToDeleteLocally))
+	for _, p := range d.FilesToPull {
+		touched[p] = true
+	}
+	for _, p := range d.FilesToDeleteLocally {
+		touched[p] = true
+	}
+	changedByOthers := func(p string) bool {
+		return touched[p] && !owntouch.Recent(delta.LocalNameFor(root, p))
+	}
+	differs := 0
+	for p, lf := range fresh.Files {
+		if rf, ok := remote.Files[p]; ok && rf.Hash == lf.Hash {
+			continue
+		}
+		differs++
+		if !changedByOthers(p) {
+			return false
+		}
+	}
+	for p := range remote.Files {
+		if _, ok := fresh.Files[p]; ok {
+			continue
+		}
+		differs++
+		if !changedByOthers(p) {
+			return false
+		}
+	}
+	return differs > 0
 }
