@@ -208,6 +208,7 @@ func (m *Manager) pruneContainedPass(gameID string) (removed int, freed int64, e
 					// while the row is there it still resolves to itself.
 					_ = m.Store.RepointSnapshotAliases(older.ID, holder.ID)
 					_ = m.Store.AddSnapshotAlias(older.ID, holder.ID)
+					m.carryName(older, &holder)
 				}
 				f, derr := m.DeleteSnapshot(gameID, older.ID)
 				if derr != nil {
@@ -266,6 +267,7 @@ func (m *Manager) PruneContainedBy(snap store.Snapshot, files []store.CapturedFi
 				// Aliased before the delete (see PruneContained).
 				_ = m.Store.RepointSnapshotAliases(older.ID, snap.ID)
 				_ = m.Store.AddSnapshotAlias(older.ID, snap.ID)
+				m.carryName(older, &snap)
 			}
 			_, derr := m.DeleteSnapshot(snap.GameID, older.ID)
 			if derr == nil && m.Log != nil {
@@ -369,4 +371,27 @@ func (m *Manager) MergeDuplicates(gameID string) (merged int, freed int64, err e
 		}
 	}
 	return merged, freed, nil
+}
+
+// defaultAutoComment is what an automatic snapshot taken for no particular
+// reason is called.
+const defaultAutoComment = "Auto backup"
+
+// carryName keeps what an older snapshot is called when a newer one holding
+// exactly the same files takes its place: its reason ("After playing (1 h)",
+// "Put back") if the newer one has only the default an automatic snapshot
+// gets, and a note someone wrote if the newer one has none. A session's
+// named snapshot and the watcher's copy of the same save, taken a moment
+// later as the game's last write settled, otherwise left only "Auto backup".
+func (m *Manager) carryName(older store.Snapshot, newer *store.Snapshot) {
+	if newer.Comment == defaultAutoComment && older.Comment != "" && older.Comment != defaultAutoComment {
+		if m.Store.SetSnapshotComment(newer.ID, older.Comment) == nil {
+			newer.Comment = older.Comment
+		}
+	}
+	if newer.Note == "" && older.Note != "" {
+		if m.Store.SetSnapshotNote(newer.ID, older.Note) == nil {
+			newer.Note = older.Note
+		}
+	}
 }
