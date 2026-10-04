@@ -107,3 +107,26 @@ func TestRecent_AWriteRightAfterASettledPullIsNotOurs(t *testing.T) {
 		t.Error("a save written straight after the pull was taken for OpenSave's")
 	}
 }
+
+// A pull renames a file into place, then re-dates it to the peer's time. In
+// between, and before it is Settled again, the file is still OpenSave's.
+func TestRecent_ARedatedPullBeforeItSettlesAgainIsOurs(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "auto.sav")
+	Mark(file)
+	if err := os.WriteFile(file, []byte("pulled"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	Settled(file)
+	Mark(file)
+	peers := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(file, peers, peers); err != nil {
+		t.Fatal(err)
+	}
+	if !Recent(file) {
+		t.Error("a pulled file re-dated to the peer's time was taken for someone else's change")
+	}
+	Settled(file)
+	if !Recent(file) {
+		t.Error("a pulled file settled at the peer's time was taken for someone else's change")
+	}
+}

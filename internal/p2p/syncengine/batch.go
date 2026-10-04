@@ -271,6 +271,7 @@ func writeBatchedFile(j batchJob, blocks []BlockData) error {
 	committed = true
 	if j.remote.MtimeMs > 0 {
 		mtime := time.UnixMilli(int64(j.remote.MtimeMs))
+		owntouch.Mark(j.localPath) // see pullFiles: re-dated, then Settled
 		_ = os.Chtimes(j.localPath, mtime, mtime)
 		owntouch.Settled(j.localPath)
 	}
@@ -290,6 +291,7 @@ func (e *Engine) pullBatchOneByOne(ctx context.Context, peer Peer, gameID, root 
 		}
 		if j.remote.MtimeMs > 0 {
 			mtime := time.UnixMilli(int64(j.remote.MtimeMs))
+			owntouch.Mark(j.localPath)
 			_ = os.Chtimes(j.localPath, mtime, mtime)
 			owntouch.Settled(j.localPath)
 		}
