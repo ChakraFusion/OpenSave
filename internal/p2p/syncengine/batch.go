@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/owntouch"
 )
 
 // Pulling many small files, many to a request.
@@ -270,7 +271,9 @@ func writeBatchedFile(j batchJob, blocks []BlockData) error {
 	committed = true
 	if j.remote.MtimeMs > 0 {
 		mtime := time.UnixMilli(int64(j.remote.MtimeMs))
+		owntouch.Mark(j.localPath) // see pullFiles: re-dated, then Settled
 		_ = os.Chtimes(j.localPath, mtime, mtime)
+		owntouch.Settled(j.localPath)
 	}
 	return nil
 }
@@ -288,7 +291,9 @@ func (e *Engine) pullBatchOneByOne(ctx context.Context, peer Peer, gameID, root 
 		}
 		if j.remote.MtimeMs > 0 {
 			mtime := time.UnixMilli(int64(j.remote.MtimeMs))
+			owntouch.Mark(j.localPath)
 			_ = os.Chtimes(j.localPath, mtime, mtime)
+			owntouch.Settled(j.localPath)
 		}
 		written = append(written, j.relPath)
 	}
