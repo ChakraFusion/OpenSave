@@ -52,8 +52,42 @@ func TestChangedSincePulled(t *testing.T) {
 		t.Error("a pull that stopped part-way was taken for a change made here")
 	}
 
-	// A file the pull never touched differs: not this pull's to judge.
-	if changedSincePulled(dir, build(), remote, Decision{}) {
-		t.Error("a difference in a file the pull did not touch was taken for a change after it")
+	// A file the pull did not touch was the same on both sides when it was
+	// planned; differing now, it was changed here meanwhile.
+	if !changedSincePulled(dir, build(), remote, Decision{}) {
+		t.Error("a file the pull did not touch, changed since, was taken for the pull stopping part-way")
+	}
+}
+
+// A file the pull did not touch, deleted here the moment the pull is done
+// (TestFullSyncFlow on CI): a deletion made here, not a part of the pull to
+// fetch again.
+func TestChangedSincePulled_AnUntouchedFileDeleted(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{"slot1.sav": "from B", "config/video.ini": "fullscreen=1"} {
+		full := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o777); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owntouch.Mark(filepath.Join(dir, "slot1.sav"))
+	owntouch.Settled(filepath.Join(dir, "slot1.sav"))
+	remote, err := delta.BuildManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, "config", "video.ini")); err != nil {
+		t.Fatal(err)
+	}
+	delta.InvalidateRoot(dir)
+	fresh, err := delta.BuildManifest(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !changedSincePulled(dir, fresh, remote, Decision{FilesToPull: []string{"slot1.sav"}}) {
+		t.Error("a file deleted here right after the pull was taken for the pull stopping part-way, and would be fetched back")
 	}
 }

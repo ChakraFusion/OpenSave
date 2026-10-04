@@ -1129,16 +1129,21 @@ func (e *Engine) UseSaveEverywhere(gameID string) (VersionVector, error) {
 }
 
 // changedSincePulled reports a pull that finished and whose save was then
-// changed here: every way the save now differs from the peer's is a file the
-// pull wrote or removed, and someone other than OpenSave has written it, or
-// put it back, since (owntouch). A game saving the moment a pull is done
-// leaves exactly that.
+// changed here: every way the save now differs from the peer's is a change
+// someone other than OpenSave made since the pull was planned. A game saving,
+// or a person deleting a file, the moment a pull is done leaves exactly that.
 //
-// Anything else - a file the pull did not touch, or one it touched that is
-// still as OpenSave left it - is a pull that stopped part-way, resumed on the
-// next sync as before. Without this, the save the game had just written was
-// taken for the unfinished part of the pull and replaced with the peer's on
-// the next sync; only the snapshot taken before replacing it still held it.
+//   - A file the pull did not touch was the same on both sides when the pull
+//     was planned (anything that differed was to be fetched or removed). If
+//     it differs now, it was changed here meanwhile.
+//   - A file the pull wrote or removed differs because of someone else only
+//     if someone other than OpenSave has written it, or put it back, since
+//     (owntouch). Still as OpenSave left it, it is the pull's own unfinished
+//     part: a pull that stopped part-way, resumed on the next sync as before.
+//
+// Without this, a save the game had just written, or a file just deleted,
+// was taken for the unfinished part of the pull and replaced with the peer's
+// on the next sync; only the snapshot taken before replacing it still held it.
 func changedSincePulled(root string, fresh, remote delta.Manifest, d Decision) bool {
 	touched := make(map[string]bool, len(d.FilesToPull)+len(d.FilesToDeleteLocally))
 	for _, p := range d.FilesToPull {
@@ -1148,7 +1153,7 @@ func changedSincePulled(root string, fresh, remote delta.Manifest, d Decision) b
 		touched[p] = true
 	}
 	changedByOthers := func(p string) bool {
-		return touched[p] && !owntouch.Recent(delta.LocalNameFor(root, p))
+		return !touched[p] || !owntouch.Recent(delta.LocalNameFor(root, p))
 	}
 	differs := 0
 	for p, lf := range fresh.Files {
