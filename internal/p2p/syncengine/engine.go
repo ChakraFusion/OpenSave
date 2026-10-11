@@ -27,6 +27,13 @@ type Conflict struct {
 	RemoteStats SideStats  `json:"remoteStats"`
 	DiffFiles   []DiffFile `json:"diffFiles"` // capped; DiffTotal is the real count
 	DiffTotal   int        `json:"diffTotal"`
+	// The uncapped counts by kind. DiffFiles stops at 100, and counting from
+	// it told someone choosing "keep theirs" on a save of a quarter-million
+	// files that it would remove a few dozen, when it removed tens of
+	// thousands: every OnlyLocal file goes.
+	OnlyLocalTotal  int `json:"onlyLocalTotal"`
+	OnlyRemoteTotal int `json:"onlyRemoteTotal"`
+	ChangedTotal    int `json:"changedTotal"`
 }
 
 // SideStats summarises one side's save state for the conflict UI.
@@ -673,6 +680,22 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	}
 	handedOverDeletion := e.handOverEmptying(gameID, peer, localManifest.Files, &decision)
 
+	// A sync about to delete a large part of a save — here or on the peer —
+	// stops and asks instead. emptiedUnconfirmed above covers a save emptied
+	// completely; this covers one gutted partly, which is what a partial copy
+	// on one device turns into once it is read as the other's deletions. Two
+	// waves of that took tens of thousands of files out of a save before
+	// anyone was asked. A deletion someone confirmed on purpose
+	// (handedOverDeletion, DeletionConfirmed) is not second-guessed.
+	if !handedOverDeletion && !remoteData.DeletionConfirmed {
+		if n, total := massDeletion(localManifest, remoteData.Manifest, decision); n > 0 {
+			e.Log("warn", fmt.Sprintf("syncing %q with %q would delete %d of %d files — holding it for a decision instead",
+				game.Name, peer.Name, n, total))
+			e.registerConflict(gameID, peer, localManifest, remoteData)
+			return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, nil
+		}
+	}
+
 	// Nothing below is about files arriving, only about local files leaving.
 	// A pull that brings files this device never held destroys nothing.
 	atRisk := filesAtRisk(localManifest, decision)
@@ -1260,6 +1283,10 @@ func (e *Engine) registerConflict(gameID string, peer Peer, localManifest delta.
 	// Capture comparison data while we hold both manifests, so the UI can
 	// show which side is further along and exactly what differs.
 	diffs := diffManifests(localManifest, remoteData.Manifest)
+	counts := map[string]int{}
+	for _, d := range diffs {
+		counts[d.Status]++
+	}
 	const maxDiffFiles = 100
 	total := len(diffs)
 	if len(diffs) > maxDiffFiles {
@@ -1269,10 +1296,11 @@ func (e *Engine) registerConflict(gameID string, peer Peer, localManifest delta.
 	e.mu.Lock()
 	e.activeConflicts[gameID] = &Conflict{
 		Peer: peer, LocalSnap: localSnap, RemoteSnap: remoteSnap,
-		LocalStats:  manifestStats(localManifest),
-		RemoteStats: manifestStats(remoteData.Manifest),
-		DiffFiles:   diffs,
-		DiffTotal:   total,
+		LocalStats:     manifestStats(localManifest),
+		RemoteStats:    manifestStats(remoteData.Manifest),
+		DiffFiles:      diffs,
+		DiffTotal:      total,
+		OnlyLocalTotal: counts["only-local"], OnlyRemoteTotal: counts["only-remote"], ChangedTotal: counts["changed"],
 	}
 	e.mu.Unlock()
 

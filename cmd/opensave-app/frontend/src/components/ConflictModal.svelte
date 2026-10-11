@@ -103,9 +103,16 @@
   $: diffFiles = conflict?.diffFiles ?? [];
   $: diffTotal = conflict?.diffTotal ?? 0;
   $: diffCapped = diffTotal > diffFiles.length;
-  $: changedCount = diffFiles.filter((d) => d.status === 'changed').length;
-  $: onlyLocalCount = diffFiles.filter((d) => d.status === 'only-local').length;
-  $: onlyRemoteCount = diffFiles.filter((d) => d.status === 'only-remote').length;
+  // The uncapped counts when the device sends them; counted from the capped
+  // list otherwise (an older build), which is exact below the cap.
+  const countOr = (n, status) => (typeof n === 'number' ? n : diffFiles.filter((d) => d.status === status).length);
+  $: changedCount = countOr(conflict?.changedTotal, 'changed');
+  $: onlyLocalCount = countOr(conflict?.onlyLocalTotal, 'only-local');
+  $: onlyRemoteCount = countOr(conflict?.onlyRemoteTotal, 'only-remote');
+  // "Keep theirs" deletes every file only this device has. Said before the
+  // click, in numbers, and loudly once it is a lot.
+  $: theirsDeletes = onlyLocalCount;
+  $: theirsDeletesMany = theirsDeletes >= 100;
 
   // Bytes that differ, per side: a changed file counts its own size on each
   // side, a file present on only one side counts only there.
@@ -217,11 +224,27 @@
           <div class="v-time">last change {fmtMs(remoteMs)}</div>
         </div>
       </div>
-      {#if diffCapped}
+      {#if diffCapped && typeof conflict.onlyLocalTotal !== 'number'}
         <p class="diff-capped">
           Counts above cover the first {diffFiles.length} of {diffTotal} differing files.
         </p>
       {/if}
+
+      <ul class="consequences">
+        <li>
+          <strong>Keep mine</strong> / <strong>Keep both</strong>: nothing is deleted.
+          {#if onlyRemoteCount > 0}The {onlyRemoteCount} file{onlyRemoteCount === 1 ? '' : 's'} only on {peerName} {onlyRemoteCount === 1 ? 'is' : 'are'} brought here;{/if}
+          {#if changedCount > 0}where both have a file, yours is kept.{/if}
+        </li>
+        <li class:danger={theirsDeletesMany}>
+          <strong>Keep theirs</strong>:
+          {#if theirsDeletes > 0}
+            <strong>deletes {theirsDeletes} file{theirsDeletes === 1 ? '' : 's'}</strong> that only this device has (snapshotted first).
+          {:else}
+            nothing only this device has is lost.
+          {/if}
+        </li>
+      </ul>
 
       {#if conflict.diffTotal > 0}
         <button class="diff-toggle" on:click={() => (showDiff = !showDiff)}>
@@ -250,7 +273,8 @@
       <div class="actions">
         <button class="btn ghost later" disabled={busy} on:click={putOff} title="Nothing of this game syncs until you decide. Open the game to decide.">Decide later</button>
         <button class="btn" disabled={busy} on:click={() => resolve('keep-local')}>Keep mine</button>
-        <button class="btn" disabled={busy} on:click={() => resolve('keep-remote')}>Keep theirs</button>
+        <button class="btn" class:danger={theirsDeletesMany} disabled={busy} on:click={() => resolve('keep-remote')}
+          title={theirsDeletes > 0 ? `Deletes ${theirsDeletes} file(s) only this device has` : ''}>Keep theirs</button>
         <button class="btn primary" disabled={busy} on:click={() => resolve('merge-branch')}>
           Keep both (recommended)
         </button>
@@ -361,6 +385,22 @@
     font-size: 0.74rem;
     color: var(--text-faint);
     margin: -8px 0 12px;
+  }
+  .consequences {
+    margin: 0 0 14px;
+    padding-left: 18px;
+    font-size: 0.8rem;
+    color: var(--text-dim);
+  }
+  .consequences li {
+    margin: 2px 0;
+  }
+  .consequences li.danger,
+  .btn.danger {
+    color: var(--danger, #e5484d);
+  }
+  .btn.danger {
+    border-color: currentColor;
   }
   .v-time {
     font-size: 0.74rem;

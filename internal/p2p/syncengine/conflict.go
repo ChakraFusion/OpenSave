@@ -41,7 +41,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		// see both sides still differing from the stale base and re-conflict
 		// immediately — the "keep looping" bug.
 		e.Log("info", fmt.Sprintf("conflict on %q resolved: keep LOCAL — our version becomes the shared state", gameID))
-		if err := e.markResolvedLocal(gameID, peer); err != nil {
+		if err := e.markResolvedLocal(ctx, gameID, peer); err != nil {
 			return "", err
 		}
 		e.clearConflict(gameID)
@@ -103,7 +103,7 @@ func (e *Engine) ResolveConflict(ctx context.Context, gameID, peerID, resolution
 		// From here it is "keep mine": this device's version becomes the
 		// shared one, and the peer is asked to take it — which, if it has
 		// changes of its own, asks the person there in turn.
-		if err := e.markResolvedLocal(gameID, peer); err != nil {
+		if err := e.markResolvedLocal(ctx, gameID, peer); err != nil {
 			return "", err
 		}
 		e.clearConflict(gameID)
@@ -160,7 +160,20 @@ func (e *Engine) markResolvedConverged(gameID string, peer Peer) {
 // unambiguously the newest, so the sync direction is a push. The peer
 // then receives our version (its own engine snapshots first, or re-raises
 // its own conflict if it has newer unsynced work of its own).
-func (e *Engine) markResolvedLocal(gameID string, peer Peer) error {
+//
+// The lineage, though, must say only what both sides verifiably hold. It used
+// to record every local file as shared (persistLineage(local, local)) before
+// the peer had pulled any of it. When that pull did not finish — a large save,
+// a request that timed out, a device that went away — the next sync found
+// those files "shared before and missing on the peer now", read that as the
+// peer having deleted them, and deleted them HERE: on the device whose version
+// the person had just chosen to keep. A save of a quarter-million files lost
+// tens of thousands that way, and the folders differing again re-raised the
+// conflict, inviting the same answer. Now the record is the intersection of
+// the two saves as they stand; a file only this device has is new to the
+// peer, not deleted by it, and goes over on the next sync. If the peer cannot
+// be asked, nothing is recorded as shared, so nothing can be read as deleted.
+func (e *Engine) markResolvedLocal(ctx context.Context, gameID string, peer Peer) error {
 	game, err := e.Store.GetGame(gameID)
 	if err != nil {
 		return err
@@ -170,7 +183,19 @@ func (e *Engine) markResolvedLocal(gameID string, peer Peer) error {
 	if err != nil {
 		return err
 	}
-	e.persistLineage(gameID, peer.ID, local, local)
+	var files, dirs []string
+	if remote, err := e.peerStateForResolution(ctx, gameID, peer); err == nil {
+		files, dirs = IntersectLineage(local, remote.Manifest)
+	} else {
+		e.Log("info", fmt.Sprintf("could not read %s's save while resolving %q (%v) — nothing is recorded as shared, so nothing it lacks is taken as deleted", peer.Name, gameID, err))
+	}
+	if rules := e.rulesFor(gameID); !rules.Empty() {
+		files = filterPathList(files, rules)
+		dirs = filterPathList(dirs, rules)
+	}
+	if err := e.Store.SetSyncState(gameID, peer.ID, files, dirs); err != nil {
+		e.Log("warn", fmt.Sprintf("persist sync lineage failed: %v", err))
+	}
 	_ = e.Store.SetAgreedHash(gameID, peer.ID, local.ManifestHash())
 	_ = e.Store.SetLastManifestHash(gameID, e.contentHashOf(gameID, local, game.SavePath))
 	e.recordSynced(gameID, peer.ID)
