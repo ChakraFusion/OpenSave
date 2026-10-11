@@ -1,5 +1,10 @@
 import { describe as suite, expect, it } from 'vitest';
 import { byDay, describe, filterItems, playedWhere, runs } from './timeline.js';
+import { locale } from './i18n.js';
+
+// The expected titles are English; pin the language so the suite does not
+// depend on the machine it runs on.
+locale.set('en');
 
 const now = new Date(2026, 8, 25, 18, 0);
 const at = (h, m = 0, day = 25) => new Date(2026, 8, day, h, m).getTime();

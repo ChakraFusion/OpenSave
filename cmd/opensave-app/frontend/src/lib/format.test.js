@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { fmtSize, fmtTime, playLength, plural } from './format.js';
+import { locale } from './i18n.js';
+
+// The plural tests assert English wording; pin the language so the suite does
+// not depend on the machine it runs on.
+locale.set('en');
 
 describe('fmtSize', () => {
   it('shows bytes below a kilobyte, KB below a megabyte and MB from one', () => {

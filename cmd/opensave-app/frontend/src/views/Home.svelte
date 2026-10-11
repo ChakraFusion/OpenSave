@@ -14,6 +14,7 @@
   import PauseButton from '../components/PauseButton.svelte';
   import { setupState, setupSteps, decideSetupFor } from '../lib/setup.js';
   import { settings } from '../lib/stores.js';
+  import { t, segments } from '../lib/i18n.js';
   import ScanSearch from 'lucide-svelte/icons/scan-search';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
   import FolderPlus from 'lucide-svelte/icons/folder-plus';
@@ -49,7 +50,7 @@
       showAdd = true;
       return;
     }
-    const dir = await native.selectDirectory('Choose the save folder to track');
+    const dir = await native.selectDirectory($t('home.chooseFolderDialog'));
     if (dir) {
       addPath = dir;
       showAdd = true;
@@ -70,7 +71,7 @@
     for (const g of $gameList) {
       api.post(`/api/games/${g.id}/sync`).catch(() => {});
     }
-    toast('Sync triggered for all games');
+    toast($t('home.syncAllToast'));
   }
 
   // Where each game's save stands — the summary and the cards read the same
@@ -101,14 +102,14 @@
 </script>
 
 <div class="head">
-  <h2 class="page-title">Home</h2>
+  <h2 class="page-title">{$t('home.title')}</h2>
   <div class="head-actions">
-    <button class="btn primary" on:click={() => scanner.start()} disabled={scanning} title="Look for game saves on this device">
-      <ScanSearch size={16} />{scanning ? 'Scanning…' : 'Scan saves'}
+    <button class="btn primary" on:click={() => scanner.start()} disabled={scanning} title={$t('home.scanSavesTitle')}>
+      <ScanSearch size={16} />{scanning ? $t('home.scanning') : $t('home.scanSaves')}
     </button>
-    <button class="btn" on:click={syncAll} disabled={$gameList.length === 0 || $syncPause.paused} title={$syncPause.paused ? 'Syncing is paused' : ''}><RefreshCw size={15} />Sync all</button>
+    <button class="btn" on:click={syncAll} disabled={$gameList.length === 0 || $syncPause.paused} title={$syncPause.paused ? $t('home.syncPaused') : ''}><RefreshCw size={15} />{$t('home.syncAll')}</button>
     <PauseButton />
-    <button class="btn" on:click={trackFolder} title="Pick a save folder or file to track"><FolderPlus size={16} />Track folder</button>
+    <button class="btn" on:click={trackFolder} title={$t('home.trackFolderTitle')}><FolderPlus size={16} />{$t('home.trackFolder')}</button>
   </div>
 </div>
 
@@ -127,15 +128,19 @@
 {:else if $visibleGames.length === 0}
   <div class="welcome">
     <div class="welcome-icon"><Gamepad2 size={34} strokeWidth={1.6} /></div>
-    <h3>Welcome to OpenSave</h3>
-    <p>Keep your game saves in sync across every device — no accounts, no cloud lock-in. Start by finding your saves:</p>
+    <h3>{$t('home.welcome.title')}</h3>
+    <p>{$t('home.welcome.intro')}</p>
     <div class="welcome-actions">
       <button class="btn primary" on:click={() => scanner.start()} disabled={scanning}>
-        <ScanSearch size={16} />{scanning ? 'Scanning…' : 'Scan for saves'}
+        <ScanSearch size={16} />{scanning ? $t('home.scanning') : $t('home.welcome.scanForSaves')}
       </button>
-      <button class="btn" on:click={trackFolder}><FolderPlus size={16} />Track a folder manually</button>
+      <button class="btn" on:click={trackFolder}><FolderPlus size={16} />{$t('home.welcome.trackManually')}</button>
     </div>
-    <p class="welcome-hint">Then open <strong>Devices</strong> to pair another PC or Steam Deck, or <strong>Cloud Backup</strong> to mirror snapshots online.</p>
+    <p class="welcome-hint">
+      {#each segments($t('home.welcome.hint'), { devices: $t('home.devices'), cloud: $t('home.cloudBackup') }, ['devices', 'cloud']) as part}
+        {#if part.bold}<strong>{part.text}</strong>{:else}{part.text}{/if}
+      {/each}
+    </p>
   </div>
 {:else}
   {#if showGuide}
