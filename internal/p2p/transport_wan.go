@@ -39,6 +39,9 @@ func (t *wanTransport) FetchManifest(ctx context.Context, peer syncengine.Peer, 
 		Name: q.Name, SavePath: q.SavePath, IsFile: q.IsFile,
 		AppID: q.AppID, CoverURL: q.CoverURL,
 	}
+	// The peer holds its answer while a sync is writing the save, for up to
+	// ServeSettleWait, before it has the usual time to send it.
+	ctx = withReplyWait(ctx, wanRequestTimeout+syncengine.ServeSettleWait)
 	raw, err := t.wan.Request(ctx, peer.ID, "/manifest/"+gameID, "GET", body)
 	if err != nil {
 		return syncengine.ManifestResponse{}, err
@@ -62,14 +65,11 @@ func (t *wanTransport) FetchManifest(ctx context.Context, peer syncengine.Peer, 
 const slowLinkBytesPerSec = 128 << 10
 
 func (t *wanTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef, blockIndices []int, blockSize int) ([]syncengine.BlockData, error) {
-	// Give the request a deadline proportional to what it's actually moving,
-	// so a big batch on a poor connection isn't cut off mid-flight.
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline && blockSize > 0 {
+	// Give the reply time proportional to what it's actually moving, so a big
+	// batch on a poor connection isn't cut off mid-flight.
+	if blockSize > 0 {
 		expected := int64(len(blockIndices)) * int64(blockSize)
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx,
-			wanRequestTimeout+time.Duration(expected/slowLinkBytesPerSec)*time.Second)
-		defer cancel()
+		ctx = withReplyWait(ctx, wanRequestTimeout+time.Duration(expected/slowLinkBytesPerSec)*time.Second)
 	}
 
 	raw, err := t.wan.Request(ctx, peer.ID, "/blocks/"+ref.GameID, "POST", map[string]any{
