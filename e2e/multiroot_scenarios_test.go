@@ -1015,3 +1015,53 @@ func TestMultiRootScenario_ADeletionSurvivesALostReport(t *testing.T) {
 		t.Errorf("an untouched file on the peer changed: %q", got)
 	}
 }
+
+// The report that the peer took the location arrives, and the refresh it
+// starts in the background runs only after a file has been deleted here — a
+// moment's delay on a loaded machine. The refresh must not drop the deleted
+// file from the record of what both hold, or the next sync fetches it back.
+func TestMultiRootScenario_ADeletionSurvivesALateRefresh(t *testing.T) {
+	a, b, gameID, aConfig, bConfig := twoLocationPair(t, "LocLateRefresh", map[string]string{
+		"settings.ini": "fullscreen=1",
+		"keys.cfg":     "jump=space",
+	})
+	pauseAutoSync(t, a, b, gameID)
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		files, _, _ := a.Daemon.Store.GetSyncStateForRoot(gameID, b.NodeID(), "config")
+		for _, f := range files {
+			if f == "keys.cfg" {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("setup: A never recorded that B holds keys.cfg")
+	}
+
+	if err := os.Remove(filepath.Join(aConfig, "keys.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	var peer syncengine.Peer
+	for _, p := range a.Daemon.P2P.OnlinePeers() {
+		if p.ID == b.NodeID() {
+			peer = p
+		}
+	}
+	if peer.ID == "" {
+		t.Fatal("B is not online for A")
+	}
+	// The refresh the report started, running late.
+	a.Daemon.P2P.Sync.RefreshLineage(context.Background(), gameID, peer)
+
+	time.Sleep(syncSettleWindow)
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		return readIn(bConfig, "keys.cfg") == ""
+	}) {
+		t.Fatalf("the deletion never reached the peer: keys.cfg there=%q, here=%q",
+			readIn(bConfig, "keys.cfg"), readIn(aConfig, "keys.cfg"))
+	}
+	if got := readIn(aConfig, "keys.cfg"); got != "" {
+		t.Errorf("the deleted file came back here: %q", got)
+	}
+}

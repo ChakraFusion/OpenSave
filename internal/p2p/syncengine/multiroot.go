@@ -279,6 +279,22 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 
 func (e *Engine) persistRootLineage(gameID, peerID, root string, local, remote delta.Manifest) {
 	files, dirs := IntersectLineage(local, remote)
+	// As persistLineage does for the main folder: a path both held before
+	// that one side holds no longer is a deletion in flight, and its record is
+	// what lets the next sync send it on rather than fetch the file back. The
+	// refresh after a peer's report runs in the background, so a file deleted
+	// here before it ran dropped out of the record — and came back
+	// (TestMultiRootScenario_ADeletionSurvivesALateRefresh).
+	if oldFiles, oldDirs, err := e.Store.GetSyncStateForRoot(gameID, peerID, root); err == nil {
+		files = keepPendingDeletions(files, oldFiles, local.Files, remote.Files)
+		dirs = keepPendingDirDeletions(dirs, oldDirs, local.Dirs, remote.Dirs)
+	}
+	// And excluded paths stay out of it, as in the main folder: the refresh
+	// rebuilds this from unfiltered manifests.
+	if rules := e.rulesFor(gameID); !rules.Empty() {
+		files = filterPathList(files, rules)
+		dirs = filterPathList(dirs, rules)
+	}
 	if err := e.Store.SetSyncStateForRoot(gameID, peerID, root, files, dirs); err != nil {
 		e.Log("warn", fmt.Sprintf("persist lineage for the %q location failed: %v", root, err))
 	}
