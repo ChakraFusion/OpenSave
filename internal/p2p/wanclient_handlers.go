@@ -224,13 +224,24 @@ func (w *WanClient) trackPresence(msg RelayMessage) {
 	if err == nil {
 		wasOffline := peer.Status != "online"
 		changed := wasOffline || peer.Address != "relay"
+		now := time.Now().UnixMilli()
+		// Written when something changed, and otherwise only every few
+		// seconds, as the LAN does (routes.go). Every frame from the peer
+		// lands here — each block of a transfer, each heartbeat — on the one
+		// goroutine that reads the relay, and a synced write per frame held
+		// that reading up behind the disk. The relay drops frames for a
+		// client that falls behind, so a slow disk turned into lost replies.
+		due := changed || (msg.Port > 0 && msg.Port != peer.Port) ||
+			now-peer.LastSeenMs >= wanPresenceWriteEvery.Milliseconds()
 		peer.Status = "online"
 		peer.Address = "relay"
-		peer.LastSeenMs = time.Now().UnixMilli()
+		peer.LastSeenMs = now
 		if msg.Port > 0 {
 			peer.Port = msg.Port
 		}
-		_ = w.engine.Store.UpdatePeer(peer)
+		if due {
+			_ = w.engine.Store.UpdatePeer(peer)
+		}
 		if wasOffline {
 			w.engine.Log("info", fmt.Sprintf("peer %q came online via WAN; auto-syncing", peer.Name))
 			w.engine.GoSync(func(ctx context.Context) { w.engine.SyncAllGames(ctx) })
