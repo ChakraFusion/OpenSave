@@ -831,6 +831,12 @@ func (gw *gameWatch) eventRelevant(event fsnotify.Event) bool {
 	if strings.HasSuffix(name, ".opensave.tmp") {
 		return false
 	}
+	// A file the launcher rewrites on its own (Steam's remotecache.vdf, on
+	// every start) is not a save: it is never synced, so it does not wake the
+	// watcher either.
+	if delta.NeverSynced(name) {
+		return false
+	}
 	if gw.isFile {
 		return strings.EqualFold(
 			filepath.Clean(event.Name),
@@ -894,6 +900,14 @@ func (e *Engine) handleChangeFrom(ctx context.Context, gw *gameWatch, ownOnly bo
 		return
 	}
 	if ownOnly {
+		if err := e.cb.SetLastManifestHash(gw.gameID, currentHash); err != nil {
+			e.log("warn", fmt.Sprintf("failed to record manifest hash for %q: %v", gw.gameID, err))
+		}
+		return
+	}
+	// Recorded by a build that still counted launcher files: the same save in
+	// today's terms, re-taken once rather than snapshotted as a change.
+	if err == nil && lastHash != "" && lastHash == contentHashWithLauncherFiles(manifest, ignoreText) {
 		if err := e.cb.SetLastManifestHash(gw.gameID, currentHash); err != nil {
 			e.log("warn", fmt.Sprintf("failed to record manifest hash for %q: %v", gw.gameID, err))
 		}
@@ -1119,23 +1133,53 @@ func (e *Engine) log(level, msg string) {
 // against that recorded value, so it has to compute it this way — one
 // definition, or the question gets two answers.
 func ContentHash(m delta.Manifest, ignoreRules string) string {
+	rules := ignore.Parse(ignoreRules)
+	if rules.Empty() && !holdsLauncherFiles(m) {
+		return m.ContentHash()
+	}
+	return filterForHash(m, func(p string) bool {
+		return delta.NeverSynced(p) || (!rules.Empty() && rules.Match(p))
+	}).ContentHash()
+}
+
+// contentHashWithLauncherFiles is ContentHash as it was before launcher files
+// (delta.NeverSynced) were left out: the value recorded by an earlier build,
+// which handleChange recognises once and re-takes, so the update is not taken
+// for the save changing.
+func contentHashWithLauncherFiles(m delta.Manifest, ignoreRules string) string {
 	if rules := ignore.Parse(ignoreRules); !rules.Empty() {
-		m = filterForHash(m, rules)
+		return filterForHash(m, rules.Match).ContentHash()
 	}
 	return m.ContentHash()
 }
 
+func holdsLauncherFiles(m delta.Manifest) bool {
+	for p := range m.Files {
+		if delta.NeverSynced(p) {
+			return true
+		}
+	}
+	for _, root := range m.Extra {
+		for p := range root.Files {
+			if delta.NeverSynced(p) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // filterForHash drops excluded paths before the content hash is taken, so the
 // value recorded here means the same thing the sync engine means by it.
-func filterForHash(m delta.Manifest, rules ignore.Rules) delta.Manifest {
+func filterForHash(m delta.Manifest, leaveOut func(string) bool) delta.Manifest {
 	out := delta.Manifest{Files: make(map[string]delta.FileEntry, len(m.Files))}
 	for p, entry := range m.Files {
-		if !rules.Match(p) {
+		if !leaveOut(p) {
 			out.Files[p] = entry
 		}
 	}
 	for _, d := range m.Dirs {
-		if !rules.Match(d) {
+		if !leaveOut(d) {
 			out.Dirs = append(out.Dirs, d)
 		}
 	}
@@ -1144,12 +1188,12 @@ func filterForHash(m delta.Manifest, rules ignore.Rules) delta.Manifest {
 		for name, root := range m.Extra {
 			sub := delta.RootManifest{Files: make(map[string]delta.FileEntry, len(root.Files))}
 			for p, entry := range root.Files {
-				if !rules.Match(p) {
+				if !leaveOut(p) {
 					sub.Files[p] = entry
 				}
 			}
 			for _, d := range root.Dirs {
-				if !rules.Match(d) {
+				if !leaveOut(d) {
 					sub.Dirs = append(sub.Dirs, d)
 				}
 			}

@@ -516,10 +516,10 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// would propagate a deletion of the very file being protected.
 	ignoreRules := e.rulesFor(gameID)
 	unfilteredLocal, unfilteredRemote := localManifest, remoteData.Manifest
-	if !ignoreRules.Empty() {
-		localManifest = filterManifest(localManifest, ignoreRules)
-		remoteData.Manifest = filterManifest(remoteData.Manifest, ignoreRules)
-	}
+	// Filtered always, not only with rules: launcher files (delta.NeverSynced)
+	// are left out the same way.
+	localManifest = filterManifest(localManifest, ignoreRules)
+	remoteData.Manifest = filterManifest(remoteData.Manifest, ignoreRules)
 
 	// 3. Existing unresolved conflict blocks further syncing.
 	e.mu.Lock()
@@ -633,7 +633,7 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// side's UNFILTERED state still hashes to the base then that side has not
 	// changed since, whichever view the base was written in, and its filtered
 	// hash is the same fact expressed in today's terms.
-	if !ignoreRules.Empty() && agreedHash != "" {
+	if agreedHash != "" {
 		switch agreedHash {
 		case unfilteredLocal.ManifestHash():
 			agreedHash = localManifest.ManifestHash()
@@ -658,10 +658,8 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// path is still recorded as shared. Leave it there and the decision reads
 	// "we both had this and now I do not" — and propagates a deletion of the
 	// file the rule exists to protect.
-	if rules := e.rulesFor(gameID); !rules.Empty() {
-		lineageFiles = filterLineage(lineageFiles, rules)
-		lineageDirs = filterLineage(lineageDirs, rules)
-	}
+	lineageFiles = filterLineage(lineageFiles, ignoreRules)
+	lineageDirs = filterLineage(lineageDirs, ignoreRules)
 
 	// A side that is merely behind the other has not diverged from it, whatever
 	// the clocks and the base say (OnlyBehind).
@@ -685,11 +683,9 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// Excluded paths are filtered out for the same reason the lineage is: a
 	// rule change must never be able to reach across and remove a peer's file.
 	deleted := e.recordedDeletions(gameID, delta.PrimaryRoot)
-	if rules := e.rulesFor(gameID); !rules.Empty() {
-		for path := range deleted {
-			if rules.Match(path) {
-				delete(deleted, path)
-			}
+	for path := range deleted {
+		if excluded(ignoreRules, path) {
+			delete(deleted, path)
 		}
 	}
 	decision := ComputeWithDeletions(localManifest, remoteData.Manifest, lineageFiles, lineageDirs, agreedHash, deleted)
@@ -964,10 +960,9 @@ func (e *Engine) persistLineage(gameID, peerID string, local, remote delta.Manif
 	// RefreshLineage rebuilds this from unfiltered manifests, so without a
 	// filter here an excluded file would be written back in — and the next
 	// sync would read it as shared, then as deleted, and propagate that.
-	if rules := e.rulesFor(gameID); !rules.Empty() {
-		files = filterPathList(files, rules)
-		dirs = filterPathList(dirs, rules)
-	}
+	rules := e.rulesFor(gameID)
+	files = filterPathList(files, rules)
+	dirs = filterPathList(dirs, rules)
 	if err := e.Store.SetSyncState(gameID, peerID, files, dirs); err != nil {
 		e.Log("warn", fmt.Sprintf("persist sync lineage failed: %v", err))
 	}
@@ -1099,9 +1094,7 @@ func (e *Engine) AddConfirmedLineageForRoot(gameID, peerID, root string, files [
 	// Excluded paths must not enter the record of what both sides hold, for
 	// the same reason persistLineage filters them: the next sync would read an
 	// excluded file as shared, then as deleted, and propagate that.
-	if rules := e.rulesFor(gameID); !rules.Empty() {
-		merged = filterPathList(merged, rules)
-	}
+	merged = filterPathList(merged, e.rulesFor(gameID))
 	sort.Strings(merged)
 	if err := e.Store.SetSyncStateForRoot(gameID, peerID, root, merged, existingDirs); err != nil {
 		e.Log("warn", fmt.Sprintf("recording confirmed lineage failed: %v", err))
