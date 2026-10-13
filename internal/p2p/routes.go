@@ -924,6 +924,12 @@ func (e *Engine) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if peer, ok := e.peerByAddress(clientIP(r)); ok {
 			e.peerFinishedPulling(gameID, peer, body.Data)
 		}
+	case "agreed":
+		// The peer pulled from us and now holds exactly this state.
+		if peer, ok := e.peerByAddress(clientIP(r)); ok {
+			hash, _ := body.Data["manifestHash"].(string)
+			e.Sync.NotePeerHolds(e.localGameID(gameID), peer, hash)
+		}
 	case "in-sync":
 		// The peer verified both sides hold identical content; confirm on
 		// our side (hash re-check) before recording lineage + last-synced.
