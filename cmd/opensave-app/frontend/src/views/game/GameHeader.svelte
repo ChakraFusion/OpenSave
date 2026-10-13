@@ -10,6 +10,8 @@
   import { timeAgo } from '../../lib/timeago.js';
   import { playLength } from '../../lib/format.js';
   import { canLaunch } from '../../lib/gameactions.js';
+  import Spinner from '../../components/ui/Spinner.svelte';
+  import { restoreProgressText } from '../../lib/restoreprogress.js';
   import ArrowLeft from 'lucide-svelte/icons/arrow-left';
   import Play from 'lucide-svelte/icons/play';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
@@ -132,6 +134,9 @@
       branch <strong>{game.activeBranch}</strong>
       {#if activity?.state === 'running'}
         · <span class="syncing">syncing {activity.percentage ?? 0}%</span>
+      {/if}
+      {#if game.restoring}
+        · <span class="syncing"><Spinner size={11} /> {restoreProgressText(game.restoring)}</span>
       {/if}
       {#if game.playingSince}
         · <span class="playing">in session since {new Date(game.playingSince).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>

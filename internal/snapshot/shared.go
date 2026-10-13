@@ -140,6 +140,12 @@ var reading = struct {
 // with it. A missing snapshot is an error that matches fs.ErrNotExist; a
 // compacted one whose shared files are damaged, one that matches ErrDamaged.
 func OpenArchive(zipPath string) (path string, done func(), err error) {
+	return OpenArchiveProgress(zipPath, nil)
+}
+
+// OpenArchiveProgress is OpenArchive telling progress how far a rebuild of a
+// compacted archive has come.
+func OpenArchiveProgress(zipPath string, progress Progress) (path string, done func(), err error) {
 	reading.Lock()
 	if _, statErr := os.Stat(zipPath); statErr == nil {
 		reading.n[zipPath]++
@@ -165,7 +171,7 @@ func OpenArchive(zipPath string) (path string, done func(), err error) {
 		return "", func() {}, err
 	}
 	name := tmp.Name()
-	err = rebuild(zipPath, tmp)
+	err = rebuild(zipPath, tmp, progress)
 	if closeErr := tmp.Close(); err == nil {
 		err = closeErr
 	}
@@ -250,7 +256,7 @@ func validSum(s string) bool {
 }
 
 // rebuild writes a compacted snapshot's archive back out whole.
-func rebuild(zipPath string, out io.Writer) error {
+func rebuild(zipPath string, out io.Writer, progress Progress) error {
 	man, err := readManifest(manifestPath(zipPath))
 	if err != nil {
 		return err
@@ -265,7 +271,10 @@ func rebuild(zipPath string, out io.Writer) error {
 	}
 	w := zip.NewWriter(out)
 	next := 0
-	for _, e := range man.Entries {
+	for i, e := range man.Entries {
+		if progress != nil && i%500 == 0 {
+			progress(PhaseRebuilding, i, len(man.Entries))
+		}
 		if e.Blob != "" {
 			if err := copyShared(w, store, e); err != nil {
 				return err
@@ -279,6 +288,9 @@ func rebuild(zipPath string, out io.Writer) error {
 			return fmt.Errorf("%w: %s cannot be read: %v", ErrDamaged, e.Name, err)
 		}
 		next++
+	}
+	if progress != nil {
+		progress(PhaseRebuilding, len(man.Entries), len(man.Entries))
 	}
 	return w.Close()
 }
@@ -603,7 +615,7 @@ func sameArchive(zipPath string, orig *zip.ReadCloser) error {
 		return err
 	}
 	defer os.Remove(tmp.Name())
-	err = rebuild(zipPath, tmp)
+	err = rebuild(zipPath, tmp, nil)
 	if closeErr := tmp.Close(); err == nil {
 		err = closeErr
 	}

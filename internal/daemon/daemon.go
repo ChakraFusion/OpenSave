@@ -72,6 +72,9 @@ type Daemon struct {
 	relocateFor       map[string]string
 	relocateDismissed map[string]string
 
+	// Restores under way; see restoreprogress.go.
+	restoring restoreState
+
 	// Play sessions; see sessions.go.
 	sessions sessionState
 
@@ -171,6 +174,8 @@ func New(opts Options) (*Daemon, error) {
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
 	// may read it half-way (syncengine/settle.go).
 	snaps.WriteGate = d.P2P.Sync.Writing
+	// How far a restore has come, for the window (restoreprogress.go).
+	snaps.OnRestoreProgress = d.noteRestoreProgress
 
 	// A paired peer untracking/re-tracking a game mirrors here.
 	d.P2P.OnUntrackRequest = d.untrackFromPeer

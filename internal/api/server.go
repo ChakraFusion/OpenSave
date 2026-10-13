@@ -578,6 +578,8 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		"playingSince":       playingSince,
 		"playtimeMs":         play.PlaytimeMs,
 		"playSessions":       play.Sessions,
+		// A restore of it under way, and how far it has come.
+		"restoring": s.Daemon.RestoringNow(g.ID),
 		// Whether the game is installed on this device: "found", "not-found",
 		// or "" when there is no telling (daemon.InstallState). A game that is
 		// not here is one nobody plays here, which is why it shows no play.
