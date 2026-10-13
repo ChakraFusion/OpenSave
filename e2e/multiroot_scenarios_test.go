@@ -935,3 +935,52 @@ func TestIgnore_ExcludedFilesInExtraLocationsAreStillSnapshotted(t *testing.T) {
 			"rollback empties the folder first, so anything missing from the snapshot is destroyed", got)
 	}
 }
+
+// The same deletion when the peer's report that it took the location never
+// arrived: on a loaded machine it can time out ("could not tell ... that ...
+// is sync-complete: context deadline exceeded"), and then this device has no
+// record that the peer holds those files. It must still not take the deleted
+// file back from the peer as one it never had.
+func TestMultiRootScenario_ADeletionSurvivesALostReport(t *testing.T) {
+	a, b, gameID, aConfig, bConfig := twoLocationPair(t, "LocLostReport", map[string]string{
+		"settings.ini": "fullscreen=1",
+		"keys.cfg":     "jump=space",
+	})
+	pauseAutoSync(t, a, b, gameID)
+
+	// Where A stands when the report is lost: it handed the location over and
+	// recorded that, and nothing since says the peer took it.
+	pushed, err := delta.BuildManifest(aConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := a.Daemon.Store
+	if err := store.SetSyncStateForRoot(gameID, b.NodeID(), "config", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPushedHashForRoot(gameID, b.NodeID(), "config", pushed.RootHash(delta.PrimaryRoot)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(filepath.Join(aConfig, "keys.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(syncSettleWindow)
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		return readIn(bConfig, "keys.cfg") == ""
+	}) {
+		t.Fatalf("the deletion never reached the peer: keys.cfg there=%q, here=%q",
+			readIn(bConfig, "keys.cfg"), readIn(aConfig, "keys.cfg"))
+	}
+	if got := readIn(aConfig, "keys.cfg"); got != "" {
+		t.Errorf("the deleted file came back here: %q", got)
+	}
+	if got := readIn(bConfig, "settings.ini"); got != "fullscreen=1" {
+		t.Errorf("an untouched file on the peer changed: %q", got)
+	}
+}
