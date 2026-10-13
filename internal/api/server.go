@@ -571,10 +571,13 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		// lives on another device's D:\ or E:\, which is not a problem to
 		// warn about (daemon.SaveDriveMissing).
 		"saveDriveMissing": daemon.SaveFolderMissing(g.SavePath) && daemon.SaveDriveMissing(g.SavePath),
-		"lastPlayedAt":     lastPlayed,
-		"playingSince":     playingSince,
-		"playtimeMs":       play.PlaytimeMs,
-		"playSessions":     play.Sessions,
+		// The same folder found on another drive here, offered and not yet
+		// answered (daemon.RelocateSuggestion); "" when there is none.
+		"relocateSuggestion": s.Daemon.RelocateSuggestion(g.ID),
+		"lastPlayedAt":       lastPlayed,
+		"playingSince":       playingSince,
+		"playtimeMs":         play.PlaytimeMs,
+		"playSessions":       play.Sessions,
 		// Whether the game is installed on this device: "found", "not-found",
 		// or "" when there is no telling (daemon.InstallState). A game that is
 		// not here is one nobody plays here, which is why it shows no play.

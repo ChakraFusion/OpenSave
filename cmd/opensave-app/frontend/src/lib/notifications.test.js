@@ -62,3 +62,12 @@ describe('a save arriving', () => {
     expect(arrivalMessage({ ...ev, kind: 'sent' }, games, {}, t0)).toBeNull();
   });
 });
+
+describe('a missing save folder found on another drive', () => {
+  it('waits for a yes, whether or not the drive it was on exists', () => {
+    const w = waitingOnYou({ games: { ark: { id: 'ark', name: 'ARK', savePathMissing: true, saveDriveMissing: true, relocateSuggestion: 'E:\SteamLibrary\ARK', branches: {} } } });
+    const r = w.find((x) => x.id.startsWith('relocate:'));
+    expect(r?.title).toContain('E:\SteamLibrary\ARK');
+    expect(r?.go).toEqual({ view: 'game', params: { gameId: 'ark' } });
+  });
+});

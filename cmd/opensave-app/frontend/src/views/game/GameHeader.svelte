@@ -70,6 +70,26 @@
       answering = false;
     }
   }
+  // The save folder is missing here, and the same folder exists on another drive.
+  // It is offered, never switched to on its own: it could be an old copy.
+  let relocating = false;
+  async function answerRelocation(use) {
+    const found = game.relocateSuggestion;
+    relocating = true;
+    try {
+      if (use) {
+        await api.post(`/api/games/${game.id}/relocate`, { path: found });
+        toast(`${game.name} now uses ${found}`, 'success');
+      } else {
+        await api.post(`/api/games/${game.id}/relocate/dismiss`);
+        toast(`Not using ${found} for ${game.name}`, 'success');
+      }
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      relocating = false;
+    }
+  }
   // Reveal the save location in Explorer / Finder / the Linux file manager.
   // The bridge returns a message when it can't (e.g. the folder was deleted).
   async function openSaveFolder() {
@@ -215,6 +235,22 @@
   </div>
 {/if}
 
+{#if game.savePathMissing && game.relocateSuggestion && !editPath}
+  <!-- Offered, not taken: the same path on another drive can be an old
+       backup, and syncing from it would spread stale saves. -->
+  <div class="missing relocate" role="status">
+    <Info size={16} />
+    <div>
+      <strong>The same folder is at {game.relocateSuggestion}.</strong>
+      Is that where this game saves on this device? Only use it if it holds your current saves, not an old copy.
+      <div class="relocate-actions">
+        <button class="btn small primary" disabled={relocating} on:click={() => answerRelocation(true)}>Use this folder</button>
+        <button class="btn small ghost" disabled={relocating} on:click={() => answerRelocation(false)}>Not this one</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   .title-row {
     display: flex;
@@ -291,6 +327,11 @@
     background: rgba(var(--warn-rgb), 0.08);
     font-size: 0.84rem;
     color: var(--text-dim);
+  }
+  .relocate-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
   }
   .missing :global(svg) {
     flex-shrink: 0;

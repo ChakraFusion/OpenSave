@@ -65,6 +65,10 @@ type Daemon struct {
 	// relocateChecked is when each missing save folder was last looked for on
 	// another drive (missing.go).
 	relocateChecked map[string]time.Time
+	// relocateSuggested: the folder offered for a missing one, per game;
+	// relocateDismissed: the one answered "not this one" (missing.go).
+	relocateSuggested map[string]string
+	relocateDismissed map[string]string
 
 	// Play sessions; see sessions.go.
 	sessions sessionState

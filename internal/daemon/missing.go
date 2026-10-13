@@ -61,10 +61,14 @@ func SaveDriveMissing(savePath string) bool {
 // folder is simply "missing" though it is right there on another drive.
 //
 // So a missing folder is looked for at the identical path on every other drive
-// letter. Exactly one match is adopted for this device, and said once. None, or
-// more than one (which would be a guess), is said once too, and the search is
-// not repeated more often than relocateRecheck: it touches every drive, and the
-// minute-long watch reconcile asks about missing folders constantly.
+// letter. Exactly one match is offered, not adopted: the same path on another
+// drive can also be an old backup copy, and syncing from that would hand stale
+// saves to every device. The game shows the folder found and asks; the log says
+// so once, with the command that answers it (Daemon.AcceptRelocation,
+// DismissRelocation). None, or more than one (which would be a guess), is said
+// once too, and the search is not repeated more often than relocateRecheck: it
+// touches every drive, and the minute-long watch reconcile asks about missing
+// folders constantly.
 const relocateRecheck = time.Hour
 
 // relocateCandidates lists the folders at savePath's exact path under the other
@@ -90,14 +94,16 @@ func relocateCandidates(savePath string) []string {
 	return found
 }
 
-// relocateToOtherDrive switches a game whose save folder is missing to the same
-// path on another drive, when there is exactly one. Reports whether it did.
-func (d *Daemon) relocateToOtherDrive(gameID, name, savePath string) bool {
+// suggestOtherDrive looks for a missing save folder at the same path on the
+// other drive letters, and offers exactly one match (RelocateSuggestion) rather
+// than switching to it. Reports whether there is a suggestion now.
+func (d *Daemon) suggestOtherDrive(gameID, name, savePath string) bool {
 	d.missingMu.Lock()
 	last, checked := d.relocateChecked[gameID]
 	if checked && time.Since(last) < relocateRecheck {
+		_, suggested := d.relocateSuggested[gameID]
 		d.missingMu.Unlock()
-		return false
+		return suggested
 	}
 	if d.relocateChecked == nil {
 		d.relocateChecked = map[string]time.Time{}
@@ -124,37 +130,96 @@ func (d *Daemon) relocateToOtherDrive(gameID, name, savePath string) bool {
 		return false
 	}
 
-	newPath, err := d.ValidateSavePath(found[0])
+	d.missingMu.Lock()
+	defer d.missingMu.Unlock()
+	if strings.EqualFold(d.relocateDismissed[gameID], found[0]) {
+		return false // the user said this one is not it
+	}
+	if strings.EqualFold(d.relocateSuggested[gameID], found[0]) {
+		return true // offered already
+	}
+	if d.relocateSuggested == nil {
+		d.relocateSuggested = map[string]string{}
+	}
+	d.relocateSuggested[gameID] = found[0]
+	d.Log.Log("warn", fmt.Sprintf("the save folder of %q is not at %s, but the same folder exists at %s on this device. "+
+		"It is not used until you confirm it is the right one (it could be an old copy): open the game in OpenSave, "+
+		"or run `opensave relocate %s use` (or `dismiss`)",
+		name, logging.Quote(savePath), logging.Quote(found[0]), gameID))
+	return true
+}
+
+// RelocateSuggestion is the folder offered for a game whose save folder is
+// missing — the same path on another drive — or "" when there is none.
+func (d *Daemon) RelocateSuggestion(gameID string) string {
+	d.missingMu.Lock()
+	defer d.missingMu.Unlock()
+	return d.relocateSuggested[gameID]
+}
+
+// AcceptRelocation switches a game to the folder offered for it. path must be
+// the one offered, so an answer to an older question does not switch to a
+// folder nobody was shown.
+func (d *Daemon) AcceptRelocation(gameID, path string) error {
+	d.missingMu.Lock()
+	offered := d.relocateSuggested[gameID]
+	d.missingMu.Unlock()
+	if offered == "" || !strings.EqualFold(offered, path) {
+		return fmt.Errorf("no folder is offered for this game at %s", path)
+	}
+	newPath, err := d.ValidateSavePath(offered)
 	if err != nil {
-		d.Log.Log("warn", fmt.Sprintf("the save folder of %q exists at %s, but it cannot be used: %v", name, logging.Quote(found[0]), err))
-		return false
+		return fmt.Errorf("the folder at %s cannot be used: %w", offered, err)
 	}
 	game, err := d.Store.GetGame(gameID)
-	if err != nil || game.SavePath != savePath {
-		return false // changed meanwhile; the next reconcile sees the new path
+	if err != nil {
+		return err
 	}
+	old := game.SavePath
 	game.SavePath = newPath
 	if err := d.Store.UpdateGame(game); err != nil {
-		d.Log.Log("warn", fmt.Sprintf("could not switch %q to %s: %v", name, logging.Quote(newPath), err))
-		return false
+		return fmt.Errorf("could not switch %q to %s: %w", game.Name, newPath, err)
 	}
-	d.Log.Log("success", fmt.Sprintf("the save folder of %q was not at %s but is at %s on this device — using that",
-		name, logging.Quote(savePath), logging.Quote(newPath)))
 	d.missingMu.Lock()
+	delete(d.relocateSuggested, gameID)
 	delete(d.missing, gameID)
 	d.missingMu.Unlock()
+	d.Log.Log("success", fmt.Sprintf("the save folder of %q is now %s on this device, as confirmed (it was %s)",
+		game.Name, logging.Quote(newPath), logging.Quote(old)))
 	if d.OnGameChanged != nil {
 		d.OnGameChanged(gameID)
 	}
-	return true
+	return nil
+}
+
+// DismissRelocation answers the offer for a game with "not this one": that
+// folder is not offered again for it while OpenSave runs.
+func (d *Daemon) DismissRelocation(gameID string) error {
+	d.missingMu.Lock()
+	offered := d.relocateSuggested[gameID]
+	if offered == "" {
+		d.missingMu.Unlock()
+		return fmt.Errorf("no folder is offered for this game")
+	}
+	delete(d.relocateSuggested, gameID)
+	if d.relocateDismissed == nil {
+		d.relocateDismissed = map[string]string{}
+	}
+	d.relocateDismissed[gameID] = offered
+	d.missingMu.Unlock()
+	d.Log.Log("info", fmt.Sprintf("not using %s for %s, as answered; set the save folder with Edit if it is elsewhere",
+		logging.Quote(offered), gameID))
+	return nil
 }
 
 // noteMissing records whether a game's save folder is missing, and says so
 // once when that changes — not on every minute's check — so the log and the
 // screen follow the folder going and coming back.
 func (d *Daemon) noteMissing(gameID, name, savePath string, missing bool) {
-	if missing && d.relocateToOtherDrive(gameID, name, savePath) {
-		return // found under another drive letter and switched to it
+	if missing {
+		// Offered, not switched to: the game stays missing until someone says
+		// the folder found is the right one (suggestOtherDrive).
+		d.suggestOtherDrive(gameID, name, savePath)
 	}
 	d.missingMu.Lock()
 	was := d.missing[gameID]
@@ -165,6 +230,7 @@ func (d *Daemon) noteMissing(gameID, name, savePath string, missing bool) {
 		d.missing[gameID] = true
 	} else {
 		delete(d.missing, gameID)
+		delete(d.relocateSuggested, gameID) // back where it was: nothing to offer
 	}
 	d.missingMu.Unlock()
 	if was == missing {
