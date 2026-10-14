@@ -17,21 +17,17 @@ env:
 
 jobs:
   hunt:
-    name: ${{ matrix.kind }} ${{ matrix.rep }}
+    name: ${{ matrix.kind }} ${{ matrix.arm }} ${{ matrix.rep }}
     runs-on: windows-latest
     timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
-        kind: [daemon]
-        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
-        include:
-          - { kind: shard2, rep: 1 }
-          - { kind: shard2, rep: 2 }
-          - { kind: shard2, rep: 3 }
-          - { kind: shard2, rep: 4 }
-          - { kind: shard2, rep: 5 }
-          - { kind: shard2, rep: 6 }
+        # Round 4: A/B. The same shard 2, at the same time, with the
+        # migration fix (fix) and with the original store/db.go (nofix).
+        kind: [shard2]
+        arm: [fix, nofix]
+        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -40,6 +36,13 @@ jobs:
       - name: Stub embedded frontend assets
         shell: bash
         run: mkdir -p cmd/opensave-app/frontend/dist && echo stub > cmd/opensave-app/frontend/dist/.stub
+      - name: Arm ${{ matrix.arm }}
+        if: matrix.arm == 'nofix'
+        shell: bash
+        run: |
+          cp .github/hunt/db.go.nofix internal/store/db.go
+          rm internal/store/migrate_test.go
+          git diff --stat
       - name: Repeat ${{ matrix.kind }} (race detector)
         shell: bash
         env:
@@ -78,6 +81,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: hunt-${{ matrix.kind }}-${{ matrix.rep }}-${{ github.run_attempt }}
+          name: hunt-${{ matrix.kind }}-${{ matrix.arm }}-${{ matrix.rep }}-${{ github.run_attempt }}
           path: all.txt
           if-no-files-found: ignore
