@@ -116,7 +116,10 @@ func Run(args []string) int {
 		return 0
 	}
 
+	HuntWatchDump()
+	huntMark("runDaemon: daemon.New begin")
 	d, err := daemon.New(daemon.Options{})
+	huntMark(fmt.Sprintf("runDaemon: daemon.New end (err=%v)", err))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -220,7 +223,10 @@ func runDaemon(args []string) int {
 		}
 	}
 
+	HuntWatchDump()
+	huntMark("runDaemon: daemon.New begin")
 	d, err := daemon.New(daemon.Options{})
+	huntMark(fmt.Sprintf("runDaemon: daemon.New end (err=%v)", err))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
@@ -236,13 +242,16 @@ func runDaemon(args []string) int {
 		port = settings.Port
 	}
 
+	huntMark("runDaemon: d.Start begin")
 	if err := d.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
 	}
+	huntMark("runDaemon: d.Start end; server.Start begin")
 
 	server := api.New(d)
 	addr, err := server.Start(port)
+	huntMark(fmt.Sprintf("runDaemon: server.Start end (addr=%s err=%v)", addr, err))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		// A port clash here is nearly always a second OpenSave, and the raw

@@ -1,125 +1,37 @@
 name: CI
 
+# HUNT branch only: repeats the e2e tests that start a CLI daemon on Windows
+# with the race detector, to catch the rare "daemon never became ready".
+
 on:
   push:
-    branches: ["**"]
-  pull_request:
+    branches: ["ci/hunt-daemon-start"]
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "Minutes of repetition per job"
+        default: "45"
+
+env:
+  HUNT_MINUTES: ${{ github.event.inputs.minutes || '45' }}
 
 jobs:
-  # The Go suite covers none of the frontend, and the scan screen's real bugs
-  # have all been decisions rather than rendering — which folder of a game
-  # counts as the save, whether an already-tracked folder may be adopted into
-  # another. Those live in plain modules now so they can be checked in
-  # milliseconds. Its own job because it needs Node and nothing else, and
-  # finishing in seconds it should not wait behind a 30-minute race run.
-  frontend:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: cmd/opensave-app/frontend
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: npm ci
-      - run: npm test
-      # A frontend that does not compile is a broken build whatever the unit
-      # tests say.
-      - run: npm run build
-
-  # The Decky plugin is a separate codebase that ships in every release and
-  # can only be run on a Deck. Its backend's decisions — what a sync answer
-  # means, where the daemon is — are tested against a stand-in daemon here;
-  # the panel has to type-check and build. Its side of the wire is pinned in
-  # Go by TestDeckyPluginContract.
-  decky-plugin:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: opensave-decky-plugin
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - run: python -m unittest discover -s tests -v
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - run: npm ci --no-audit --no-fund
-      - run: npx tsc --noEmit -p .
-      - run: npm run build
-
-  tests:
-    runs-on: ${{ matrix.os }}
+  hunt:
+    name: ${{ matrix.kind }} ${{ matrix.rep }}
+    runs-on: windows-latest
+    timeout-minutes: 100
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.26"
-      # cmd/opensave-app embeds frontend/dist (built by wails); stub it so
-      # vet/test can compile the package without a frontend toolchain.
-      - name: Stub embedded frontend assets
-        shell: bash
-        run: mkdir -p cmd/opensave-app/frontend/dist && echo stub > cmd/opensave-app/frontend/dist/.stub
-      - name: Vet
-        run: go vet ./...
-      # Nothing else here compiles for macOS, which only the release build
-      # does. A call to a method defined only where there is a tray stopped
-      # the Mac app compiling for five weeks, found only when a release was
-      # about to be cut. Type-checking it for macOS catches that in a minute.
-      - name: Vet for macOS
-        if: matrix.os == 'ubuntu-latest'
-        env:
-          GOOS: darwin
-          GOARCH: arm64
-        run: go vet ./...
-      # -p 2 and a longer timeout because the e2e package now starts real
-      # daemons, binds real ports and spawns the CLI as a subprocess. Run at
-      # full package parallelism alongside everything else it saturates the
-      # runner, and the failures that produces look like real regressions:
-      # build steps failing in packages the change never touched. Reproduced
-      # locally — the same suite passes with -p 1 and fails without it.
-      # The e2e package took 1713s of the 1800s budget on Windows before this
-      # was raised — 95% of it, with a suite whose runtime moves with the
-      # runner. Adding ninety seconds of legitimate waiting to two tests took
-      # it to 1806s and the whole job failed on a six-second overrun, which
-      # says nothing about the change that caused it.
-      #
-      # 2700s is headroom rather than a target. If the suite ever approaches
-      # it the answer is a faster suite, not another raise: this is the second
-      # time the number has moved, and a timeout that only ever grows stops
-      # being a check on anything.
-      #
-      # It did approach it: the e2e package reached 2586s and then 2703s on
-      # Windows, and timed out mid-test with nothing wrong. That package now
-      # runs in the e2e job below, split three ways; everything else stays.
-      - name: Test (race detector)
-        shell: bash
-        run: go test $(go list ./... | grep -v '/e2e$') -race -p 2 -timeout 2700s
-
-  # The e2e package, split across three runners per system. Its tests start
-  # real daemons and run one after another in a single test binary, so the
-  # package has one timeout for all of them, and every feature adds to it.
-  # Split, each part runs in about a third of the time, well inside a budget
-  # smaller than the one the whole package had outgrown — so the timeout is
-  # still a check on how long the suite takes, and CI finishes sooner.
-  #
-  # Tests are assigned by name, round-robin over the sorted list of every
-  # `func Test` in e2e, so a new test lands in some shard without anyone
-  # listing it, and no test can be in two shards or none.
-  e2e:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        shard: [0, 1, 2]
+        kind: [daemon]
+        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+        include:
+          - { kind: shard2, rep: 1 }
+          - { kind: shard2, rep: 2 }
+          - { kind: shard2, rep: 3 }
+          - { kind: shard2, rep: 4 }
+          - { kind: shard2, rep: 5 }
+          - { kind: shard2, rep: 6 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -128,13 +40,44 @@ jobs:
       - name: Stub embedded frontend assets
         shell: bash
         run: mkdir -p cmd/opensave-app/frontend/dist && echo stub > cmd/opensave-app/frontend/dist/.stub
-      - name: E2E shard ${{ matrix.shard }} of 3 (race detector)
+      - name: Repeat ${{ matrix.kind }} (race detector)
         shell: bash
         env:
           LC_ALL: C
         run: |
-          names=$(grep -ho '^func Test[A-Za-z0-9_]*' e2e/*_test.go | sed 's/^func //' \
-            | grep -vx 'TestMain' | sort -u | awk -v n=3 -v i=${{ matrix.shard }} 'NR % n == i')
-          test -n "$names" || { echo "::error::shard ${{ matrix.shard }} has no tests"; exit 1; }
-          echo "$(echo "$names" | wc -l | tr -d ' ') tests in this shard"
-          go test ./e2e -race -timeout 1800s -run "^($(echo $names | tr ' ' '|'))\$"
+          if [ "${{ matrix.kind }}" = shard2 ]; then
+            # Same selection as upstream ci.yml, shard 2 of 3.
+            names=$(grep -ho '^func Test[A-Za-z0-9_]*' e2e/*_test.go | sed 's/^func //' \
+              | grep -vx 'TestMain' | sort -u | awk -v n=3 -v i=2 'NR % n == i')
+            count=1
+          else
+            # Every test that starts a CLI daemon process.
+            names=$(awk '/^func Test/{match($0,/Test[A-Za-z0-9_]*/); name=substr($0,RSTART,RLENGTH)} /startDaemon\(\)/ && name!="" {print name}' e2e/*_test.go \
+              | grep -vx 'TestMain' | sort -u)
+            count=10
+          fi
+          echo "$(echo "$names" | wc -l | tr -d ' ') tests, -count=$count per iteration, for $HUNT_MINUTES minutes"
+          pattern="^($(echo $names | tr ' ' '|'))\$"
+          end=$(( $(date +%s) + HUNT_MINUTES * 60 ))
+          i=0; status=0
+          while [ "$(date +%s)" -lt "$end" ]; do
+            i=$((i+1))
+            go test ./e2e -race -timeout 55m -count=$count -v -run "$pattern" > "out-$i.txt" 2>&1 || status=1
+            echo "iteration $i: $(grep -c '^--- PASS' out-$i.txt) pass, $(grep -c '^--- FAIL' out-$i.txt) fail, $(tail -1 out-$i.txt)"
+          done
+          cat out-*.txt > all.txt
+          echo "== totals over $i iterations =="
+          echo "PASS $(grep -c '^--- PASS' all.txt)  FAIL $(grep -c '^--- FAIL' all.txt)  RACE $(grep -c 'WARNING: DATA RACE' all.txt)"
+          echo "== per-test pass counts =="
+          grep -o '^--- PASS: Test[A-Za-z0-9_]*' all.txt | sort | uniq -c | sort -rn
+          echo "== slow daemon starts =="
+          grep -h 'HUNT slow daemon start' all.txt || echo none
+          echo "== failures (full output) =="
+          awk '/^=== RUN/{buf=""} {buf=buf $0 "\n"} /^--- FAIL/{print buf; buf=""} /^(panic:|FAIL\t|WARNING: DATA RACE)/{print}' all.txt
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hunt-${{ matrix.kind }}-${{ matrix.rep }}-${{ github.run_attempt }}
+          path: all.txt
+          if-no-files-found: ignore

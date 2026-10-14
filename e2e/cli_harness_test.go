@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -83,6 +84,8 @@ type cli struct {
 	// daemon is nil until startDaemon; commands that read the database
 	// directly work without one.
 	daemon *exec.Cmd
+	// daemonExited closes when the daemon process has exited (HUNT).
+	daemonExited chan struct{}
 }
 
 func newCLI(t *testing.T) *cli {
@@ -192,35 +195,144 @@ func (c *cli) mustFail(args ...string) string {
 // which is how the CLI finds it.
 func (c *cli) startDaemon() {
 	c.t.Helper()
+	t0 := time.Now()
 	cmd := exec.Command(cliBin, "daemon", "start", "--port", fmt.Sprint(c.port))
-	cmd.Env = c.env()
+	// HUNT: the daemon writes phase markers and dumps its stacks on request.
+	cmd.Env = append(c.env(), "OPENSAVE_HUNT="+c.home)
 	cmd.Dir = c.home
-	var log bytes.Buffer
-	cmd.Stdout = &log
-	cmd.Stderr = &log
+	log := &syncBuffer{}
+	cmd.Stdout = log
+	cmd.Stderr = log
 	if err := cmd.Start(); err != nil {
 		c.t.Fatalf("starting the daemon: %v", err)
 	}
+	started := time.Since(t0)
 	c.daemon = cmd
+	exited := make(chan struct{})
+	var waitErr error
+	var exitedAt time.Duration
+	go func() {
+		waitErr = cmd.Wait()
+		exitedAt = time.Since(t0)
+		close(exited)
+	}()
+	c.daemonExited = exited
 
 	addrFile := filepath.Join(c.home, ".opensave", "daemon.addr")
 	// What the wait last saw, for the failure message: whether the address
 	// was ever published, and what the last status check answered.
 	seen := "the address was never published"
+	var phases []string
+	published := false
+	statusRuns := 0
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if raw, err := os.ReadFile(addrFile); err == nil && strings.TrimSpace(string(raw)) != "" {
+			if !published {
+				published = true
+				phases = append(phases, fmt.Sprintf("addr published seen at +%v", time.Since(t0)))
+			}
 			// Published, but confirm it actually answers before returning.
+			s0 := time.Now()
 			out, code := c.run("daemon", "status")
+			statusRuns++
 			if code == 0 {
+				if d := time.Since(t0); d > 5*time.Second {
+					c.t.Logf("HUNT slow daemon start: ready after %v (start %v, %d status runs, %v)", d, started, statusRuns, phases)
+				}
 				return
 			}
+			phases = append(phases, fmt.Sprintf("status #%d exited %d after %v at +%v", statusRuns, code, time.Since(s0), time.Since(t0)))
 			seen = fmt.Sprintf("published as %s; `daemon status` last exited %d:\n%s",
 				strings.TrimSpace(string(raw)), code, out)
 		}
-		time.Sleep(150 * time.Millisecond)
+		select {
+		case <-exited:
+			phases = append(phases, fmt.Sprintf("daemon process exited at +%v: %v", exitedAt, waitErr))
+			deadline = time.Now() // nothing more to wait for
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
-	c.t.Fatalf("daemon never became ready on port %d (%s)\noutput:\n%s", c.port, seen, log.String())
+	c.t.Errorf("daemon never became ready on port %d (%s)\noutput:\n%s", c.port, seen, log.String())
+	c.huntReport(t0, started, phases, exited, &waitErr, &exitedAt, log)
+	c.t.FailNow()
+}
+
+// HUNT: everything that could explain a daemon that never became ready.
+func (c *cli) huntReport(t0 time.Time, started time.Duration, phases []string, exited chan struct{}, waitErr *error, exitedAt *time.Duration, log *syncBuffer) {
+	c.t.Logf("HUNT cmd.Start took %v; phases: %q", started, phases)
+	select {
+	case <-exited:
+		code := -1
+		if c.daemon.ProcessState != nil {
+			code = c.daemon.ProcessState.ExitCode()
+		}
+		c.t.Logf("HUNT daemon process EXITED at +%v, err=%v, exit code=%d (0x%x)", *exitedAt, *waitErr, code, uint32(code))
+	default:
+		c.t.Logf("HUNT daemon process still RUNNING at +%v (pid %d); requesting a stack dump", time.Since(t0), c.daemon.Process.Pid)
+		_ = os.WriteFile(filepath.Join(c.home, "dump.req"), []byte("x"), 0o666)
+		stacks := filepath.Join(c.home, fmt.Sprintf("stacks-%d.txt", c.daemon.Process.Pid))
+		for i := 0; i < 50; i++ {
+			if raw, err := os.ReadFile(stacks); err == nil && len(raw) > 0 {
+				time.Sleep(200 * time.Millisecond)
+				raw, _ = os.ReadFile(stacks)
+				c.t.Logf("HUNT ---- daemon goroutine dump ----\n%s", raw)
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if _, err := os.Stat(stacks); err != nil {
+			c.t.Logf("HUNT no stack dump within 5s (%v): dump goroutine never ran — the process may not have reached runDaemon", err)
+		}
+	}
+	c.t.Logf("HUNT output again after dump:\n%s", log.String())
+	// Who holds the port?
+	if l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", c.port)); err == nil {
+		l.Close()
+		c.t.Logf("HUNT port %d is free (0.0.0.0)", c.port)
+	} else {
+		c.t.Logf("HUNT port %d is taken: %v", c.port, err)
+	}
+	if runtime.GOOS == "windows" {
+		out, _ := exec.Command("netstat", "-ano").CombinedOutput()
+		var hits []string
+		for _, line := range strings.Split(string(out), "\n") {
+			if strings.Contains(line, fmt.Sprintf(":%d ", c.port)) {
+				hits = append(hits, strings.TrimSpace(line))
+			}
+		}
+		c.t.Logf("HUNT netstat for port %d:\n%s", c.port, strings.Join(hits, "\n"))
+		tl, _ := exec.Command("tasklist", "/FI", "IMAGENAME eq opensave.exe").CombinedOutput()
+		c.t.Logf("HUNT tasklist opensave.exe:\n%s", tl)
+	}
+	var listing []string
+	_ = filepath.Walk(c.home, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			listing = append(listing, fmt.Sprintf("%s: %v", p, err))
+			return nil
+		}
+		listing = append(listing, fmt.Sprintf("%s %d %s", info.ModTime().Format("15:04:05.000"), info.Size(), p))
+		return nil
+	})
+	c.t.Logf("HUNT home listing:\n%s", strings.Join(listing, "\n"))
+}
+
+// syncBuffer is a bytes.Buffer safe to read while the process writes it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func (c *cli) stopDaemon() {
@@ -229,12 +341,11 @@ func (c *cli) stopDaemon() {
 	}
 	// Ask nicely first so the database is closed cleanly, then make sure.
 	_, _ = c.run("daemon", "stop")
-	done := make(chan struct{})
-	go func() { _, _ = c.daemon.Process.Wait(); close(done) }()
 	select {
-	case <-done:
+	case <-c.daemonExited:
 	case <-time.After(10 * time.Second):
 		_ = c.daemon.Process.Kill()
+		<-c.daemonExited
 	}
 	c.daemon = nil
 }
