@@ -476,12 +476,14 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 				t.Fatal("setup: the two devices never recorded agreeing on the location")
 			}
 			testutil.SettleSync(t, gameID, a, b)
+			t.Logf("HUNT clearing the base at %s", time.Now().UTC().Format("15:04:05.000"))
 			if err := a.Daemon.Store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", ""); err != nil {
 				t.Fatal(err)
 			}
 
 			writeIn(t, aConfig, "settings.ini", "A-version")
 			writeIn(t, bConfig, "settings.ini", "B-version")
+			t.Logf("HUNT both edits written by %s", time.Now().UTC().Format("15:04:05.000"))
 			time.Sleep(syncSettleWindow)
 
 			// Now the report lands.
@@ -496,6 +498,9 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 			}
 			deliver(a, gameID, peer)
 
+			if pr, err := a.Daemon.Store.GetPeer(b.NodeID()); err == nil {
+				t.Logf("HUNT A's last-synced for B before the sync: %v", pr.LastSynced.String)
+			}
 			a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
 			if !testutil.WaitFor(45*time.Second, func() bool {
 				return len(a.Daemon.P2P.Sync.ActiveRootConflicts()) > 0

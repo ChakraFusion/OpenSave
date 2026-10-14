@@ -23,11 +23,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Round 4: A/B. The same shard 2, at the same time, with the
-        # migration fix (fix) and with the original store/db.go (nofix).
+        # Round 5: shard 2 under load, instrumented: when "last synced" is
+        # stamped, by whom, against the late-report test's edits.
         kind: [shard2]
-        arm: [fix, nofix]
-        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        arm: [fix]
+        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

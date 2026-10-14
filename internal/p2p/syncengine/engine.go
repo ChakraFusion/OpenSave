@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -394,6 +395,9 @@ func syncedNow() string { return time.Now().UTC().Format("2006-01-02T15:04:05.00
 // cannot disagree about when.
 func (e *Engine) recordSynced(gameID, peerID string) {
 	ts := syncedNow()
+	if pc, _, line, ok := runtime.Caller(1); ok { // HUNT
+		e.Log("info", fmt.Sprintf("HUNT stamp synced %s at %s by %s:%d", gameID, ts, runtime.FuncForPC(pc).Name(), line))
+	}
 	_ = e.Store.UpdatePeerLastSynced(peerID, ts)
 	_ = e.Store.UpdateGamePeerLastSynced(gameID, peerID, ts)
 }
@@ -1182,6 +1186,7 @@ func (e *Engine) ConfirmInSync(ctx context.Context, gameID string, peer Peer, cl
 // the lineage (making future local deletions of them propagate instead of
 // the file being pulled back).
 func (e *Engine) RefreshLineage(ctx context.Context, gameID string, peer Peer) {
+	e.Log("info", fmt.Sprintf("HUNT RefreshLineage %s start %s", gameID, syncedNow())) // HUNT
 	game, err := e.Store.GetGame(gameID)
 	if err != nil {
 		return
@@ -1200,8 +1205,10 @@ func (e *Engine) RefreshLineage(ctx context.Context, gameID string, peer Peer) {
 	if err != nil {
 		return
 	}
+	e.Log("info", fmt.Sprintf("HUNT RefreshLineage %s manifests read by %s", gameID, syncedNow())) // HUNT
 	e.persistLineage(gameID, peer.ID, local, remoteData.Manifest)
 	rootsAgree := e.refreshRootLineage(ctx, gameID, remoteData, peer)
+	e.Log("info", fmt.Sprintf("HUNT RefreshLineage %s roots agree=%v at %s", gameID, rootsAgree, syncedNow())) // HUNT
 	// Peer finished pulling: if both sides now hash identically, that's a
 	// verified convergence — ratchet the merge-base. It is also the moment
 	// the sync this side started actually finished, on both sides, checked
