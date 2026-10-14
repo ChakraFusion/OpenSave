@@ -798,7 +798,7 @@ func (d *Daemon) TrackGame(game store.Game) (store.Game, error) {
 	d.initialSnapshots.Add()
 	go func() {
 		defer d.initialSnapshots.Done()
-		if _, err := d.Snapshots.Create(game.ID, "Initial snapshot", true); err != nil {
+		if _, err := d.SnapshotWithBaseline(game.ID, "Initial snapshot", true); err != nil {
 			d.Log.Log("warn", fmt.Sprintf("initial snapshot for %q failed: %v", game.Name, err))
 		}
 		if _, err := d.Store.GetGame(game.ID); err != nil {

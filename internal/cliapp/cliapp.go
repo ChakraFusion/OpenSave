@@ -850,7 +850,7 @@ func cmdSnapshot(d *daemon.Daemon, args []string) int {
 	}
 	comment := strings.Join(words, " ")
 
-	snap, err := d.Snapshots.Create(args[0], comment, false)
+	snap, err := d.SnapshotWithBaseline(args[0], comment, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return 1
