@@ -393,7 +393,12 @@ func syncedNow() string { return time.Now().UTC().Format("2006-01-02T15:04:05.00
 // up to date with this save?" needs. The two are written together so they
 // cannot disagree about when.
 func (e *Engine) recordSynced(gameID, peerID string) {
-	ts := syncedNow()
+	e.recordSyncedAt(gameID, peerID, syncedNow())
+}
+
+// recordSyncedAt is recordSynced for a moment already past: when the two
+// devices were seen to agree, rather than when that was written down.
+func (e *Engine) recordSyncedAt(gameID, peerID, ts string) {
 	_ = e.Store.UpdatePeerLastSynced(peerID, ts)
 	_ = e.Store.UpdateGamePeerLastSynced(gameID, peerID, ts)
 }
@@ -1155,6 +1160,9 @@ func (e *Engine) ConfirmInSync(ctx context.Context, gameID string, peer Peer, cl
 	if err != nil {
 		return
 	}
+	// Stamped with the moment before this side is read, not after (see
+	// RefreshLineage).
+	observed := syncedNow()
 	// What is recorded here is what both devices hold, so it is read from a
 	// save no sync is writing (settle.go).
 	local, err := e.ReadManifest(ctx, gameID, game.SavePath)
@@ -1169,7 +1177,7 @@ func (e *Engine) ConfirmInSync(ctx context.Context, gameID string, peer Peer, cl
 	if claimedHash != "" && local.ManifestHash() == claimedHash && len(paths) == 0 {
 		e.persistLineage(gameID, peer.ID, local, local) // identical sides: lineage = our own paths
 		_ = e.Store.SetAgreedHash(gameID, peer.ID, claimedHash)
-		e.recordSynced(gameID, peer.ID)
+		e.recordSyncedAt(gameID, peer.ID, observed)
 		e.notifySyncConfirmed(gameID)
 		return
 	}
@@ -1186,6 +1194,16 @@ func (e *Engine) RefreshLineage(ctx context.Context, gameID string, peer Peer) {
 	if err != nil {
 		return
 	}
+	// The moment the agreement below is observed from: before either side is
+	// read. It is what a location with no merge base is judged against, and an
+	// edit made after it has to count as new. Taken when the reads were done
+	// instead, it landed after edits made while they were — a report handled
+	// on a busy device takes seconds (the manifest round trip, the settle
+	// wait) — and both devices' edits then read as older than the sync. One
+	// replaced the other with no conflict raised:
+	// TestMultiRootScenario_ALateReportDoesNotHideADivergence on Windows CI.
+	// An edit made before it is in the reads, so nothing is stamped then.
+	observed := syncedNow()
 	isFile, _ := delta.ResolveLocalSaveFilePath(game.SavePath)
 	remoteData, err := e.Transport.FetchManifest(ctx, peer, gameID, ManifestQuery{
 		Name: game.Name, SavePath: game.SavePath, IsFile: isFile,
@@ -1219,7 +1237,7 @@ func (e *Engine) RefreshLineage(ctx context.Context, gameID string, peer Peer) {
 	if local.ManifestHash() == remoteData.Manifest.ManifestHash() {
 		_ = e.Store.SetAgreedHash(gameID, peer.ID, local.ManifestHash())
 		if rootsAgree {
-			e.recordSynced(gameID, peer.ID)
+			e.recordSyncedAt(gameID, peer.ID, observed)
 			e.notifySyncConfirmed(gameID)
 		}
 	}
