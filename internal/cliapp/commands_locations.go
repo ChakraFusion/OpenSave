@@ -29,9 +29,11 @@ func cmdLocations(d *daemon.Daemon, args []string) int {
 		if err != nil {
 			return fail(asJSON, err)
 		}
+		oldRoots, _ := d.Store.GameRootPaths(gameID)
 		if err := d.Store.AddGameRoot(gameID, name, abs); err != nil {
 			return fail(asJSON, err)
 		}
+		d.LocationsChanged(gameID, oldRoots)
 		if asJSON {
 			return emitJSON(map[string]any{"game": gameID, "location": name, "path": abs})
 		}
@@ -44,9 +46,11 @@ func cmdLocations(d *daemon.Daemon, args []string) int {
 			fmt.Fprintln(os.Stderr, locationsUsage)
 			return 1
 		}
+		oldRoots, _ := d.Store.GameRootPaths(args[1])
 		if err := d.Store.RemoveGameRoot(args[1], args[2]); err != nil {
 			return fail(asJSON, err)
 		}
+		d.LocationsChanged(args[1], oldRoots)
 		if asJSON {
 			return emitJSON(map[string]any{"removed": args[2]})
 		}
