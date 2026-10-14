@@ -131,6 +131,40 @@ func exclusionsValue(text string) string {
 	return delta.NeverSyncedList + "\n--\n" + text
 }
 
+// ExclusionsChanged brings a game's version up to date after its own
+// exclusion rules were changed (oldIgnore is what game.SyncIgnore was), and
+// records that its hashes are now taken under the new list.
+//
+// The version's hash is re-taken in the new view when the save is unchanged
+// under the old one, as at a start after the device-settings list changed.
+// Without that, the version kept a hash under the old rules, which any later
+// hash reads as "the same save, measured differently" (sameSaveAs): a change
+// made after the rules changed was then taken into the version's hash by the
+// next sync instead of becoming a new version, and never reached another
+// device. An automatic snapshot taken straight after the rule change used to
+// hide this, by recording a version before the change came.
+func (d *Daemon) ExclusionsChanged(game store.Game, oldIgnore string) {
+	old := game
+	old.SyncIgnore = oldIgnore
+	oldText, newText := d.IgnoreText(old), d.IgnoreText(game)
+	if oldText == newText {
+		return
+	}
+	if d.P2P != nil && d.P2P.Sync != nil {
+		extra, err := d.Store.GameRootPaths(game.ID)
+		if err != nil {
+			extra = nil
+		}
+		delta.InvalidateRoot(game.SavePath)
+		if m, failures, err := delta.BuildMultiManifest(game.SavePath, extra); err == nil && len(failures) == 0 {
+			primary := m
+			primary.Extra = nil
+			d.P2P.Sync.AdoptExclusionView(game.ID, primary, oldText, false)
+		}
+	}
+	d.NoteExclusions(game)
+}
+
 // NoteExclusions records that a game's hashes are now taken under its
 // current exclusion list — after the rules were changed and the hashes
 // rebased by whoever changed them.

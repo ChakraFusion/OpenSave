@@ -41,7 +41,7 @@ func (d *Daemon) adoptAutoTracked(game store.Game) {
 			readDone, err := d.P2P.Sync.Reading(ctx, game.ID)
 			cancel()
 			if err == nil {
-				_, err = d.Snapshots.Create(game.ID, "Initial snapshot", true)
+				_, err = d.SnapshotWithBaseline(game.ID, "Initial snapshot", true)
 				readDone()
 			}
 			if err != nil {
