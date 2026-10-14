@@ -23,8 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Round 5: shard 2 under load, instrumented: when "last synced" is
-        # stamped, by whom, against the late-report test's edits.
+        # Round 6: shard 2 under load with the late-report test fix.
         kind: [shard2]
         arm: [fix]
         rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
@@ -76,7 +75,7 @@ jobs:
           echo "== slow daemon starts =="
           grep -h -A30 'HUNT slow daemon start' all.txt | grep -E 'HUNT slow|\[hunt ' || echo none
           echo "== failures (full output) =="
-          awk '/^=== RUN/{buf=""} {buf=buf $0 "\n"} /^--- FAIL/{print buf; buf=""} /^(panic:|FAIL\t|WARNING: DATA RACE)/{print}' all.txt
+          awk '/^=== RUN   [^\/]*$/{buf=""} {buf=buf $0 "\n"} /^--- FAIL/{print buf; buf=""} /^(panic:|FAIL\t|WARNING: DATA RACE)/{print}' all.txt
           exit $status
       - uses: actions/upload-artifact@v4
         if: always()
