@@ -28,7 +28,7 @@ func (d *Daemon) SnapshotAll(comment string) SnapshotAllResult {
 		return res
 	}
 	for _, g := range games {
-		if _, err := d.Snapshots.Create(g.ID, comment, false); err != nil {
+		if _, err := d.SnapshotWithBaseline(g.ID, comment, false); err != nil {
 			res.Failed = append(res.Failed, struct {
 				GameID string `json:"gameId"`
 				Name   string `json:"name"`
