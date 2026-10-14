@@ -25,9 +25,15 @@ import (
 // worst case is one snapshot too many, as before; never a change taken for the
 // baseline. (The watcher itself never writes a baseline for that reason — see
 // catchUpOne.)
+//
+// Recorded only if no other snapshot recorded one in the meantime. A newly
+// tracked game's first snapshot runs in the background; a snapshot taken by
+// hand meanwhile finished first, and the first one's older value then replaced
+// its newer one, and the watcher snapshotted the save again.
 func (d *Daemon) SnapshotWithBaseline(gameID, comment string, isSystemAuto bool) (store.Snapshot, error) {
-	before, hashErr := "", error(nil)
+	before, was, hashErr := "", "", error(nil)
 	if game, err := d.Store.GetGame(gameID); err == nil {
+		was = game.LastManifestHash
 		before, hashErr = d.currentContentHash(game)
 	} else {
 		hashErr = err
@@ -37,7 +43,7 @@ func (d *Daemon) SnapshotWithBaseline(gameID, comment string, isSystemAuto bool)
 		return snap, err
 	}
 	if hashErr == nil {
-		_ = d.Store.SetLastManifestHash(snap.GameID, before)
+		_, _ = d.Store.SetLastManifestHashIf(snap.GameID, was, before)
 	}
 	return snap, nil
 }

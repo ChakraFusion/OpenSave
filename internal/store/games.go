@@ -177,6 +177,19 @@ func (s *Store) SetLastManifestHash(gameID, hash string) error {
 	return checkRowAffected(res)
 }
 
+// SetLastManifestHashIf records hash only while the recorded value is still
+// was: a hash taken before a snapshot must not replace one a later snapshot
+// recorded in the meantime. Reports whether it was recorded.
+func (s *Store) SetLastManifestHashIf(gameID, was, hash string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE games SET last_manifest_hash = ? WHERE id = ? AND COALESCE(last_manifest_hash, '') = ?`,
+		hash, gameID, was)
+	if err != nil {
+		return false, fmt.Errorf("set last manifest hash %s: %w", gameID, err)
+	}
+	n, err := res.RowsAffected()
+	return err == nil && n > 0, err
+}
+
 // RenameGameIf renames a game only while it still has the name from: a name
 // given automatically must never replace one the person typed in between.
 // Reports whether it was renamed.
