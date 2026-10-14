@@ -178,8 +178,28 @@ func NewTestDaemon(t *testing.T, name string) *TestDaemon {
 	t.Cleanup(func() {
 		srv.Stop()
 		d.Stop()
+		td.logIfFailed(name)
 	})
 	return td
+}
+
+// logIfFailed prints this daemon's log when its test has failed.
+//
+// A timing failure in CI arrives as one line — "offers = []", "no conflict
+// raised" — with nothing to say what the daemons did, and it rarely happens
+// twice in a row: one seen on Windows CI took 150 runs to see again. The
+// daemon already logs every step; this puts that record next to every
+// failure, rather than only beside the tests that asked for it. Called once
+// the daemon has stopped, so its shutdown is in it too; the name is passed in
+// because Name reads it from a database that is closed by then.
+func (td *TestDaemon) logIfFailed(name string) {
+	if !td.T.Failed() {
+		return
+	}
+	td.T.Logf("---- log of %s ----", name)
+	for _, e := range td.Daemon.Log.History() {
+		td.T.Logf("%s %-7s %s", e.Timestamp, e.Level, e.Message)
+	}
 }
 
 // API performs a JSON request against this daemon's API and decodes the

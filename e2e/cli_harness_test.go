@@ -97,9 +97,30 @@ func newCLI(t *testing.T) *cli {
 	c := &cli{t: t, home: home, port: freePort(t)}
 	t.Cleanup(func() {
 		c.stopDaemon()
+		c.logIfFailed()
 		_ = os.RemoveAll(home)
 	})
 	return c
+}
+
+// logIfFailed prints the log the daemon processes of a failed test wrote,
+// before their home is removed with it. The daemon runs in a process of its
+// own here, so its log is the file, not anything in this one: without it, a
+// daemon that never became ready on CI said nothing about why.
+func (c *cli) logIfFailed() {
+	if !c.t.Failed() {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(c.home, ".opensave", "opensave.log"))
+	if err != nil {
+		c.t.Logf("---- no daemon log: %v ----", err)
+		return
+	}
+	const keep = 16 << 10 // the end is what explains a failure
+	if len(raw) > keep {
+		raw = raw[len(raw)-keep:]
+	}
+	c.t.Logf("---- daemon log ----\n%s", raw)
 }
 
 func freePort(t *testing.T) int {
@@ -183,17 +204,23 @@ func (c *cli) startDaemon() {
 	c.daemon = cmd
 
 	addrFile := filepath.Join(c.home, ".opensave", "daemon.addr")
+	// What the wait last saw, for the failure message: whether the address
+	// was ever published, and what the last status check answered.
+	seen := "the address was never published"
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if raw, err := os.ReadFile(addrFile); err == nil && strings.TrimSpace(string(raw)) != "" {
 			// Published, but confirm it actually answers before returning.
-			if _, code := c.run("daemon", "status"); code == 0 {
+			out, code := c.run("daemon", "status")
+			if code == 0 {
 				return
 			}
+			seen = fmt.Sprintf("published as %s; `daemon status` last exited %d:\n%s",
+				strings.TrimSpace(string(raw)), code, out)
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	c.t.Fatalf("daemon never became ready on port %d:\n%s", c.port, log.String())
+	c.t.Fatalf("daemon never became ready on port %d (%s)\noutput:\n%s", c.port, seen, log.String())
 }
 
 func (c *cli) stopDaemon() {
