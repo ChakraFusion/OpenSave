@@ -238,7 +238,7 @@ func (c *cli) startDaemon() {
 			statusRuns++
 			if code == 0 {
 				if d := time.Since(t0); d > 5*time.Second {
-					c.t.Logf("HUNT slow daemon start: ready after %v (start %v, %d status runs, %v)", d, started, statusRuns, phases)
+					c.t.Logf("HUNT slow daemon start: ready after %v (cmd.Start at %s took %v, %d status runs, %v)\n%s", d, t0.Format("15:04:05.000"), started, statusRuns, phases, log.String())
 				}
 				return
 			}

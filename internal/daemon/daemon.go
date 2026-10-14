@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/opensave/opensave/internal/huntmark"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -119,9 +120,11 @@ func New(opts Options) (*Daemon, error) {
 	// Mirror the activity log to disk from the very first step so failures
 	// that never reach the dashboard (boot problems, unreachable API) stay
 	// diagnosable — the dashboard only exists once boot succeeds.
+	huntmark.Mark("New: begin")
 	log := logging.New()
 	log.AttachFile(filepath.Join(paths.HomeDir, "opensave.log"))
 	log.Log("info", "daemon starting (data dir: "+paths.HomeDir+")")
+	huntmark.Mark("New: log attached")
 	fail := func(err error) (*Daemon, error) {
 		log.Log("error", "daemon boot failed: "+err.Error())
 		log.Close()
@@ -134,15 +137,18 @@ func New(opts Options) (*Daemon, error) {
 		}
 	}
 
+	huntmark.Mark("New: store.Open begin")
 	s, err := store.Open(paths.SQLiteDB)
 	if err != nil {
 		return fail(fmt.Errorf("open store: %w", err))
 	}
+	huntmark.Mark("New: store.Open end")
 	if err := s.EnsureDefaultSettings(paths.HomeDir, paths.BackupsDir); err != nil {
 		s.Close()
 		return fail(fmt.Errorf("initialize settings: %w", err))
 	}
 
+	huntmark.Mark("New: settings ensured")
 	snaps := snapshot.New(s)
 	snaps.Log = log.Log
 
@@ -157,6 +163,7 @@ func New(opts Options) (*Daemon, error) {
 		opts:      opts,
 	}
 
+	huntmark.Mark("New: engines built")
 	d.initSessions()
 
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
@@ -209,6 +216,7 @@ func New(opts Options) (*Daemon, error) {
 	snaps.OnCreated = d.noteSnapshotForCloud
 	snaps.OnRestored = d.noteRestoreForCloud
 
+	huntmark.Mark("New: watcher begin")
 	d.Watcher = watcher.New(watcher.Callbacks{
 		IgnoreRules: func(gameID string) string {
 			game, err := s.GetGame(gameID)
@@ -258,6 +266,7 @@ func (d *Daemon) Start() error {
 	// Deletion records expire. Swept once per launch rather than on a timer:
 	// the retention is measured in months, so anything finer is noise, and a
 	// stale record is what lets a long-deleted file come back.
+	huntmark.Mark("Start: begin")
 	if err := d.Store.PruneDeletedFiles(); err != nil {
 		d.Log.Log("warn", "could not expire old deletion records: "+err.Error())
 	}
@@ -268,12 +277,14 @@ func (d *Daemon) Start() error {
 	}
 	// Switch games tracked under a made-up name get their real one, when an
 	// emulator here knows it by now.
+	huntmark.Mark("Start: nameSwitchGames begin")
 	d.nameSwitchGames()
 
 	// Size the manifest hash cache to the library. A fixed budget is either
 	// wasteful for someone with ten games or too small for someone with three
 	// hundred — and too small is the expensive direction, because the cache
 	// then evicts entries it is about to want and starts re-reading saves.
+	huntmark.Mark("Start: nameSwitchGames end")
 	delta.SetHashCacheBudgetForGames(len(games))
 
 	for _, game := range games {
@@ -296,6 +307,7 @@ func (d *Daemon) Start() error {
 			d.Log.Log("warn", fmt.Sprintf("could not watch %q: %v", game.Name, err))
 		}
 	}
+	huntmark.Mark("Start: watches started")
 	if !d.opts.DisableDiscovery {
 		if err := d.P2P.StartDiscovery(); err != nil {
 			d.Log.Log("warn", fmt.Sprintf("LAN discovery unavailable: %v", err))
@@ -304,12 +316,15 @@ func (d *Daemon) Start() error {
 
 	// Failsafe: automatically retry any game whose sync gets interrupted
 	// (e.g. the network drops mid-transfer) once peers are reachable again.
+	huntmark.Mark("Start: discovery started")
 	d.P2P.StartResyncLoop()
 
 	// Join the WAN relay room if a sync code is configured (no-op without one).
+	huntmark.Mark("Start: wan connect begin")
 	d.P2P.Wan.Connect()
 
 	// Host an in-process relay if enabled.
+	huntmark.Mark("Start: relay hosting begin")
 	if settings, err := d.Store.GetSettings(); err == nil {
 		d.P2P.ApplyRelayHosting(settings.HostRelay, settings.RelayPort)
 	}

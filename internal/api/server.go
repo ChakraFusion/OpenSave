@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/opensave/opensave/internal/huntmark"
 	"net"
 	"net/http"
 	"os"
@@ -224,10 +225,12 @@ func (s *Server) Start(port int) (string, error) {
 	s.Daemon.P2P.OnGamesUpdate = s.BroadcastGamesUpdate
 	s.wireSyncProgress()
 
+	huntmark.Mark("server: listen begin")
 	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
 	if err != nil {
 		return "", fmt.Errorf("listen: %w", err)
 	}
+	huntmark.Mark("server: listen end")
 	s.listener = ln
 	s.httpServer = &http.Server{Handler: r}
 
@@ -236,13 +239,16 @@ func (s *Server) Start(port int) (string, error) {
 			s.Daemon.Log.Log("error", fmt.Sprintf("api server: %v", err))
 		}
 	}()
+	huntmark.Mark("server: loopback check begin")
 	if err := s.answersLoopback(ln.Addr()); err != nil {
 		_ = s.httpServer.Close()
 		s.httpServer, s.listener = nil, nil
 		s.Daemon.Log.Log("warn", err.Error())
 		return "", err
 	}
+	huntmark.Mark("server: loopback check end")
 	s.writeAddrFile(ln.Addr().String())
+	huntmark.Mark("server: addr written")
 	s.recordBoundPort(ln.Addr().String())
 	return ln.Addr().String(), nil
 }

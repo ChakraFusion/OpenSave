@@ -6,6 +6,7 @@ package cliapp
 
 import (
 	"fmt"
+	"github.com/opensave/opensave/internal/huntmark"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,13 +17,7 @@ var huntStart = time.Now()
 
 // huntMark writes a timestamped phase marker to stderr, which the harness
 // captures, so a slow or stuck phase is visible even when the log is empty.
-func huntMark(phase string) {
-	if os.Getenv("OPENSAVE_HUNT") == "" {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "[hunt %s +%dms pid=%d] %s\n",
-		time.Now().Format("15:04:05.000"), time.Since(huntStart).Milliseconds(), os.Getpid(), phase)
-}
+func huntMark(phase string) { huntmark.Mark(phase) }
 
 // HuntWatchDump writes every goroutine's stack to <dir>/stacks-<pid>.txt each
 // time <dir>/dump.req appears (it is removed after), so the harness can see
