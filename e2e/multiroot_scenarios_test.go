@@ -483,6 +483,14 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 			if err := a.Daemon.Store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", ""); err != nil {
 				t.Fatal(err)
 			}
+			// With no base, the edits are judged against when the two were
+			// last confirmed the same, and only one made more than the 2 s
+			// clock-skew allowance after it counts as new (DetectConflict). A
+			// refresh the setup's own reports started can stamp that time
+			// after SettleSync returns; edits made in the next two seconds
+			// then read as neither side having changed, and the test failed on
+			// its own timing (Windows CI: stamped 1.8 s before the edits).
+			waitPastLastSynced(t, a, b.NodeID())
 
 			writeIn(t, aConfig, "settings.ini", "A-version")
 			writeIn(t, bConfig, "settings.ini", "B-version")
@@ -515,6 +523,32 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// waitPastLastSynced waits until a's "last synced" time for the peer has
+// stopped moving and lies further back than the clock-skew allowance a
+// location without a merge base is judged with (syncengine's
+// clockSkewToleranceMs, 2 s), so an edit made after it counts as new.
+func waitPastLastSynced(t *testing.T, a *testutil.TestDaemon, peerID string) {
+	t.Helper()
+	const past = 3 * time.Second // the 2 s allowance, and a margin
+	stamp := func() string {
+		p, err := a.Daemon.Store.GetPeer(peerID)
+		if err != nil || !p.LastSynced.Valid {
+			return ""
+		}
+		return p.LastSynced.String
+	}
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		s := stamp()
+		at, err := time.Parse("2006-01-02T15:04:05.000Z", s)
+		if s == "" || (err == nil && time.Since(at) > past) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("the last-synced time kept moving: %s", stamp())
 }
 
 // The location's own TestStaleBase_OneSidedEditDoesNotConflict. A report that
