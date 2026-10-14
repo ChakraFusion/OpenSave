@@ -29,22 +29,10 @@ type Store struct {
 // Open creates (if needed) and opens the SQLite database at path, applying
 // any migrations that haven't run yet.
 func Open(path string) (*Store, error) {
-	// _pragma params ensure foreign keys are enforced (SQLite defaults them
-	// off per-connection) and busy_timeout avoids spurious SQLITE_BUSY
-	// errors from the watcher/api/p2p goroutines all touching the DB.
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", path)
-	db, err := sqlx.Open("sqlite", dsn)
+	db, err := openDB(path)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite database: %w", err)
+		return nil, err
 	}
-	db.SetMaxOpenConns(1) // modernc.org/sqlite + a single file: avoid concurrent-writer lock contention
-
-	// Tolerate columns the struct doesn't know about. Queries here use
-	// SELECT *, so without this a database written by a NEWER build hard-fails
-	// an older one ("missing destination name <col>") and the app won't start
-	// at all — a downgrade, or just testing a beta and going back, bricks it.
-	// Ignoring unmapped columns makes the schema forward-compatible instead.
-	db = db.Unsafe()
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
@@ -60,6 +48,26 @@ func Open(path string) (*Store, error) {
 	restrictToOwner(path + "-wal")
 	restrictToOwner(path + "-shm")
 	return s, nil
+}
+
+// openDB opens the SQLite connection Open builds a Store on.
+func openDB(path string) (*sqlx.DB, error) {
+	// _pragma params ensure foreign keys are enforced (SQLite defaults them
+	// off per-connection) and busy_timeout avoids spurious SQLITE_BUSY
+	// errors from the watcher/api/p2p goroutines all touching the DB.
+	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", path)
+	db, err := sqlx.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite database: %w", err)
+	}
+	db.SetMaxOpenConns(1) // modernc.org/sqlite + a single file: avoid concurrent-writer lock contention
+
+	// Tolerate columns the struct doesn't know about. Queries here use
+	// SELECT *, so without this a database written by a NEWER build hard-fails
+	// an older one ("missing destination name <col>") and the app won't start
+	// at all — a downgrade, or just testing a beta and going back, bricks it.
+	// Ignoring unmapped columns makes the schema forward-compatible instead.
+	return db.Unsafe(), nil
 }
 
 // restrictToOwner sets a file to 0600 where mode bits are the access control.
@@ -78,52 +86,74 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-func (s *Store) migrate() error {
-	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)`); err != nil {
-		return fmt.Errorf("create schema_migrations table: %w", err)
-	}
+// migration is one embedded schema step, applied in name order.
+type migration struct {
+	name string
+	sql  string
+}
 
+func (s *Store) migrate() error {
 	entries, err := fs.ReadDir(migrationsFS, "migrations")
 	if err != nil {
 		return fmt.Errorf("read embedded migrations: %w", err)
 	}
-	var names []string
+	var migrations []migration
 	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		var applied int
-		if err := s.db.Get(&applied, `SELECT COUNT(*) FROM schema_migrations WHERE name = ?`, name); err != nil {
-			return fmt.Errorf("check migration %s: %w", name, err)
-		}
-		if applied > 0 {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
 			continue
 		}
-
-		sqlBytes, err := migrationsFS.ReadFile("migrations/" + name)
+		sqlBytes, err := migrationsFS.ReadFile("migrations/" + e.Name())
 		if err != nil {
-			return fmt.Errorf("read migration %s: %w", name, err)
+			return fmt.Errorf("read migration %s: %w", e.Name(), err)
 		}
+		migrations = append(migrations, migration{name: e.Name(), sql: string(sqlBytes)})
+	}
+	sort.Slice(migrations, func(i, j int) bool { return migrations[i].name < migrations[j].name })
+	return s.applyMigrations(migrations)
+}
 
-		tx, err := s.db.Beginx()
-		if err != nil {
-			return fmt.Errorf("begin migration tx %s: %w", name, err)
+// applyMigrations applies the migrations not yet recorded, all in one
+// transaction.
+//
+// One, not one per migration: every commit flushes the journal and the
+// database to disk, and a new database has every migration to apply. Committed
+// one by one that was some 150 flushes before the daemon could start, which a
+// busy Windows disk took over thirty seconds to do — past the time the CLI and
+// the tests give a daemon to come up. In one transaction it is a single
+// commit, and a failed step leaves the schema as it was rather than half
+// upgraded.
+func (s *Store) applyMigrations(migrations []migration) error {
+	tx, err := s.db.Beginx()
+	if err != nil {
+		return fmt.Errorf("begin migrations: %w", err)
+	}
+	defer tx.Rollback() // a no-op once committed
+
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY)`); err != nil {
+		return fmt.Errorf("create schema_migrations table: %w", err)
+	}
+	var names []string
+	if err := tx.Select(&names, `SELECT name FROM schema_migrations`); err != nil {
+		return fmt.Errorf("read applied migrations: %w", err)
+	}
+	applied := make(map[string]bool, len(names))
+	for _, name := range names {
+		applied[name] = true
+	}
+
+	for _, m := range migrations {
+		if applied[m.name] {
+			continue
 		}
-		if _, err := tx.Exec(string(sqlBytes)); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("apply migration %s: %w", name, err)
+		if _, err := tx.Exec(m.sql); err != nil {
+			return fmt.Errorf("apply migration %s: %w", m.name, err)
 		}
-		if _, err := tx.Exec(`INSERT INTO schema_migrations (name) VALUES (?)`, name); err != nil {
-			tx.Rollback()
-			return fmt.Errorf("record migration %s: %w", name, err)
+		if _, err := tx.Exec(`INSERT INTO schema_migrations (name) VALUES (?)`, m.name); err != nil {
+			return fmt.Errorf("record migration %s: %w", m.name, err)
 		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit migration %s: %w", name, err)
-		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migrations: %w", err)
 	}
 	return nil
 }
