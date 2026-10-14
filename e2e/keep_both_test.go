@@ -82,7 +82,6 @@ func branchHolds(t *testing.T, st branchState, branch, rel string) string {
 func conflictOnBoth(t *testing.T, name string) (a, b *testutil.TestDaemon, gameID string) {
 	t.Helper()
 	a, b, gameID = pairAndTrack(t, name, map[string]string{"slot1.sav": "shared", "profile.sav": "p"})
-	logOnFailure(t, a, b)
 	time.Sleep(syncSettleWindow)
 	a.WriteSave("slot1.sav", "A-version")
 	b.WriteSave("slot1.sav", "B-version")
@@ -194,7 +193,6 @@ func TestKeepBoth_OnBothDevicesEmptiesNeither(t *testing.T) {
 // device it was following. Following must fetch them instead.
 func TestBranchFollow_FetchesTheOtherDevicesSaveNotDeletesIt(t *testing.T) {
 	a, b, gameID := pairAndTrack(t, "Follow", map[string]string{"slot1.sav": "main-save", "profile.sav": "main-profile"})
-	logOnFailure(t, a, b)
 	time.Sleep(syncSettleWindow)
 
 	// A starts a fresh run on a new branch. Its own syncs are kept quiet, so

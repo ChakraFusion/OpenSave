@@ -137,7 +137,6 @@ func TestCrossingSyncs_AFirstPullIsNotTakenForADifferentSave(t *testing.T) {
 		t.Run(fmt.Sprintf("gap=%v", gap), func(t *testing.T) {
 			a := testutil.NewTestDaemon(t, "Crossing-A")
 			b := testutil.NewTestDaemon(t, "Crossing-B")
-			logOnFailure(t, a, b)
 			a.PairWith(b)
 			files := manySaveFiles(121, "v1")
 			for rel, c := range files {
@@ -171,7 +170,6 @@ func TestCrossingSyncs_AnUpdateTakenPartWayIsNotAConflict(t *testing.T) {
 		t.Run(fmt.Sprintf("gap=%v", gap), func(t *testing.T) {
 			a := testutil.NewTestDaemon(t, "Update-A")
 			b := testutil.NewTestDaemon(t, "Update-B")
-			logOnFailure(t, a, b)
 			a.PairWith(b)
 			v1 := manySaveFiles(121, "v1")
 			for rel, c := range v1 {
@@ -259,7 +257,6 @@ func TestCrossingSyncs_ADeviceStillWritingIsAskedAgain(t *testing.T) {
 func TestCrossingSyncs_APullOfAHalfWrittenSaveIsNotAConflict(t *testing.T) {
 	a := testutil.NewTestDaemon(t, "Half-A")
 	b := testutil.NewTestDaemon(t, "Half-B")
-	logOnFailure(t, a, b)
 	a.PairWith(b)
 	v1 := manySaveFiles(40, "v1")
 	for rel, c := range v1 {
