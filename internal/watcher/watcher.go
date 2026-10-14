@@ -158,6 +158,10 @@ type Engine struct {
 	catchUp    chan catchUpJob
 	catchUpCtx context.Context
 	stopCatch  context.CancelFunc
+	// catchUpDone is closed when the catch-up worker has returned; Stop
+	// waits for it (bounded), so a check already taking a snapshot finishes
+	// before whatever Stop is for goes on.
+	catchUpDone chan struct{}
 
 	// reconcileEvery is this engine's copy of reconcileInterval, read once
 	// when it is built.
@@ -253,13 +257,17 @@ func New(cb Callbacks) *Engine {
 		// Dropping a catch-up when the queue is full is safe: the next change
 		// to that game snapshots it anyway, and the periodic watch reconcile
 		// re-queues it.
-		catchUp:    make(chan catchUpJob, 256),
-		catchUpCtx: ctx,
-		stopCatch:  cancel,
+		catchUp:     make(chan catchUpJob, 256),
+		catchUpCtx:  ctx,
+		stopCatch:   cancel,
+		catchUpDone: make(chan struct{}),
 		// Read here, on the caller's goroutine, not inside the worker.
 		reconcileEvery: reconcileInterval,
 	}
-	go e.catchUpWorker()
+	go func() {
+		defer close(e.catchUpDone)
+		e.catchUpWorker()
+	}()
 	go e.reconcileWorker()
 	return e
 }
@@ -575,6 +583,18 @@ func (e *Engine) Stop() {
 	e.mu.Unlock()
 	for _, gw := range stopping {
 		gw.stop()
+	}
+	// A catch-up already under way may be writing a snapshot. Stop returned
+	// while it did, and the daemon went on to close its database and the
+	// app to quit, or a test to remove the folder it was writing into
+	// (TestAddingAnOrdinarySaveLocationStillWorks on Linux CI: "directory not
+	// empty"). Bounded, as stopping a watch is.
+	if e.catchUpDone != nil {
+		select {
+		case <-e.catchUpDone:
+		case <-time.After(watchStopTimeout):
+			e.log("warn", fmt.Sprintf("a catch-up check did not finish within %s of stopping; left running", watchStopTimeout))
+		}
 	}
 }
 

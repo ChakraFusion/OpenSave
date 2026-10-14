@@ -2,6 +2,8 @@ package e2e
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -74,5 +76,56 @@ func TestBaseline_TheFirstChangeAfterTrackingIsSnapshotted(t *testing.T) {
 	d.WriteSave("slot1.sav", "act 2")
 	if !testutil.WaitFor(30*time.Second, func() bool { return countSnapshots(d, game) == 2 }) {
 		t.Errorf("the first change after tracking was not snapshotted: %d snapshots", countSnapshots(d, game))
+	}
+}
+
+// Adding a save location changes no file, so it takes no snapshot; one that
+// brings files with it is snapshotted, as the backup should hold them.
+//
+// The hash the watcher compares against covers every location, so adding one
+// changed it, and the catch-up a watch runs when it starts snapshotted a save
+// already kept.
+func TestBaseline_AddingASaveLocationTakesNoSnapshotUnlessItBringsFiles(t *testing.T) {
+	d := testutil.NewTestDaemon(t, "BaselineLocation")
+	d.WriteSave("slot1.sav", "act 1")
+	game := d.TrackGame("Baseline Location Game")
+	waitForWatch(t, d, game)
+	if !testutil.WaitFor(30*time.Second, func() bool { return countSnapshots(d, game) == 1 }) {
+		t.Fatalf("the initial snapshot was not taken: %d snapshots", countSnapshots(d, game))
+	}
+
+	empty := filepath.Join(testutil.TempDir(t), "Config")
+	if err := os.MkdirAll(empty, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	d.API(http.MethodPost, "/api/games/"+game+"/roots", map[string]string{"name": "config", "path": empty}, nil)
+	time.Sleep(8 * time.Second) // past the debounce and the catch-up
+	if n := countSnapshots(d, game); n != 1 {
+		t.Errorf("%d snapshots after adding an empty location, want the initial one alone", n)
+	}
+
+	full := filepath.Join(testutil.TempDir(t), "Mods")
+	if err := os.MkdirAll(full, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(full, "mod.cfg"), []byte("on"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	// A new snapshot, not a second one: here an older snapshot that a newer
+	// one holds entirely is removed as the newer is taken.
+	before := map[string]bool{}
+	for _, s := range snapshotsOn(d, game, "main") {
+		before[s.ID] = true
+	}
+	d.API(http.MethodPost, "/api/games/"+game+"/roots", map[string]string{"name": "mods", "path": full}, nil)
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		for _, s := range snapshotsOn(d, game, "main") {
+			if !before[s.ID] {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Errorf("a location that brought files was not snapshotted: %d snapshots", countSnapshots(d, game))
 	}
 }

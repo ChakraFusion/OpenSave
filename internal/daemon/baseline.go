@@ -25,9 +25,15 @@ import (
 // worst case is one snapshot too many, as before; never a change taken for the
 // baseline. (The watcher itself never writes a baseline for that reason — see
 // catchUpOne.)
+//
+// Recorded only if no other snapshot recorded one in the meantime. A newly
+// tracked game's first snapshot runs in the background; a snapshot taken by
+// hand meanwhile finished first, and the first one's older value then replaced
+// its newer one, and the watcher snapshotted the save again.
 func (d *Daemon) SnapshotWithBaseline(gameID, comment string, isSystemAuto bool) (store.Snapshot, error) {
-	before, hashErr := "", error(nil)
+	before, was, hashErr := "", "", error(nil)
 	if game, err := d.Store.GetGame(gameID); err == nil {
+		was = game.LastManifestHash
 		before, hashErr = d.currentContentHash(game)
 	} else {
 		hashErr = err
@@ -37,7 +43,7 @@ func (d *Daemon) SnapshotWithBaseline(gameID, comment string, isSystemAuto bool)
 		return snap, err
 	}
 	if hashErr == nil {
-		_ = d.Store.SetLastManifestHash(snap.GameID, before)
+		_, _ = d.Store.SetLastManifestHashIf(snap.GameID, was, before)
 	}
 	return snap, nil
 }
@@ -88,6 +94,51 @@ func (d *Daemon) LastSnapshotHashUnder(game store.Game, oldIgnore string) string
 		return ""
 	}
 	return watcher.ContentHash(m, newText)
+}
+
+// LocationsChanged restates a game's last-snapshot hash after one of its save
+// locations was added or removed (oldRoots is GameRootPaths from before), when
+// that claims nothing new. Called before the game is watched again.
+//
+// The hash covers every location, so adding or removing one changes it while
+// no file changed: the catch-up a watch runs when it starts then took a
+// snapshot of a save already kept. The test that adds a location ended while
+// that snapshot was still being written, which failed its cleanup on Linux CI.
+//
+// Restated only when the save is as it was at the last snapshot over the old
+// locations, and a location added holds no file yet. A location that brings
+// files with it is left to be snapshotted: the backup should hold it.
+func (d *Daemon) LocationsChanged(gameID string, oldRoots map[string]string) {
+	game, err := d.Store.GetGame(gameID)
+	if err != nil || game.LastManifestHash == "" {
+		return
+	}
+	newRoots, err := d.Store.GameRootPaths(gameID)
+	if err != nil {
+		return
+	}
+	build := func(roots map[string]string) (delta.Manifest, bool) {
+		delta.InvalidateRoot(game.SavePath)
+		for _, p := range roots {
+			delta.InvalidateRoot(p)
+		}
+		m, failures, err := delta.BuildMultiManifest(game.SavePath, roots)
+		return m, err == nil && len(failures) == 0
+	}
+	before, ok := build(oldRoots)
+	if !ok || watcher.ContentHash(before, d.IgnoreText(game)) != game.LastManifestHash {
+		return // changed since the last snapshot: the next one takes it
+	}
+	after, ok := build(newRoots)
+	if !ok {
+		return
+	}
+	for name := range newRoots {
+		if _, had := oldRoots[name]; !had && len(after.Extra[name].Files) > 0 {
+			return // a location that brings files: snapshotted, as it should be
+		}
+	}
+	_ = d.Store.SetLastManifestHash(gameID, watcher.ContentHash(after, d.IgnoreText(game)))
 }
 
 // bringsBack reports whether any path in m was excluded by the old rules and
