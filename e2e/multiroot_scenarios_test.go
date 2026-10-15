@@ -1065,3 +1065,59 @@ func TestMultiRootScenario_ADeletionSurvivesALateRefresh(t *testing.T) {
 		t.Errorf("the deleted file came back here: %q", got)
 	}
 }
+
+// "Put them back" for an emptied extra location, with no snapshot to restore,
+// fetches its files even when a lost report has left the location's base
+// behind. The push-proof repair records what both devices held; while the
+// game is held as emptied it must leave alone the lineage put back takes the
+// files out of, or they read as deleted here and the peer loses them too.
+func TestMultiRootScenario_PutBackOfAnEmptiedLocationSurvivesALostReport(t *testing.T) {
+	files := map[string]string{"settings.ini": "shared v1", "keys.cfg": "jump=space"}
+	a, b, gameID, aConfig, bConfig := twoLocationPair(t, "LocPutBack", files)
+	testutil.SettleSync(t, gameID, a, b)
+
+	emptyFolder(t, aConfig)
+	syncBothWays(t, gameID, a, b)
+	if e := emptiedState(t, a, gameID); e == nil {
+		t.Fatal("setup: emptying the location did not hold the game back")
+	}
+	var snaps map[string]struct {
+		Branches map[string]struct {
+			Snapshots []struct {
+				ID string `json:"id"`
+			} `json:"snapshots"`
+		} `json:"branches"`
+	}
+	a.API(http.MethodGet, "/api/games", nil, &snaps)
+	for _, br := range snaps[gameID].Branches {
+		for _, s := range br.Snapshots {
+			if err := a.Daemon.Store.SetSnapshotCheck(s.ID, time.Now().UnixMilli(), "damaged for this test"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a.API(http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]string{"answer": "restore"}, nil)
+
+	// What a lost report leaves for the location: the base behind what the
+	// peer holds, and the push still on record.
+	m, err := delta.BuildManifest(bConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", "a base from before"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetPushedHashForRoot(gameID, b.NodeID(), "config", m.RootHash(delta.PrimaryRoot)); err != nil {
+		t.Fatal(err)
+	}
+
+	syncBothWays(t, gameID, a, b)
+	for rel, want := range files {
+		if got := readIn(bConfig, rel); got != want {
+			t.Errorf("the other device: config/%s is %q, want %q", rel, got, want)
+		}
+		if got := readIn(aConfig, rel); got != want {
+			t.Errorf("the emptied device, from the other: config/%s is %q, want %q", rel, got, want)
+		}
+	}
+}
