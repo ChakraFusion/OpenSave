@@ -714,8 +714,27 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// that, a record left over from an earlier push would match again if the
 	// peer ever returned to that state, dragging the base backwards onto it
 	// and skipping a conflict that a later agreement had earned.
+	//
+	// The record of which files both sides hold is repaired with it: the
+	// report is also what records that, so a lost one left a file this device
+	// had just handed over out of it. Deleted here before the watcher noted
+	// the deletion, that file read as one the peer had and this device never
+	// did, and it was fetched straight back — the deletion undone, on Windows
+	// CI as TestWatchAutoSyncChain's "deletion never auto-synced to B". Both
+	// held exactly the pushed state, so its files are what was shared — the
+	// repair extra locations make too (multiroot.go).
+	//
+	// Not while the game is held as emptied (hold.go). That record is then
+	// kept on purpose: "put them back" with no snapshot to restore takes the
+	// files out of it, so that the next sync fetches them from the peer.
+	// Written back here, they read as deleted on this device instead, and the
+	// deletions went to the peer — both devices lost the save
+	// (TestEmptiedFolder_PutBackWithoutASnapshotFetchesThem on Linux CI).
 	if pushed := e.Store.GetPushedHash(gameID, peer.ID); pushed != "" {
 		if remoteHash := remoteData.Manifest.ManifestHash(); agreedHash != remoteHash && remoteHash == pushed {
+			if _, held, err := e.Store.GetDeletionHold(gameID); err == nil && !held {
+				e.persistLineage(gameID, peer.ID, remoteData.Manifest, remoteData.Manifest)
+			}
 			_ = e.Store.SetAgreedHash(gameID, peer.ID, remoteHash)
 			agreedHash = remoteHash
 		}
