@@ -17,6 +17,7 @@
   import Pencil from 'lucide-svelte/icons/pencil';
   import Star from 'lucide-svelte/icons/star';
   import TriangleAlert from 'lucide-svelte/icons/triangle-alert';
+  import Info from 'lucide-svelte/icons/info';
   import { collections, isFavourite, toggleFavourite } from '../../lib/collections.js';
 
   export let game;
@@ -67,6 +68,26 @@
       toast(e.message, 'error');
     } finally {
       answering = false;
+    }
+  }
+  // The save folder is missing here, and the same folder exists on another drive.
+  // It is offered, never switched to on its own: it could be an old copy.
+  let relocating = false;
+  async function answerRelocation(use) {
+    const found = game.relocateSuggestion;
+    relocating = true;
+    try {
+      if (use) {
+        await api.post(`/api/games/${game.id}/relocate`, { path: found });
+        toast(`${game.name} now uses ${found}`, 'success');
+      } else {
+        await api.post(`/api/games/${game.id}/relocate/dismiss`);
+        toast(`Not using ${found} for ${game.name}`, 'success');
+      }
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      relocating = false;
     }
   }
   // Reveal the save location in Explorer / Finder / the Linux file manager.
@@ -188,7 +209,18 @@
   </div>
 {/if}
 
-{#if game.savePathMissing && !editPath}
+{#if game.savePathMissing && game.saveDriveMissing && !editPath}
+  <!-- The drive itself isn't on this device: the game lives on another PC's
+       D:\ or E:\. Nothing was lost here, so this informs rather than warns. -->
+  <div class="missing elsewhere" role="status">
+    <Info size={16} />
+    <div>
+      <strong>This game isn't on this device.</strong>
+      Its saves are on {game.savePath.slice(0, 2)}, which this PC doesn't have, so it's skipped here and keeps syncing
+      between your other devices. If it is installed here, point the game at its save folder with Edit.
+    </div>
+  </div>
+{:else if game.savePathMissing && !editPath}
   <!-- The folder is not there. It is not created again: an empty folder in
        its place would read as every file deleted, and syncing that would
        delete them on your other devices too. -->
@@ -199,6 +231,22 @@
       It may have been moved or deleted, or be on a drive that isn't connected. Nothing is snapshotted or synced for
       this game until it's back — OpenSave picks it up again within a minute. If the save lives somewhere else now,
       point the game at it with Edit.
+    </div>
+  </div>
+{/if}
+
+{#if game.savePathMissing && game.relocateSuggestion && !editPath}
+  <!-- Offered, not taken: the same path on another drive can be an old
+       backup, and syncing from it would spread stale saves. -->
+  <div class="missing relocate" role="status">
+    <Info size={16} />
+    <div>
+      <strong>The same folder is at {game.relocateSuggestion}.</strong>
+      Is that where this game saves on this device? Only use it if it holds your current saves, not an old copy.
+      <div class="relocate-actions">
+        <button class="btn small primary" disabled={relocating} on:click={() => answerRelocation(true)}>Use this folder</button>
+        <button class="btn small ghost" disabled={relocating} on:click={() => answerRelocation(false)}>Not this one</button>
+      </div>
     </div>
   </div>
 {/if}
@@ -280,6 +328,11 @@
     font-size: 0.84rem;
     color: var(--text-dim);
   }
+  .relocate-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
   .missing :global(svg) {
     flex-shrink: 0;
     margin-top: 2px;
@@ -287,6 +340,13 @@
   }
   .missing strong {
     color: var(--text);
+  }
+  .missing.elsewhere {
+    border-color: var(--border);
+    background: transparent;
+  }
+  .missing.elsewhere :global(svg) {
+    color: var(--text-faint);
   }
   .emptied-actions {
     display: flex;

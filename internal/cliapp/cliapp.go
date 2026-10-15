@@ -65,6 +65,8 @@ func Run(args []string) int {
 		return cmdConflicts(rest)
 	case "resolve":
 		return cmdResolve(rest)
+	case "relocate":
+		return cmdRelocate(rest)
 	case "offers":
 		return cmdOffers(rest)
 	case "backup":
@@ -760,12 +762,16 @@ func cmdStatus(d *daemon.Daemon, args []string) int {
 	}
 
 	playing := runningDaemonPlaying()
+	relocations := runningDaemonRelocations()
 	section(fmt.Sprintf("Tracked games %s %d", symDot(), len(games)))
 	for _, g := range games {
 		fmt.Printf("  %s %s  %s\n", symBullet(), bold(g.Name), faint(g.ID))
 		fmt.Printf("      %s\n", faint(g.SavePath))
 		if daemon.SaveFolderMissing(g.SavePath) {
 			fmt.Printf("      %s\n", warnText("save folder missing — nothing is watched or synced for it until it is back"))
+			if found := relocations[g.ID]; found != "" {
+				fmt.Printf("      %s\n", warnText(fmt.Sprintf("the same folder is at %s — use it? (opensave relocate %s use|dismiss)", found, g.ID)))
+			}
 		}
 		if e, held := d.EmptiedSaveOf(g.ID); held && e.State == "held" {
 			fmt.Printf("      %s\n", warnText(fmt.Sprintf("every save file was deleted here — not synced until you answer (opensave emptied %s delete|restore)", g.ID)))
@@ -1052,4 +1058,27 @@ func emptiedOrNil(d *daemon.Daemon, gameID string) *daemon.EmptiedSave {
 		return &e
 	}
 	return nil
+}
+
+// runningDaemonRelocations is, per game, the folder the running daemon offers
+// for a save folder that is missing (the same path on another drive). Empty
+// when no daemon is running: the offer lives there.
+func runningDaemonRelocations() map[string]string {
+	out := map[string]string{}
+	raw, err := daemonRequest("GET", "/api/games", nil)
+	if err != nil {
+		return out
+	}
+	var games map[string]struct {
+		RelocateSuggestion string `json:"relocateSuggestion"`
+	}
+	if json.Unmarshal(raw, &games) != nil {
+		return out
+	}
+	for id, g := range games {
+		if g.RelocateSuggestion != "" {
+			out[id] = g.RelocateSuggestion
+		}
+	}
+	return out
 }

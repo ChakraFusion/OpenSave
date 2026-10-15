@@ -65,6 +65,8 @@ func (s *Server) routes(r chi.Router) {
 	r.Post("/api/games/{gameId}/branch/switch", s.handleSwitchBranch)
 	r.Delete("/api/games/{gameId}/branch/{branch}", s.handleDeleteBranch)
 	r.Post("/api/games/{gameId}/launch", s.handleLaunchGame)
+	r.Post("/api/games/{gameId}/relocate", s.handleAcceptRelocation)
+	r.Post("/api/games/{gameId}/relocate/dismiss", s.handleDismissRelocation)
 
 	r.Post("/api/backup/export", s.handleBackupExport)
 	r.Post("/api/backup/restore", s.handleBackupRestore)
@@ -1035,4 +1037,36 @@ func (s *Server) handleSuggestName(w http.ResponseWriter, r *http.Request) {
 		name = s.Daemon.Scanner.SuggestName(r.URL.Query().Get("path"))
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": name})
+}
+
+// handleAcceptRelocation switches a game whose save folder is missing to the
+// same folder on another drive, offered to the user (relocateSuggestion).
+// body.path must be the folder offered, so an answer to an older question
+// cannot switch to a folder nobody was shown.
+func (s *Server) handleAcceptRelocation(w http.ResponseWriter, r *http.Request) {
+	gameID := chi.URLParam(r, "gameId")
+	var body struct {
+		Path string `json:"path"`
+	}
+	if err := readJSON(r, &body); err != nil || body.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if err := s.Daemon.AcceptRelocation(gameID, body.Path); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+// handleDismissRelocation answers the offer with "not this one".
+func (s *Server) handleDismissRelocation(w http.ResponseWriter, r *http.Request) {
+	gameID := chi.URLParam(r, "gameId")
+	if err := s.Daemon.DismissRelocation(gameID); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }

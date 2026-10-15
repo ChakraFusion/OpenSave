@@ -21,6 +21,11 @@ describe('notifications', () => {
     expect(w.find((x) => x.id.startsWith('damaged')).title).toBe("1 snapshot of Hades can't be restored");
   });
 
+  it('does not ask about a game whose drive this device does not have', () => {
+    const w = waitingOnYou({ games: { ark: { id: 'ark', name: 'ARK', savePathMissing: true, saveDriveMissing: true, branches: {} } } });
+    expect(w).toEqual([]);
+  });
+
   it('turns activity into events, unread since the bell was last opened', () => {
     const now = Date.UTC(2026, 8, 25, 12);
     const items = [
@@ -55,5 +60,14 @@ describe('a save arriving', () => {
     expect(arrivalMessage({ ...ev, gameId: 'celeste' }, games, shown, t0 + 60_000)).toBe('Celeste: got 2 files from Steam Deck');
     expect(arrivalMessage(ev, games, shown, t0 + ARRIVAL_QUIET_MS + 1)).not.toBeNull();
     expect(arrivalMessage({ ...ev, kind: 'sent' }, games, {}, t0)).toBeNull();
+  });
+});
+
+describe('a missing save folder found on another drive', () => {
+  it('waits for a yes, whether or not the drive it was on exists', () => {
+    const w = waitingOnYou({ games: { ark: { id: 'ark', name: 'ARK', savePathMissing: true, saveDriveMissing: true, relocateSuggestion: 'E:\SteamLibrary\ARK', branches: {} } } });
+    const r = w.find((x) => x.id.startsWith('relocate:'));
+    expect(r?.title).toContain('E:\SteamLibrary\ARK');
+    expect(r?.go).toEqual({ view: 'game', params: { gameId: 'ark' } });
   });
 });
