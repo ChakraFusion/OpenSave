@@ -23,7 +23,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Round 6: shard 2 under load with the late-report test fix.
+        # Round 7: shard 2 with the late-report and temp-dir test fixes, plus
+        # the open upstream fixes pr/agreed-report and pr/relay-lost-reply.
         kind: [shard2]
         arm: [fix]
         rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
