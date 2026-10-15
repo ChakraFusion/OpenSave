@@ -154,12 +154,15 @@ func TestResyncWatchers_StopsWatchingAnUntrackedGame(t *testing.T) {
 // the branch that compares paths, and getting it wrong means watching an empty
 // folder forever while the real saves change unobserved.
 func TestResyncWatchers_FollowsARelocatedSave(t *testing.T) {
+	// Before the daemons: cleanups run last first, so the folder outlives them.
+	// Made after, it was deleted while they were still using it, and on Windows
+	// that fails the test ("The directory is not empty").
+	moved := filepath.Join(t.TempDir(), "new-location")
 	d := testutil.NewTestDaemon(t, "ReconcileMove")
 	d.WriteSave("slot1.sav", "start")
 	gameID := d.TrackGame("Relocated Game")
 	waitForWatch(t, d, gameID)
 
-	moved := filepath.Join(t.TempDir(), "new-location")
 	if err := os.MkdirAll(moved, 0o777); err != nil {
 		t.Fatal(err)
 	}

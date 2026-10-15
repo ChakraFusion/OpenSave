@@ -53,10 +53,13 @@ func gamesOf(td *testutil.TestDaemon) map[string]gameRow {
 // which names the other install's profile id — a folder this emulator never
 // reads, beside the one it does, which then went unsynced.
 func TestSwitch_AnArrivingSaveGoesUnderThisDevicesProfile(t *testing.T) {
+	// Before the daemons: cleanups run last first, so the folder outlives them.
+	// Made after, it was deleted while they were still using it, and on Windows
+	// that fails the test ("The directory is not empty").
+	rootA, rootB := t.TempDir(), t.TempDir()
 	a := testutil.NewTestDaemon(t, "SwitchA")
 	b := testutil.NewTestDaemon(t, "SwitchB")
 	a.PairWith(b)
-	rootA, rootB := t.TempDir(), t.TempDir()
 
 	onA := nandTitle(rootA, "eden", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	writeAt(t, filepath.Join(onA, "progress.sav"), "ninety hours in")
@@ -95,10 +98,13 @@ func TestSwitch_AnArrivingSaveGoesUnderThisDevicesProfile(t *testing.T) {
 // the emulator) and one tracked since (its title id), in different emulators.
 // Both directions, and without B taking A's game as a second, new one.
 func TestSwitch_TheSameGameUnderDifferentIDsSyncs(t *testing.T) {
+	// Before the daemons: cleanups run last first, so the folder outlives them.
+	// Made after, it was deleted while they were still using it, and on Windows
+	// that fails the test ("The directory is not empty").
+	root := t.TempDir()
 	a := testutil.NewTestDaemon(t, "SwitchIdA")
 	b := testutil.NewTestDaemon(t, "SwitchIdB")
 	a.PairWith(b)
-	root := t.TempDir()
 
 	onA := nandTitle(root, "citron", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	writeAt(t, filepath.Join(onA, "progress.sav"), "from A")
