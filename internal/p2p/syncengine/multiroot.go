@@ -132,25 +132,9 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		lineageFiles = filterLineage(lineageFiles, rules)
 		lineageDirs = filterLineage(lineageDirs, rules)
 	}
-	decision := Compute(local, remote, lineageFiles, lineageDirs)
-
-	if !decision.HasChanges() {
-		e.persistRootLineage(gameID, peer.ID, sr.root.Name, local, remote)
-		_ = e.Store.SetAgreedHashForRoot(gameID, peer.ID, sr.root.Name, local.RootHash(delta.PrimaryRoot))
-		return nil
-	}
-
-	// Divergence is judged with the SAME detector the primary location uses,
-	// against this location's own merge base — so one folder disagreeing says
-	// nothing about the others.
-	//
-	// This was originally a hand-rolled check for "a pull and a push in the
-	// same decision", which is not the same question at all: when both devices
-	// edit the same file, the classifier can resolve it as a pull alone, the
-	// check never fires, and this side's version is silently overwritten. The
-	// point of detecting a conflict is that nobody's work disappears, and a
-	// second detector that is nearly right is worse than none, because it
-	// looks like the work has been done.
+	// The same base the conflict check below uses. Compute used to be called
+	// with an empty base, so a named location ranked files by mtime even when
+	// one side was still the confirmed version.
 	base := e.Store.GetAgreedHashForRoot(gameID, peer.ID, sr.root.Name)
 	// A push is proven once the peer is seen holding exactly what was handed
 	// over, whatever became of its report — the repair the main folder makes
@@ -179,6 +163,12 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		case unfilteredRemote.RootHash(delta.PrimaryRoot):
 			base = remote.RootHash(delta.PrimaryRoot)
 		}
+	}
+	decision := ComputeWithBase(local, remote, lineageFiles, lineageDirs, base)
+	if !decision.HasChanges() {
+		e.persistRootLineage(gameID, peer.ID, sr.root.Name, local, remote)
+		_ = e.Store.SetAgreedHashForRoot(gameID, peer.ID, sr.root.Name, local.RootHash(delta.PrimaryRoot))
+		return nil
 	}
 	judged := e.unchangedButForPeerDeletions(gameID, sr.root.Name, local, base)
 	if DetectConflict(judged, remote, e.lastSyncTimeMs(peer.ID), base) &&

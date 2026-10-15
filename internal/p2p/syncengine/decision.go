@@ -148,8 +148,9 @@ func Compute(local, remote delta.Manifest, lastSyncedFiles, lastSyncedDirs map[s
 }
 
 // ComputeWithBase is Compute told which manifest hash both sides last agreed
-// on, so an mtime tie can be broken by content rather than by direction. See
-// the tie case below for why that matters.
+// on. If one whole manifest is still that hash, that side did not change,
+// whatever its filesystem mtimes say. An mtime tie still uses the base when
+// the stamps are equal. A base that matches neither side is not used.
 func ComputeWithBase(local, remote delta.Manifest, lastSyncedFiles, lastSyncedDirs map[string]struct{}, baseHash string) Decision {
 	return ComputeWithDeletions(local, remote, lastSyncedFiles, lastSyncedDirs, baseHash, nil)
 }
@@ -234,6 +235,13 @@ func ComputeWithDeletions(local, remote delta.Manifest, lastSyncedFiles, lastSyn
 
 		case hasLocal && hasRemote && localFile.Hash != remoteFile.Hash:
 			switch {
+			case baseHash != "" && localHash == baseHash && remoteHash != baseHash:
+				// This whole manifest is the confirmed common version. The
+				// peer is the only side that changed. A restored or touched
+				// copy of the base can have a later mtime; that is not an edit.
+				d.FilesToPull = append(d.FilesToPull, relPath)
+			case baseHash != "" && remoteHash == baseHash && localHash != baseHash:
+				d.FilesToPush = append(d.FilesToPush, relPath)
 			case remoteFile.MtimeMs > localFile.MtimeMs:
 				d.FilesToPull = append(d.FilesToPull, relPath)
 			case localFile.MtimeMs > remoteFile.MtimeMs:

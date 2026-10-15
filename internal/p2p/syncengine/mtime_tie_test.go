@@ -89,18 +89,25 @@ func TestAnMtimeTieWithAnUnrelatedBaseStillPulls(t *testing.T) {
 	}
 }
 
-// Ordinary differing timestamps are untouched by any of this.
-func TestANewerSideStillWinsRegardlessOfTheBase(t *testing.T) {
-	const base = delta.Milli(1_700_000_000_000)
+// An agreed common version beats the filesystem clock. This used to expect
+// the newer mtime to win even when that side was exactly the agreed base.
+// That overwrote the only real edit. The corrected precedence is explicit.
+func TestAgreedBaseOverridesNewerMtime(t *testing.T) {
+	const reference = delta.Milli(1_700_000_000_000)
 	lineage := map[string]struct{}{"save.dat": {}}
 
-	local := tieManifest("LOCAL-NEWER", base+50)
-	remote := tieManifest("REMOTE", base)
-	// A base saying the LOCAL side is unchanged must not override a clear
-	// timestamp: the stamps are what decide when they differ.
-	d := ComputeWithBase(local, remote, lineage, nil, local.ManifestHash())
-	if len(d.FilesToPush) != 1 {
-		t.Errorf("a clearly newer local file was not pushed: push=%v pull=%v",
-			d.FilesToPush, d.FilesToPull)
+	local := tieManifest("BASE", reference+50)
+	remote := tieManifest("REMOTE-EDIT", reference)
+	base := local.ManifestHash()
+	if DetectConflict(local, remote, 0, base) {
+		t.Fatal("one-sided update must reach Compute without a conflict")
+	}
+	d := ComputeWithBase(local, remote, lineage, nil, base)
+	if len(d.FilesToPush) > 0 {
+		t.Errorf("old agreed-base data must not be pushed: push=%v", d.FilesToPush)
+	}
+	if len(d.FilesToPull) != 1 || d.FilesToPull[0] != "save.dat" {
+		t.Errorf("changed remote must be pulled despite older mtime: pull=%v push=%v",
+			d.FilesToPull, d.FilesToPush)
 	}
 }

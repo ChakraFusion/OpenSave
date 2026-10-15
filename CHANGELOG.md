@@ -3,6 +3,17 @@
 All notable changes to OpenSave are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- **A touched copy of the last agreed save no longer overwrites the only
+  real edit.** When one device still holds the confirmed common version and
+  the other has changed, the changed side wins even if the unchanged files
+  have a later timestamp. Named extra save locations use that same rule.
+  A missing or stale agreed base is not given a new meaning. This does not
+  implement the version vectors in #29 / #30. See issue #41.
+
 ## [2.4.1] — 2026-10-02
 
 A security update: please install it on every device. A paired device could
