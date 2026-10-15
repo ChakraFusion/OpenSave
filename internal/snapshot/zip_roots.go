@@ -218,6 +218,14 @@ func UnzipRoots(zipPath, primary string, extra map[string]string) (unplaced []st
 		}
 	}()
 
+	// Before anything is cleared: an archive that cannot be laid out on disk
+	// is refused here, for every caller — a restore, a branch switch, an
+	// imported backup — rather than found part-way through, with the folders
+	// already emptied (GitHub #60).
+	if err := CheckExtractable(zipPath); err != nil {
+		return nil, err
+	}
+
 	roots, err := ArchivedRoots(zipPath)
 	if err != nil {
 		return nil, err
