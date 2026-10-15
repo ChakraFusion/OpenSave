@@ -710,6 +710,24 @@ func (sc *Scanner) downloadManifest(yamlPath string) {
 		os.Remove(tmp)
 		return
 	}
+	// The index is built here, in the background, before the manifest takes
+	// its place - not by the next caller that finds the manifest newer than
+	// its index. That caller was whatever wanted the index next: a scan (the
+	// app's own background scan, or "Scan saves"), or tracking any game (its
+	// registry keys are looked up first). Parsing the 17.7 MB YAML held it up
+	// for some thirty seconds, after every weekly download. The index is then
+	// dated after the manifest it came from, so no one rebuilds it: the
+	// manifest is dated a second before the index, as the clock can give the
+	// two files the same time.
+	_, indexPath := sc.manifestPaths()
+	if games := buildManifestIndex(tmp); len(games) > 0 {
+		if raw, err := json.Marshal(games); err == nil && writeFileAtomic(indexPath, raw) == nil {
+			if info, err := os.Stat(indexPath); err == nil {
+				older := info.ModTime().Add(-time.Second)
+				_ = os.Chtimes(tmp, older, older)
+			}
+		}
+	}
 	_ = os.Remove(yamlPath)
 	_ = os.Rename(tmp, yamlPath)
 }
