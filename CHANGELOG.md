@@ -7,12 +7,64 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Fixed
 
+- **"Keep mine" no longer deletes the files you chose to keep.** If the
+  other device did not finish taking your version — it went to sleep, or the
+  save was very large — the next sync read the files it was missing as
+  deletions and removed them here: a save of 300 files could be left with
+  100. Only files both devices verifiably hold now count as shared. A sync
+  that would delete more than 100 files and more than a tenth of a save is
+  held back and asked about, and the conflict window says how many files
+  each answer deletes, counted in full. (#22)
 - **A touched copy of the last agreed save no longer overwrites the only
-  real edit.** When one device still holds the confirmed common version and
-  the other has changed, the changed side wins even if the unchanged files
-  have a later timestamp. Named extra save locations use that same rule.
-  A missing or stale agreed base is not given a new meaning. This does not
-  implement the version vectors in #29 / #30. See issue #41.
+  real edit.** When one device still holds the version the two last agreed
+  on and the other has changed it, the changed side wins, even if the
+  untouched copy's files have a later date. A game's extra save folders
+  follow the same rule. (#42, issue #41)
+- **An emptied save stays held back while it is still being written.** A
+  sync that started while the folder was mid-write could get past the
+  "emptied save" question and delete the files on your other devices. It
+  now waits for the write to end and decides then. (#62)
+- **An edit made while two devices compared their saves is no longer
+  lost.** "In sync as of" is stamped with when the comparison began, so a
+  change made during it still counts as new. (#63)
+- **A file deleted just after a sync no longer comes back when the other
+  device's "done" report goes missing.** The report is also what records
+  which files both devices hold, so without it a file this device had just
+  sent could read as one it never had, and was fetched back. The record is
+  now repaired too — except while a save is held back as emptied, where it is
+  kept as it is so that "put them back" still works. (#65)
+- **OpenSave's own changes no longer look like the game saving.** Files a
+  sync writes or deletes no longer set off a run of automatic snapshots, or a
+  sync straight back to the device they came from. A save the game writes
+  just after a sync still counts as the game's. (#23)
+- **A save folder on another drive letter is found, and you are asked
+  first.** When a game's folder is missing at `D:\…` but the same path is on
+  `E:\` here, the game's page offers it — "Use this folder" or "Not this
+  one" — as does `opensave relocate <game> use|dismiss`. A save on a drive
+  this PC does not have at all is shown quietly as not on this device,
+  rather than as a warning. (#24)
+- **A reply lost on the way through the relay fails after its timeout** and
+  is tried again, instead of holding the sync for up to half an hour. (#50)
+- **Switching auto-sync off takes effect at once.** A change reported as a
+  game's watch was stopping no longer starts a sync. (#58)
+- **A new installation starts faster.** Its database is set up in one step
+  rather than some 150, which on a busy Windows disk took over 30 seconds;
+  and an upgrade that fails part-way leaves the database as it was. (#61)
+
+### Changed
+
+- **Much faster with saves of many files.** Checking a 240,000-file save for
+  changes went from 13–19 seconds to about 1.3, and a follow-up snapshot
+  copies the unchanged files from the one before instead of compressing them
+  again: 80 seconds became 9 for a 204,000-file save. (#25)
+- **Less memory.** The app gives memory back sooner, with a soft limit of
+  1 GB. (#28)
+
+### Added
+
+- **Simplified Chinese** for the Home screen, and a Language choice in
+  Settings → Appearance, which follows the system by default. (#48, from
+  #19 and #20)
 
 ## [2.4.1] — 2026-10-02
 
