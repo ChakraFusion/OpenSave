@@ -1,5 +1,8 @@
 // Small formatters shared by the views.
 
+import { get } from 'svelte/store';
+import { locale, pluralRulesFor } from './i18n.js';
+
 /** Bytes as B, KB, MB or GB, one decimal past bytes: "185 B", "3.2 KB",
  *  "1.4 MB", "9.5 GB". GB so free space on a drive reads as "9.5 GB" and not
  *  "9724.7 MB"; bytes so a small save file is not "0.0 KB". */
@@ -15,8 +18,13 @@ export const fmtSize = (n) =>
 /** A timestamp in the viewer's locale, or a dash for none. */
 export const fmtTime = (t) => (t ? new Date(t).toLocaleString() : '—');
 
-/** "1 game", "3 games". */
-export const plural = (n, word, many = word + 's') => `${n} ${n === 1 ? word : many}`;
+/** "1 game", "3 games". The singular/plural choice goes through the chosen
+ *  locale's Intl.PluralRules (English one/other; other languages get their
+ *  own categories once their views are translated). */
+export const plural = (n, word, many = word + 's') => {
+  const category = pluralRulesFor(get(locale)).select(Number(n ?? 0));
+  return `${n} ${category === 'one' ? word : many}`;
+};
 
 /** How long something was played: "45 min", "3 h", "14 h 20 min". */
 export function playLength(ms) {

@@ -5,6 +5,7 @@
   import { applyMessage, wsConnected, view, appUpdate, toast, showAbout, cloudOffers, newGames, navigate, settings, games, availableUpdate } from './lib/stores.js';
   import { startController, controllerOn, padUsed, pageStep } from './lib/controller.js';
   import { appearance } from './lib/appearance.js';
+  import { locale, resolveLocale } from './lib/i18n.js';
   import { paletteOpen } from './lib/shortcuts.js';
   import { newlyEmptied } from './lib/emptied.js';
   import { demandAttention } from './lib/notify.js';
@@ -85,6 +86,9 @@
   // with no pointer, it is the only way to see where you are.
   $: controllerActive = controllerOn($appearance.controller, { deviceType: $settings?.deviceType, used: $padUsed });
   $: document.documentElement.dataset.controller = controllerActive ? 'on' : 'off';
+  // The document language follows the chosen locale ('system' resolved); a
+  // wrong lang makes Windows render some Han characters with Japanese shapes.
+  $: document.documentElement.lang = resolveLocale($locale);
   onMount(() =>
     startController({
       isOn: () => controllerActive,
