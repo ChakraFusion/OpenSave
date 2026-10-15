@@ -19,7 +19,6 @@ import (
 // recorded, and the next turn read as both sides having changed.
 func TestQuickTurns_NoFalseConflict(t *testing.T) {
 	a, b, gameID := trackBothOverRelay(t, "QuickTurns", map[string]string{"slot1.sav": "turn-0"})
-	logOnFailure(t, a, b)
 	testutil.SettleSync(t, gameID, a, b)
 
 	writer, other := b, a
