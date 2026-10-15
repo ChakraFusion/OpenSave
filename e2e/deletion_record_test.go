@@ -223,3 +223,65 @@ func deletionAfterALostReport(t *testing.T, autoSync bool) {
 		t.Errorf("the deletion never reached B: %q", got)
 	}
 }
+
+// The same with the proof from the other direction: B pulled what A served it
+// and holds it still, while the report that records the files both hold is
+// lost. A banks the served state as agreed; the record of shared files is
+// repaired with it, so a file A deletes before its watcher notices is a
+// deletion for B, not a file to fetch back (#66).
+func TestDeletion_SurvivesALostReportWhenServed(t *testing.T) {
+	a, b, gameID := pairAndTrack(t, "Lost Report Served Deletion", map[string]string{"seed.sav": "seed"})
+	testutil.SettleSync(t, gameID, a, b)
+	st := a.Daemon.Store
+	var oldBase string
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		oldBase = st.GetAgreedHash(gameID, b.NodeID())
+		return oldBase != ""
+	}) {
+		t.Fatal("setup: the devices never recorded that they agree")
+	}
+
+	a.WriteSave("auto.sav", "v1")
+	time.Sleep(syncSettleWindow)
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	if !testutil.WaitFor(30*time.Second, func() bool { return b.ReadSave("auto.sav") == "v1" }) {
+		t.Fatal("setup: auto.sav never reached B")
+	}
+	testutil.SettleSync(t, gameID, a, b)
+
+	handedOver, err := delta.BuildManifest(a.SaveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		return st.GetAgreedHash(gameID, b.NodeID()) == handedOver.ManifestHash()
+	}) {
+		t.Fatal("setup: the report never arrived")
+	}
+	// Undone as a lost report leaves it, with only the served state to go
+	// by: the old base (which clears the push record), the old record of
+	// shared files, and what A served B under that base.
+	if err := st.SetAgreedHash(gameID, b.NodeID(), oldBase); err != nil {
+		t.Fatal(err)
+	}
+	if st.GetPushedHash(gameID, b.NodeID()) != "" {
+		t.Fatal("setup: a push is still on record")
+	}
+	if err := st.SetSyncState(gameID, b.NodeID(), []string{"seed.sav"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	a.Daemon.P2P.Sync.NoteServed(gameID, b.NodeID(), handedOver)
+
+	if err := os.Remove(filepath.Join(a.SaveDir, "auto.sav")); err != nil {
+		t.Fatal(err)
+	}
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil) // before the watcher records the deletion
+	time.Sleep(5 * time.Second)
+
+	if got := a.ReadSave("auto.sav"); got != "" {
+		t.Errorf("the deleted file came back: %q", got)
+	}
+	if got := b.ReadSave("auto.sav"); got != "" {
+		t.Errorf("the deletion never reached B: %q", got)
+	}
+}

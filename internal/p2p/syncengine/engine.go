@@ -744,8 +744,19 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// Matched on the peer's save as served, before this side's exclusion rules
 	// filtered it, which is how it was recorded; banked in today's filtered
 	// terms. Only against the base it was served under (served.go).
+	//
+	// The record of which files both hold is repaired with it, as the push
+	// proof above does and for the same reason: without it, a file the peer
+	// took from what was served and this device deleted before the watcher
+	// noted it read as one the peer had and this device never did, and was
+	// fetched back. And not while the game is held as emptied, for the same
+	// reason as above. Safe since untracking forgets what was served
+	// (ForgetServed): a re-tracked game no longer banks a state served before.
 	if remoteHash := remoteData.Manifest.ManifestHash(); agreedHash != remoteHash &&
 		e.servedUnderBase(gameID, peer.ID, unfilteredRemote.ManifestHash(), storedBase) {
+		if _, held, err := e.Store.GetDeletionHold(gameID); err == nil && !held {
+			e.persistLineage(gameID, peer.ID, remoteData.Manifest, remoteData.Manifest)
+		}
 		_ = e.Store.SetAgreedHash(gameID, peer.ID, remoteHash)
 		agreedHash = remoteHash
 	}
