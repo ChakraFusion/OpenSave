@@ -91,3 +91,9 @@ func (s *Store) ClearPendingSaves() error {
 // sits inside the other, compared the way the store compares a game's
 // locations — the same answer on every operating system.
 func PathsOverlap(a, b string) bool { return overlaps(a, b) }
+
+// PathsNest reports whether one save folder sits inside the other, the two
+// not being the same folder.
+func PathsNest(a, b string) bool {
+	return overlaps(a, b) && normalizeLocationPath(a) != normalizeLocationPath(b)
+}

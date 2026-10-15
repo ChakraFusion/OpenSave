@@ -5,6 +5,7 @@
   import { gameStatus, conflictedIds } from '../lib/gamestatus.js';
   import OfferedGames from './home/OfferedGames.svelte';
   import AddGameCard from './home/AddGameCard.svelte';
+  import TrackGameDialog from './home/TrackGameDialog.svelte';
   import ScanDialog from './home/ScanDialog.svelte';
   import HomeSummary from './home/HomeSummary.svelte';
   import LibraryGrid from './home/LibraryGrid.svelte';
@@ -31,6 +32,8 @@
   // on the params object, so each request — the sidebar's +, Ctrl+K — opens
   // it once, and not again on every re-render.
   let showAdd = false;
+  // Tracking a game the game database knows (TrackGameDialog).
+  let showTrackGame = false;
   let addPath = '';
   let handledAdd = null;
   $: if (params.add && params !== handledAdd) {
@@ -109,6 +112,7 @@
     </button>
     <button class="btn" on:click={syncAll} disabled={$gameList.length === 0 || $syncPause.paused} title={$syncPause.paused ? $t('home.syncPaused') : ''}><RefreshCw size={15} />{$t('home.syncAll')}</button>
     <PauseButton />
+    <button class="btn" on:click={() => (showTrackGame = true)} title={$t('home.trackGameTitle')}><Gamepad2 size={16} />{$t('home.trackGame')}</button>
     <button class="btn" on:click={trackFolder} title={$t('home.trackFolderTitle')}><FolderPlus size={16} />{$t('home.trackFolder')}</button>
   </div>
 </div>
@@ -117,6 +121,10 @@
 
 {#if showAdd}
   <AddGameCard path={addPath} on:close={() => (showAdd = false)} />
+{/if}
+
+{#if showTrackGame}
+  <TrackGameDialog on:close={() => (showTrackGame = false)} />
 {/if}
 
 <ScanDialog bind:this={scanner} bind:scanning />

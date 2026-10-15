@@ -21,6 +21,10 @@
   export let path = '';
 
   let name = '';
+  // The game the folder is a save location of, in the game database: its
+  // name and App ID (cover art, launching).
+  let appId = '';
+  let knownAs = '';
   let typed = false; // once typed in, a late suggestion must not replace it
   let adding = false;
   let nameInput;
@@ -32,10 +36,24 @@
     suggestedFor = p;
     if (!p) return;
     let guess = folderName(p);
+    appId = '';
+    knownAs = '';
     try {
-      guess = (await api.get(`/api/suggest-name?path=${encodeURIComponent(p)}`)).name || guess;
+      const id = await api.get(`/api/gamedb/identify?path=${encodeURIComponent(p)}`);
+      if (id.found && p === path) {
+        appId = id.game.appId ?? '';
+        knownAs = id.game.name;
+        guess = id.game.name;
+      }
     } catch {
-      // The folder's own name will do.
+      // Named from the path instead.
+    }
+    if (!knownAs) {
+      try {
+        guess = (await api.get(`/api/suggest-name?path=${encodeURIComponent(p)}`)).name || guess;
+      } catch {
+        // The folder's own name will do.
+      }
     }
     if (p !== path || typed) return;
     name = guess;
@@ -65,7 +83,7 @@
     if (!name.trim() || !path || adding) return;
     adding = true;
     try {
-      const game = await api.post('/api/games', { name: name.trim(), savePath: path });
+      const game = await api.post('/api/games', { name: name.trim(), savePath: path, appId });
       toast($t('common.nowTracking', { name: game.name ?? name }), 'success');
       dispatch('close');
       navigate('game', { gameId: game.id });
@@ -102,6 +120,7 @@
         on:keydown={(e) => e.key === 'Enter' && add()}
       />
       <span class="hint">{$t('home.addGame.nameHint')}</span>
+      {#if knownAs}<span class="hint">{$t('home.addGame.recognisedAs', { name: knownAs })}</span>{/if}
     </div>
   </div>
   <ModalFoot>
