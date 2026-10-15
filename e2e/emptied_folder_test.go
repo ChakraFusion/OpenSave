@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/testutil"
 )
 
@@ -276,4 +277,48 @@ func TestEmptiedFolder_ASyncStartedDuringAWriteIsStillHeld(t *testing.T) {
 	if e := emptiedState(t, a, gameID); e == nil || e.Files != 3 {
 		t.Errorf("the emptied device says %+v; want the game held back over 3 files", e)
 	}
+}
+
+// "Put them back" with no snapshot fetches the files even when a lost report
+// has left the base behind. The push-proof repair records what both devices
+// held; while the game is held as emptied it must leave alone the record put
+// back takes the files out of, or they read as deleted here and the other
+// device loses them too.
+func TestEmptiedFolder_PutBackSurvivesALostReport(t *testing.T) {
+	a, b, gameID := emptiedAndHeld(t, "Emptied Lost Report Game")
+	var snaps map[string]struct {
+		Branches map[string]struct {
+			Snapshots []struct {
+				ID string `json:"id"`
+			} `json:"snapshots"`
+		} `json:"branches"`
+	}
+	a.API(http.MethodGet, "/api/games", nil, &snaps)
+	for _, br := range snaps[gameID].Branches {
+		for _, s := range br.Snapshots {
+			if err := a.Daemon.Store.SetSnapshotCheck(s.ID, time.Now().UnixMilli(), "damaged for this test"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a.API(http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]string{"answer": "restore"}, nil)
+	// What a lost report leaves: the push still on record, and the base
+	// behind what the peer holds.
+	held, err := delta.BuildManifest(b.SaveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetAgreedHash(gameID, b.NodeID(), "a base from before"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetPushedHash(gameID, b.NodeID(), held.ManifestHash()); err != nil {
+		t.Fatal(err)
+	}
+	if a.Daemon.Store.GetPushedHash(gameID, b.NodeID()) == "" {
+		t.Fatal("setup: the push record did not stick")
+	}
+	a.APIStatus(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	syncBothWays(t, gameID, a, b)
+	stillHasIt(t, b, "the other device")
+	stillHasIt(t, a, "the emptied device, from the other")
 }
