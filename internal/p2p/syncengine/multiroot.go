@@ -131,11 +131,20 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 	// (TestMultiRootScenario_ADeletionSurvivesALostReport). Both held exactly
 	// the pushed state, so its files are the lineage.
 	//
+	// Not while the game is held as emptied (hold.go): the lineage is then
+	// kept on purpose. "Put them back" with no snapshot takes the files out of
+	// it so that the next sync fetches them; written back here, they read as
+	// deleted on this device, and the deletions went to the peer — both
+	// devices lost the location's files
+	// (TestMultiRootScenario_PutBackOfAnEmptiedLocationSurvivesALostReport).
+	//
 	// Both hashes are of the filtered view, which is what the push recorded.
 	if pushed := e.Store.GetPushedHashForRoot(gameID, peer.ID, sr.root.Name); pushed != "" {
 		if remoteHash := remote.RootHash(delta.PrimaryRoot); remoteHash == pushed &&
 			e.Store.GetAgreedHashForRoot(gameID, peer.ID, sr.root.Name) != remoteHash {
-			e.persistRootLineage(gameID, peer.ID, sr.root.Name, remote, remote)
+			if _, held, err := e.Store.GetDeletionHold(gameID); err == nil && !held {
+				e.persistRootLineage(gameID, peer.ID, sr.root.Name, remote, remote)
+			}
 			_ = e.Store.SetAgreedHashForRoot(gameID, peer.ID, sr.root.Name, remoteHash)
 		}
 	}
