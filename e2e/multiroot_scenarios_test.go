@@ -481,12 +481,12 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 				t.Fatal(err)
 			}
 			// With no base, the edits are judged against when the two were
-			// last confirmed the same, and only one made more than the 2 s
-			// clock-skew allowance after it counts as new (DetectConflict). A
-			// refresh the setup's own reports started can stamp that time
-			// after SettleSync returns; edits made in the next two seconds
-			// then read as neither side having changed, and the test failed on
-			// its own timing (Windows CI: stamped 1.8 s before the edits).
+			// last confirmed the same. A refresh the setup's own reports
+			// started can stamp that time after SettleSync returns; waiting
+			// for it to settle leaves the report delivered below as the only
+			// thing that moves it. (While edits within 2 s of that time read
+			// as no change, this test failed on its own timing: Windows CI
+			// stamped 1.8 s before the edits.)
 			waitPastLastSynced(t, a, b.NodeID())
 
 			writeIn(t, aConfig, "settings.ini", "A-version")
@@ -522,10 +522,65 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 	}
 }
 
+// The same divergence with the edits made straight after the two devices were
+// confirmed the same. A location with no merge base is judged against that
+// time, and a 2 s clock-skew allowance was added to it: edits on both devices
+// within 2 s read as neither having changed, and one replaced the other with
+// no conflict raised. Any edit after that time now counts as a change, so two
+// of them are a conflict (#57).
+func TestMultiRootScenario_EditsRightAfterASyncStillConflict(t *testing.T) {
+	a, b, gameID, aConfig, bConfig := twoLocationPair(t, "LocEditsAfterStamp", map[string]string{
+		"settings.ini": "shared v1",
+	})
+	pauseAutoSync(t, a, b, gameID)
+
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		return a.Daemon.Store.GetAgreedHashForRoot(gameID, b.NodeID(), "config") != ""
+	}) {
+		t.Fatal("setup: the two devices never recorded agreeing on the location")
+	}
+	testutil.SettleSync(t, gameID, a, b)
+	if err := a.Daemon.Store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	var peer syncengine.Peer
+	for _, p := range a.Daemon.P2P.OnlinePeers() {
+		if p.ID == b.NodeID() {
+			peer = p
+		}
+	}
+	if peer.ID == "" {
+		t.Fatal("B is not online for A")
+	}
+	// Stamps the two as synced now; the edits follow within 2 s.
+	// Finding them the same also records a merge base for the location again,
+	// which would judge the edits by content; cleared, as a lost report leaves
+	// it, so they are judged by the time.
+	a.Daemon.P2P.Sync.RefreshLineage(context.Background(), gameID, peer)
+	if err := a.Daemon.Store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", ""); err != nil {
+		t.Fatal(err)
+	}
+	writeIn(t, aConfig, "settings.ini", "A-version")
+	writeIn(t, bConfig, "settings.ini", "B-version")
+
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		return len(a.Daemon.P2P.Sync.ActiveRootConflicts()) > 0
+	}) {
+		t.Fatalf("both devices edited the location and no conflict was raised: A=%q B=%q",
+			readIn(aConfig, "settings.ini"), readIn(bConfig, "settings.ini"))
+	}
+	if got := readIn(aConfig, "settings.ini"); got != "A-version" {
+		t.Errorf("A's edit was replaced with %q", got)
+	}
+	if got := readIn(bConfig, "settings.ini"); got != "B-version" {
+		t.Errorf("B's edit was replaced with %q", got)
+	}
+}
+
 // waitPastLastSynced waits until a's "last synced" time for the peer has
-// stopped moving and lies further back than the clock-skew allowance a
-// location without a merge base is judged with (syncengine's
-// clockSkewToleranceMs, 2 s), so an edit made after it counts as new.
+// stopped moving and lies more than a few seconds back.
 func waitPastLastSynced(t *testing.T, a *testutil.TestDaemon, peerID string) {
 	t.Helper()
 	const past = 3 * time.Second // the 2 s allowance, and a margin

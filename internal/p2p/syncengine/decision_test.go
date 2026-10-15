@@ -70,9 +70,26 @@ func TestDetectConflict(t *testing.T) {
 			want:       false,
 		},
 		{
-			name: "clock skew within 2s tolerance does not count as modified",
-			// local mtime is 1.5s past lastSync — inside the tolerance window.
+			name: "both edited within 2s after last sync -> conflict",
+			// Both edits inside the tolerance window. They used to read as
+			// neither side having changed, and one replaced the other.
 			local:      manifest(11500, map[string]delta.FileEntry{"a": fileEntry("h1", 11500)}),
+			remote:     manifest(11800, map[string]delta.FileEntry{"a": fileEntry("h2", 11800)}),
+			lastSyncMs: 10000,
+			want:       true,
+		},
+		{
+			name:       "edited within 2s after last sync on one side only -> no conflict",
+			local:      manifest(11500, map[string]delta.FileEntry{"a": fileEntry("h1", 11500)}),
+			remote:     manifest(5000, map[string]delta.FileEntry{"a": fileEntry("h2", 5000)}),
+			lastSyncMs: 10000,
+			want:       false,
+		},
+		{
+			name: "a copy written just before last sync is no change",
+			// A pulled file keeps the sender's mtime, which in a quick
+			// exchange is just before the sync was stamped.
+			local:      manifest(9500, map[string]delta.FileEntry{"a": fileEntry("h1", 9500)}),
 			remote:     manifest(25000, map[string]delta.FileEntry{"a": fileEntry("h2", 25000)}),
 			lastSyncMs: 10000,
 			want:       false,
