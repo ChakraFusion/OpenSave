@@ -25,6 +25,11 @@ const (
 	wanRequestTimeout    = 30 * time.Second
 	wanPeerExpiry        = 20 * time.Second
 
+	// wanPresenceWriteEvery is how often a peer that stays online has its
+	// last-seen time written. Well inside wanPeerExpiry, so a peer that keeps
+	// sending is never expired between two writes.
+	wanPresenceWriteEvery = 5 * time.Second
+
 	// wanReconnectMaxDelay caps the exponential backoff. A relay that is
 	// genuinely down must not be hammered every 5s forever, and when it is
 	// merely cycling, every client in every room would otherwise pile onto
@@ -625,6 +630,32 @@ func (w *WanClient) Request(ctx context.Context, peerID, route, method string, b
 	return nil, fmt.Errorf("%s", errBody.Error)
 }
 
+// replyWaitKey carries how long a request may wait for its reply; see
+// withReplyWait.
+type replyWaitKey struct{}
+
+// withReplyWait lets the requests made with ctx wait up to d for their reply
+// instead of wanRequestTimeout: for an answer that legitimately takes longer,
+// such as a payload sized to the save data it moves, or a peer that holds its
+// answer while a sync is writing the save.
+func withReplyWait(ctx context.Context, d time.Duration) context.Context {
+	return context.WithValue(ctx, replyWaitKey{}, d)
+}
+
+// replyWait is how long a request waits for its reply: wanRequestTimeout, or
+// longer when the caller asked for it with withReplyWait — and never the
+// caller's whole deadline. The relay drops frames for a client that can't keep
+// up (relay/server.go), and a sync runs under a 30-minute deadline: a request
+// or reply that was dropped then stalled the sync for half an hour instead of
+// failing it after the timeout, to be retried.
+func replyWait(ctx context.Context) time.Duration {
+	timeout := wanRequestTimeout
+	if d, ok := ctx.Value(replyWaitKey{}).(time.Duration); ok && d > timeout {
+		timeout = d
+	}
+	return timeout
+}
+
 // exchange sends one request and waits for its reply. err is for a reply
 // that never came — the relay offline, a timeout — and a reply of any status
 // is returned as one, so a caller can tell "refused" from "not delivered".
@@ -657,16 +688,7 @@ func (w *WanClient) exchange(ctx context.Context, peerID, route, method string, 
 
 	w.send(w.buildRequest(peerID, msgID, route, method, rawBody, authKey))
 
-	// wanRequestTimeout is a floor, not a ceiling: a caller moving several
-	// megabytes of save data sets a deadline sized to the payload, and a flat
-	// 30s would abandon a transfer that was making perfectly good progress on
-	// a slow link.
-	timeout := wanRequestTimeout
-	if deadline, ok := ctx.Deadline(); ok {
-		if until := time.Until(deadline); until > timeout {
-			timeout = until
-		}
-	}
+	timeout := replyWait(ctx)
 
 	select {
 	case <-ctx.Done():
