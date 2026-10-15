@@ -3,7 +3,7 @@ package store
 import "fmt"
 
 // PeerLink is how fast this device has measured its connection to a peer.
-// See migrations/0038_peer_links.sql.
+// See migrations/0039_peer_links.sql.
 type PeerLink struct {
 	PeerID      string  `db:"peer_id"`
 	BytesPerSec float64 `db:"bytes_per_sec"`
