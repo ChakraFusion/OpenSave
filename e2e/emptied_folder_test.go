@@ -331,3 +331,32 @@ func TestEmptiedFolder_NoSnapshotOfTheEmptyOrHalfSave(t *testing.T) {
 		}
 	}
 }
+
+// The emptied device's own sync, started while something there is writing
+// the save — the automatic snapshot of the very change that emptied it, or
+// another sync — must still be held back.
+//
+// Whether the folder was emptied is only judged while nothing writes it, and
+// a sync used to read "nothing decided yet" as "not held": it went on, waited
+// for the write itself, read the folder empty and sent every deletion to the
+// other device. Windows CI, TestEmptiedFolder_PutBackRestoresThem: the other
+// device lost all three files while the save was supposedly held back.
+func TestEmptiedFolder_ASyncStartedDuringAWriteIsStillHeld(t *testing.T) {
+	a, b, gameID := pairAndTrack(t, "Emptied Mid-Write Game", emptiedSave)
+	testutil.SettleSync(t, gameID, a, b)
+
+	release := a.Daemon.P2P.Sync.Writing(gameID)
+	emptyFolder(t, a.SaveDir)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		release()
+	}()
+	if code := a.APIStatus(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil); code != http.StatusConflict {
+		t.Errorf("syncing the emptied game while a write was in progress = %d, want it held back (409)", code)
+	}
+	syncBothWays(t, gameID, a, b)
+	stillHasIt(t, b, "the other device, after the emptied device synced mid-write")
+	if e := emptiedState(t, a, gameID); e == nil || e.Files != 3 {
+		t.Errorf("the emptied device says %+v; want the game held back over 3 files", e)
+	}
+}

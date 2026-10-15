@@ -267,6 +267,40 @@ func (e *Engine) CheckHold(gameID string, serving bool) (held bool, err error) {
 	// takes holdMu (noteEmptiedByPeer).
 	readDone, settled := e.TryReading(gameID)
 	defer readDone()
+	return e.checkHold(gameID, serving, settled)
+}
+
+// holdSettleWait bounds how long a sync waits for a write in progress here to
+// end before judging whether the folder was emptied.
+const holdSettleWait = 30 * time.Second
+
+// checkHoldSettled is CheckHold for a sync this device is about to start. A
+// write in progress here — an automatic snapshot of the change that emptied
+// the folder, another sync — is waited out, and the folder judged as it then
+// stands.
+//
+// CheckHold decides nothing while anything is writing, and for a sync that
+// answer was "not held": the sync went on, waited for the write itself, read
+// the folder empty, and sent every file's deletion to the other device — the
+// one thing the hold exists to stop. Windows CI: in
+// TestEmptiedFolder_PutBackRestoresThem the other device lost every file while
+// the save was held back.
+// A write that does not end in time is ErrSettling: the sync does not run on
+// a folder nobody could judge, and is tried again later.
+func (e *Engine) checkHoldSettled(ctx context.Context, gameID string) (held bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, holdSettleWait)
+	defer cancel()
+	readDone, err := e.Reading(ctx, gameID)
+	if err != nil {
+		return false, err
+	}
+	defer readDone()
+	return e.checkHold(gameID, false, true)
+}
+
+// checkHold is CheckHold's judgement, for a caller that has taken the read
+// side of the gate (settled) or tried to and could not.
+func (e *Engine) checkHold(gameID string, serving, settled bool) (held bool, err error) {
 	e.holdMu.Lock()
 	defer e.holdMu.Unlock()
 	game, err := e.Store.GetGame(gameID)
