@@ -134,3 +134,47 @@ func TestRelocateNotFound_IsNotRepeated(t *testing.T) {
 		t.Error("searched again straight away; it should wait relocateRecheck")
 	}
 }
+
+// A folder set by hand while an offer is open is the answer that counts:
+// accepting the old offer is refused, the hand-set folder stays, and the
+// offer is gone.
+func TestRelocateToOtherDrive_AnOfferIsStaleOnceTheFolderIsSetByHand(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("drive letters are a Windows thing")
+	}
+	free := freeDriveLetter()
+	if free == "" {
+		t.Skip("no free drive letter")
+	}
+	d := newTestDaemon(t)
+	real := filepath.Join(t.TempDir(), "SteamLibrary", "steamapps", "common", "Game", "save")
+	if err := os.MkdirAll(real, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := free + ":" + real[2:]
+	if err := d.Store.CreateGame(store.Game{ID: "g", Name: "Game", SavePath: elsewhere, ActiveBranch: "main", AutoSync: true}); err != nil {
+		t.Fatal(err)
+	}
+	d.noteMissing("g", "Game", elsewhere, true)
+	if got := d.RelocateSuggestion("g"); !strings.EqualFold(got, real) {
+		t.Fatalf("setup: offered %q, want %s", got, real)
+	}
+
+	byHand := t.TempDir()
+	g, _ := d.Store.GetGame("g")
+	g.SavePath = byHand
+	if err := d.Store.UpdateGame(g); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := d.AcceptRelocation("g", real); err == nil {
+		t.Error("an offer made for the old folder was accepted after the folder was set by hand")
+	}
+	g, _ = d.Store.GetGame("g")
+	if g.SavePath != byHand {
+		t.Errorf("save path = %s, want the one set by hand, %s", g.SavePath, byHand)
+	}
+	if d.RelocateSuggestion("g") != "" {
+		t.Error("the stale offer is still offered")
+	}
+}
