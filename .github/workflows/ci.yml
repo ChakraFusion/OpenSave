@@ -23,13 +23,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Round 8: everything found so far, together: the daemon-start fix,
-        # the late-report and temp-dir test fixes, and the open upstream
-        # fixes #56 (pr/exclusion-change-snapshot), pr/agreed-report,
-        # pr/relay-lost-reply and pr/database-wal.
-        kind: [daemon, shard2]
+        # Round 9: every fix found so far, plus the emptied-hold fix. "flaky"
+        # repeats, by name, every test that failed in rounds 1-7; shard0/1/2
+        # run the whole suite as upstream splits it now.
+        kind: [flaky, shard0, shard1, shard2]
         arm: [all]
-        rep: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+        rep: [1, 2, 3, 4, 5]
+        include:
+          - { kind: flaky, arm: all, rep: 6 }
+          - { kind: flaky, arm: all, rep: 7 }
+          - { kind: flaky, arm: all, rep: 8 }
+          - { kind: flaky, arm: all, rep: 9 }
+          - { kind: flaky, arm: all, rep: 10 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -50,11 +55,16 @@ jobs:
         env:
           LC_ALL: C
         run: |
-          if [ "${{ matrix.kind }}" = shard2 ]; then
-            # Same selection as upstream ci.yml, shard 2 of 3.
+          case "${{ matrix.kind }}" in shard0) shard=0;; shard1) shard=1;; shard2) shard=2;; *) shard="";; esac
+          if [ -n "$shard" ]; then
+            # Same selection as upstream ci.yml.
             names=$(grep -ho '^func Test[A-Za-z0-9_]*' e2e/*_test.go | sed 's/^func //' \
-              | grep -vx 'TestMain' | sort -u | awk -v n=3 -v i=2 'NR % n == i')
+              | grep -vx 'TestMain' | sort -u | awk -v n=3 -v i=$shard 'NR % n == i')
             count=1
+          elif [ "${{ matrix.kind }}" = flaky ]; then
+            # Every test that failed in rounds 1-7.
+            names="TestMultiRootScenario_ALateReportDoesNotHideADivergence TestSoak_ManyAlternatingRoundsNeverConflict TestIgnored_ASaveFromTheCloudLeavesAnIgnoredFileAlone TestHistory_DeleteSingleSnapshot TestSwitch_TheSameGameUnderDifferentIDsSyncs TestEmptiedFolder_PutBackRestoresThem TestMissingFolder_ARestartDoesNotRecreateItEmpty TestDeletionMultiFile_TheBaseReflectsTheLastDeletionNotTheFirst TestWatchAutoSyncChain TestJourney_SplitSaveThroughItsWholeLife TestFreshRestore_BackupRestoresGamesOntoACleanInstall TestCLI_Storage TestCLI_SnapshotDeleteAndPrune TestCLI_BackupExportImportRoundTrip TestFreshRestore_SnapshotModeReportsWhatItImported"
+            count=3
           else
             # Every test that starts a CLI daemon process.
             names=$(awk '/^func Test/{match($0,/Test[A-Za-z0-9_]*/); name=substr($0,RSTART,RLENGTH)} /startDaemon\(\)/ && name!="" {print name}' e2e/*_test.go \
