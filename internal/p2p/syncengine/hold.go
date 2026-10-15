@@ -546,6 +546,114 @@ type peerDeletions struct {
 // noteDelay is how long NoteEmptiedByPeer waits for the rest of a batch.
 const noteDelay = 300 * time.Millisecond
 
+// SaveFolderGone is told that a game's whole save folder is gone, not just
+// its files: "missing" wins over "emptied" (#66). Deleting a folder removes
+// its files first, and a watcher that saw them go held the game as emptied
+// and asked; the folder then turned out to be missing, and the question
+// stayed, even after the folder came back. An unanswered hold is dropped:
+// the game pauses quietly as a missing folder does, and SaveFolderBack judges
+// the folder afresh when it returns. A hold someone answered — put them back,
+// or delete them there too — is that person's decision and stays.
+func (e *Engine) SaveFolderGone(gameID string) {
+	e.holdMu.Lock()
+	defer e.holdMu.Unlock()
+	hold, has, err := e.Store.GetDeletionHold(gameID)
+	if err != nil || !has || hold.State != store.HoldAsking {
+		return
+	}
+	if err := e.Store.ClearDeletionHold(gameID); err != nil {
+		return
+	}
+	name := gameID
+	if game, err := e.Store.GetGame(gameID); err == nil {
+		name = game.Name
+	}
+	e.Log("info", fmt.Sprintf("the whole save folder of %q is gone, so it is treated as missing rather than emptied: "+
+		"nothing is asked, and it is looked at again when the folder is back", name))
+	e.holdChanged(gameID)
+}
+
+// SaveFolderBack judges a save folder that was missing and is back, before
+// it is watched or synced again. Back empty, or with fewer of the files both
+// devices last shared, it is held exactly as an emptied folder is, and asked
+// about: a folder a game or an uninstaller recreated empty must never be
+// synced as deletions. Reports whether the game is held.
+func (e *Engine) SaveFolderBack(gameID string) (held bool, err error) {
+	e.holdMu.Lock()
+	defer e.holdMu.Unlock()
+	if _, has, err := e.Store.GetDeletionHold(gameID); err != nil || has {
+		return has, err
+	}
+	game, err := e.Store.GetGame(gameID)
+	if err != nil {
+		return false, err
+	}
+	if !e.Store.HasSyncState(game.ID) {
+		return false, nil // never synced: nothing to hold back from
+	}
+	extra, err := e.Store.GameRootPaths(game.ID)
+	if err != nil {
+		extra = nil
+	}
+	for _, p := range append([]string{game.SavePath}, mapValues(extra)...) {
+		delta.InvalidateRoot(p)
+	}
+	m, failures, err := delta.BuildMultiManifest(game.SavePath, extra)
+	if err != nil {
+		return false, err
+	}
+	rules := e.rulesFor(game.ID)
+	m = filterManifest(m, rules)
+	present := map[string]map[string]struct{}{delta.PrimaryRoot: keysOf(m.Files)}
+	for name, root := range m.Extra {
+		present[name] = keysOf(root.Files)
+	}
+	shared, err := e.Store.SharedFiles(game.ID)
+	if err != nil {
+		return false, err
+	}
+	gone := map[string][]string{}
+	total := 0
+	for name, had := range shared {
+		here, known := present[name]
+		if !known || failures[name] != nil {
+			continue
+		}
+		for f := range filterLineage(had, rules) {
+			if _, ok := here[f]; !ok {
+				gone[name] = append(gone[name], f)
+				total++
+			}
+		}
+	}
+	if total == 0 {
+		return false, nil
+	}
+	names := make([]string, 0, len(gone))
+	for name := range gone {
+		sort.Strings(gone[name])
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if err := e.Store.SetDeletionHold(gameID, store.HoldAsking, time.Now().UnixMilli(), gone); err != nil {
+		return false, err
+	}
+	e.Log("warn", fmt.Sprintf("the save folder of %q is back, but without %d of the files both devices last had (%s) — "+
+		"it is not synced until you say whether they were meant to go, so your other devices keep their copies meanwhile",
+		game.Name, total, describeLocations(names)))
+	e.RecordActivity(store.ActivityEvent{GameID: gameID, Kind: store.ActivityEmptied, Files: total})
+	e.holdChanged(gameID)
+	return true, nil
+}
+
+func mapValues(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
+}
+
 func (e *Engine) holdChanged(gameID string) {
 	if e.OnHoldChanged != nil {
 		e.OnHoldChanged(gameID)

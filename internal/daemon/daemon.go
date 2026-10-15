@@ -669,6 +669,18 @@ func (d *Daemon) ResyncWatchers() (started, stopped int) {
 		if _, watching := d.Watcher.Watching(id); watching {
 			continue
 		}
+		// A folder that was missing and is back is judged before it is watched
+		// again: back empty, or with fewer of the files both devices last
+		// shared, it is held and asked about rather than synced as deletions.
+		// Watching first would let the catch-up start a sync ahead of that.
+		d.missingMu.Lock()
+		wasMissing := d.missing[id]
+		d.missingMu.Unlock()
+		if wasMissing && !SaveFolderMissing(path) && d.P2P != nil && d.P2P.Sync != nil {
+			if _, err := d.P2P.Sync.SaveFolderBack(id); err != nil {
+				d.Log.Log("warn", fmt.Sprintf("could not check the save folder of %q that is back: %v", names[id], err))
+			}
+		}
 		if err := d.watchGame(id, path); err != nil {
 			if errors.Is(err, watcher.ErrSaveFolderMissing) {
 				d.noteMissing(id, names[id], path, true)
