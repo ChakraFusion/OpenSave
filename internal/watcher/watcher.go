@@ -902,6 +902,15 @@ func (e *Engine) handleChangeFrom(ctx context.Context, gw *gameWatch, ownOnly bo
 	}
 	e.log("success", fmt.Sprintf("auto-snapshot created for %q", gw.gameID))
 
+	// Stopped while the snapshot was taken — auto-sync switched off, the game
+	// untracked, the app quitting: the snapshot is kept, as it is the save as
+	// it changed, but nothing more happens on behalf of a watch nobody wants.
+	// A snapshot can take seconds, longer than stopping waits (stop), so this
+	// ran on after the watch was given up and started a sync of a game whose
+	// auto-sync had just been switched off.
+	if ctx.Err() != nil {
+		return
+	}
 	if e.cb.OnChanged != nil {
 		e.cb.OnChanged(gw.gameID)
 	}

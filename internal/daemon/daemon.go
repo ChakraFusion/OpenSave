@@ -236,6 +236,17 @@ func New(opts Options) (*Daemon, error) {
 			// Watcher-detected save change: push it to online peers. Bound to
 			// the P2P engine's lifecycle so shutdown cancels a transfer in
 			// flight instead of leaving it writing into the save folder.
+			//
+			// Not for a game whose auto-sync is off: a change reported after
+			// it was switched off — by the catch-up, or a watch that finished
+			// its snapshot as it was being stopped — is the game's, but syncing
+			// it is what the setting says not to do.
+			if game, err := d.Store.GetGame(gameID); err != nil || !game.AutoSync {
+				if d.OnGameChanged != nil {
+					d.OnGameChanged(gameID)
+				}
+				return
+			}
 			d.P2P.GoSync(func(ctx context.Context) {
 				ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 				defer cancel()
