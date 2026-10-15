@@ -27,6 +27,12 @@ All notable changes to OpenSave are documented here. This project adheres to
 - **An edit made while two devices compared their saves is no longer
   lost.** "In sync as of" is stamped with when the comparison began, so a
   change made during it still counts as new. (#63)
+- **A file deleted just after a sync no longer comes back when the other
+  device's "done" report goes missing.** The report is also what records
+  which files both devices hold, so without it a file this device had just
+  sent could read as one it never had, and was fetched back. The record is
+  now repaired too — except while a save is held back as emptied, where it is
+  kept as it is so that "put them back" still works. (#65)
 - **OpenSave's own changes no longer look like the game saving.** Files a
   sync writes or deletes no longer set off a run of automatic snapshots, or a
   sync straight back to the device they came from. A save the game writes
