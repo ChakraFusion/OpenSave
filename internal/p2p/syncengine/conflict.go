@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/owntouch"
 	"github.com/opensave/opensave/internal/snapshot"
 )
 
@@ -222,14 +223,18 @@ func (e *Engine) touchSaveMtimes(gameID, root string) {
 		return
 	}
 	if !info.IsDir() {
+		owntouch.Mark(root)
 		_ = os.Chtimes(root, now, now)
+		owntouch.Settled(root)
 		return
 	}
 	_ = filepath.Walk(root, func(path string, fi os.FileInfo, walkErr error) error {
 		if walkErr != nil || fi.IsDir() {
 			return nil
 		}
+		owntouch.Mark(path)
 		_ = os.Chtimes(path, now, now)
+		owntouch.Settled(path)
 		return nil
 	})
 }
@@ -362,6 +367,7 @@ func (e *Engine) overwriteLocalWithRemote(ctx context.Context, gameID string, pe
 		}
 		full := filepath.Join(game.SavePath, filepath.FromSlash(relPath))
 		_ = os.Chmod(full, 0o666)
+		owntouch.MarkRemoved(full)
 		_ = os.Remove(full)
 	}
 
