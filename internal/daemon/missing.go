@@ -170,6 +170,11 @@ func (d *Daemon) noteMissing(gameID, name, savePath string, missing bool) {
 	if was == missing {
 		return
 	}
+	if missing && d.P2P != nil && d.P2P.Sync != nil {
+		// "Missing" wins over "emptied": a question asked as the folder's
+		// files went first is dropped (syncengine.SaveFolderGone).
+		d.P2P.Sync.SaveFolderGone(gameID)
+	}
 	if name == "" {
 		name = gameID
 	}
