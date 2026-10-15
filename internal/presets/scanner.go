@@ -64,11 +64,20 @@ func (sc *Scanner) linuxHome() string {
 
 // NewScanner builds a production Scanner using the Steam Store API
 // resolver.
+//
+// OPENSAVE_MANIFEST_URL, when set, replaces where the Ludusavi manifest comes
+// from; set empty, nothing is downloaded. The e2e tests run the CLI as a
+// separate program, out of reach of the in-process tests' Scanner settings,
+// and without it every one of them fetched the 17.7 MB manifest from GitHub.
 func NewScanner(cacheFile string) *Scanner {
+	manifestURL := ludusaviManifestURL
+	if v, ok := os.LookupEnv("OPENSAVE_MANIFEST_URL"); ok {
+		manifestURL = v
+	}
 	return &Scanner{
 		CacheFile:      cacheFile,
 		ResolveAppName: fetchSteamAppName,
-		ManifestURL:    ludusaviManifestURL,
+		ManifestURL:    manifestURL,
 	}
 }
 

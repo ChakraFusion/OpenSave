@@ -645,11 +645,8 @@ func (sc *Scanner) loadManifestIndex() []indexedGame {
 
 	// Reuse the index when it's newer than the YAML it was built from.
 	if idxInfo, err := os.Stat(indexPath); err == nil && idxInfo.ModTime().After(yamlInfo.ModTime()) {
-		if raw, err := os.ReadFile(indexPath); err == nil {
-			var games []indexedGame
-			if json.Unmarshal(raw, &games) == nil && len(games) > 0 {
-				return games
-			}
+		if games := diskIndex.load(indexPath, idxInfo); len(games) > 0 {
+			return games
 		}
 	}
 
@@ -661,6 +658,38 @@ func (sc *Scanner) loadManifestIndex() []indexedGame {
 		return games
 	}
 	return embedded()
+}
+
+// diskIndex keeps the last index read from disk, for as long as the file is
+// the same one. Reading it is 6 MB of JSON, some 120 ms, and it is asked for
+// on every snapshot and every hash of a save (the game's device-settings
+// exclusions, DeviceSettings). Shared read-only, as the embedded index is.
+var diskIndex indexCache
+
+type indexCache struct {
+	mu    sync.Mutex
+	path  string
+	mod   time.Time
+	size  int64
+	games []indexedGame
+}
+
+func (c *indexCache) load(path string, info os.FileInfo) []indexedGame {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.games != nil && c.path == path && c.mod.Equal(info.ModTime()) && c.size == info.Size() {
+		return c.games
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var games []indexedGame
+	if json.Unmarshal(raw, &games) != nil || len(games) == 0 {
+		return nil
+	}
+	c.path, c.mod, c.size, c.games = path, info.ModTime(), info.Size(), games
+	return games
 }
 
 // refreshInFlight guards against overlapping background downloads.
@@ -714,6 +743,23 @@ func (sc *Scanner) downloadManifest(yamlPath string) {
 	if copyErr != nil || closeErr != nil {
 		os.Remove(tmp)
 		return
+	}
+	// The index is built here, in the background, before the manifest takes
+	// its place - not by the next caller that finds the manifest newer than
+	// its index. That caller was whatever wanted the index next, usually a
+	// snapshot reading the game's device-settings exclusions, and parsing the
+	// 17.7 MB YAML held it up for some twenty seconds. The index is then
+	// dated after the manifest it came from, so no one rebuilds it: the
+	// manifest is dated a second before the index, as the clock can give the
+	// two files the same time.
+	_, indexPath := sc.manifestPaths()
+	if games := buildManifestIndex(tmp); len(games) > 0 {
+		if raw, err := json.Marshal(games); err == nil && writeFileAtomic(indexPath, raw) == nil {
+			if info, err := os.Stat(indexPath); err == nil {
+				older := info.ModTime().Add(-time.Second)
+				_ = os.Chtimes(tmp, older, older)
+			}
+		}
 	}
 	_ = os.Remove(yamlPath)
 	_ = os.Rename(tmp, yamlPath)
