@@ -23,18 +23,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Round 9: every fix found so far, plus the emptied-hold fix. "flaky"
-        # repeats, by name, every test that failed in rounds 1-7; shard0/1/2
-        # run the whole suite as upstream splits it now.
-        kind: [flaky, shard0, shard1, shard2]
+        # Round 10: round 9 plus the lost-report deletion fix. "watch" repeats
+        # TestWatchAutoSyncChain (3 failures in round 9) and the deletion
+        # tests; shard0/1/2 run the whole suite as upstream splits it now.
+        kind: [watch, shard0, shard1, shard2]
         arm: [all]
-        rep: [1, 2, 3, 4, 5]
+        rep: [1, 2, 3, 4]
         include:
-          - { kind: flaky, arm: all, rep: 6 }
-          - { kind: flaky, arm: all, rep: 7 }
-          - { kind: flaky, arm: all, rep: 8 }
-          - { kind: flaky, arm: all, rep: 9 }
-          - { kind: flaky, arm: all, rep: 10 }
+          - { kind: watch, arm: all, rep: 5 }
+          - { kind: watch, arm: all, rep: 6 }
+          - { kind: watch, arm: all, rep: 7 }
+          - { kind: watch, arm: all, rep: 8 }
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -61,6 +60,9 @@ jobs:
             names=$(grep -ho '^func Test[A-Za-z0-9_]*' e2e/*_test.go | sed 's/^func //' \
               | grep -vx 'TestMain' | sort -u | awk -v n=3 -v i=$shard 'NR % n == i')
             count=1
+          elif [ "${{ matrix.kind }}" = watch ]; then
+            names=$(grep -ho '^func Test\(WatchAutoSyncChain\|Deletion[A-Za-z0-9_]*\)' e2e/*_test.go | sed 's/^func //' | sort -u)
+            count=3
           elif [ "${{ matrix.kind }}" = flaky ]; then
             # Every test that failed in rounds 1-7.
             names="TestMultiRootScenario_ALateReportDoesNotHideADivergence TestSoak_ManyAlternatingRoundsNeverConflict TestIgnored_ASaveFromTheCloudLeavesAnIgnoredFileAlone TestHistory_DeleteSingleSnapshot TestSwitch_TheSameGameUnderDifferentIDsSyncs TestEmptiedFolder_PutBackRestoresThem TestMissingFolder_ARestartDoesNotRecreateItEmpty TestDeletionMultiFile_TheBaseReflectsTheLastDeletionNotTheFirst TestWatchAutoSyncChain TestJourney_SplitSaveThroughItsWholeLife TestFreshRestore_BackupRestoresGamesOntoACleanInstall TestCLI_Storage TestCLI_SnapshotDeleteAndPrune TestCLI_BackupExportImportRoundTrip TestFreshRestore_SnapshotModeReportsWhatItImported"
