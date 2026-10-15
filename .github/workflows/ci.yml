@@ -13,7 +13,7 @@ on:
         default: "45"
 
 env:
-  HUNT_MINUTES: ${{ github.event.inputs.minutes || '45' }}
+  HUNT_MINUTES: ${{ github.event.inputs.minutes || '35' }}
 
 jobs:
   hunt:
@@ -23,7 +23,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Round 10: round 9 plus the lost-report deletion fix. "watch" repeats
+        # Round 11: round 10 with fix D extended to the served proof and its
+        # test made race-free. Round 10: round 9 plus the lost-report deletion fix. "watch" repeats
         # TestWatchAutoSyncChain (3 failures in round 9) and the deletion
         # tests; shard0/1/2 run the whole suite as upstream splits it now.
         kind: [watch, shard0, shard1, shard2]

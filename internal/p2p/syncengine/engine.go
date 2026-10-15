@@ -592,6 +592,7 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// terms. Only against the base it was served under (served.go).
 	if remoteHash := remoteData.Manifest.ManifestHash(); agreedHash != remoteHash &&
 		e.servedUnderBase(gameID, peer.ID, unfilteredRemote.ManifestHash(), storedBase) {
+		e.persistLineage(gameID, peer.ID, remoteData.Manifest, remoteData.Manifest)
 		_ = e.Store.SetAgreedHash(gameID, peer.ID, remoteHash)
 		agreedHash = remoteHash
 	}

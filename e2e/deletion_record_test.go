@@ -141,16 +141,38 @@ func TestDeletion_NeverRemovesAnEditThePeerMadeAfterwards(t *testing.T) {
 // still be deletable.
 //
 // The report is what moves the shared base forward and records the files both
-// devices hold. Lost, it leaves the old base and a lineage without the new
-// file; only the push stays on record. Deleted before the watcher noticed,
-// the file then read as one the peer had and this device never did, and was
-// fetched straight back. On Windows CI this was TestWatchAutoSyncChain's
-// "deletion never auto-synced to B". The lost report is set up directly here
-// rather than raced for.
+// devices hold. Lost, it leaves the old base and a record without the new file;
+// only this device's note of what it handed over remains — the push, and the
+// manifest it served the peer to pull from. A later sync proves the hand-over
+// from either note and banks the base, but the record of shared files stayed
+// behind. Deleted before the watcher noticed, the file then read as one the
+// peer had and this device never did, and was fetched straight back. On
+// Windows CI this was TestWatchAutoSyncChain's "deletion never auto-synced to
+// B". The lost report is set up directly here rather than raced for: once with
+// both notes, as a push leaves them, and once with only the serving on record.
 func TestDeletion_SurvivesALostReport(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		pushed bool
+	}{
+		{"with the push on record", true},
+		{"with only the serving on record", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { deletionAfterALostReport(t, tc.pushed) })
+	}
+}
+
+func deletionAfterALostReport(t *testing.T, pushed bool) {
 	a, b, gameID := pairAndTrack(t, "Lost Report Deletion", map[string]string{"seed.sav": "seed"})
 	testutil.SettleSync(t, gameID, a, b)
-	oldBase := a.Daemon.Store.GetAgreedHash(gameID, b.NodeID())
+	st := a.Daemon.Store
+	var oldBase string
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		oldBase = st.GetAgreedHash(gameID, b.NodeID())
+		return oldBase != ""
+	}) {
+		t.Fatal("setup: the devices never recorded that they agree")
+	}
 
 	a.WriteSave("auto.sav", "v1")
 	time.Sleep(syncSettleWindow)
@@ -160,17 +182,25 @@ func TestDeletion_SurvivesALostReport(t *testing.T) {
 	}
 	testutil.SettleSync(t, gameID, a, b)
 
-	// The state a lost report leaves: the push on record, nothing else.
-	pushed, err := delta.BuildManifest(a.SaveDir)
+	// The report is let through and then undone, rather than dropped: written
+	// over while it is still being recorded, it would leave a mix of before
+	// and after that no lost report produces.
+	handedOver, err := delta.BuildManifest(a.SaveDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	st := a.Daemon.Store
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		return st.GetAgreedHash(gameID, b.NodeID()) == handedOver.ManifestHash()
+	}) {
+		t.Fatal("setup: the report never arrived")
+	}
 	if err := st.SetAgreedHash(gameID, b.NodeID(), oldBase); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetPushedHash(gameID, b.NodeID(), pushed.ManifestHash()); err != nil {
-		t.Fatal(err)
+	if pushed {
+		if err := st.SetPushedHash(gameID, b.NodeID(), handedOver.ManifestHash()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := st.SetSyncState(gameID, b.NodeID(), []string{"seed.sav"}, nil); err != nil {
 		t.Fatal(err)
