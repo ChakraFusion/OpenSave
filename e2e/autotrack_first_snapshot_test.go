@@ -20,10 +20,13 @@ import (
 // was not watched either until the periodic check came round, so a change
 // made there in the meantime was not sent on.
 func TestAutoTrack_TakesAFirstSnapshotAndWatches(t *testing.T) {
+	// Before the daemons: cleanups run last first, so the folder outlives them.
+	// Made after, it was deleted while they were still using it, and on Windows
+	// that fails the test ("The directory is not empty").
+	rootA, rootB := t.TempDir(), t.TempDir()
 	a := testutil.NewTestDaemon(t, "AutoSnap-A")
 	b := testutil.NewTestDaemon(t, "AutoSnap-B")
 	a.PairWith(b)
-	rootA, rootB := t.TempDir(), t.TempDir()
 	saveA, saveB := filepath.Join(rootA, "Detroit"), filepath.Join(rootB, "Detroit")
 	writeAt(t, filepath.Join(saveA, "slot1.sav"), "chapter 12")
 	writeAt(t, filepath.Join(saveB, "slot1.sav"), "chapter 12")
