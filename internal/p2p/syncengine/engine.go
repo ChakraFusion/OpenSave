@@ -245,7 +245,11 @@ func (e *Engine) SyncGame(ctx context.Context, gameID string, onlinePeers []Peer
 	}
 	// A save emptied here is not synced until someone says whether that was
 	// meant (hold.go).
-	if held, err := e.CheckHold(gameID, false); err == nil && held {
+	held, err := e.checkHoldSettled(ctx, gameID)
+	if err != nil && errors.Is(err, ErrSettling) {
+		return nil, err
+	}
+	if err == nil && held {
 		return nil, ErrHeld
 	}
 	e.mu.Lock()
