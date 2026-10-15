@@ -35,10 +35,13 @@ func scanFor(td *testutil.TestDaemon, wantPath string) *scanHit {
 // trip the UI actually performs: save the path into settings, rescan, and
 // find it gone.
 func TestScanExclude_DismissedLocationStaysGone(t *testing.T) {
+	// Before the daemons: cleanups run last first, so the folder outlives them.
+	// Made after, it was deleted while they were still using it, and on Windows
+	// that fails the test ("The directory is not empty").
+	root := t.TempDir()
 	td := testutil.NewTestDaemon(t, "ScanExclude")
 
 	// A custom scan root with two candidate saves in it.
-	root := t.TempDir()
 	keep := filepath.Join(root, "KeepMe")
 	drop := filepath.Join(root, "DropMe")
 	for _, d := range []string{keep, drop} {
