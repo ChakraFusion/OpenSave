@@ -47,6 +47,9 @@ type fakeTransport struct {
 	// "sync-complete" once a pull's files are all written, before the sync
 	// that pulled them has finished.
 	onSyncEvent func(eventType string)
+	// onFetchManifest runs as the peer's manifest is served, before it is
+	// read: a test's way to stand in a comparison that is part-way through.
+	onFetchManifest func()
 }
 
 func (f *fakeTransport) FetchManifest(ctx context.Context, peer Peer, gameID string, q ManifestQuery) (ManifestResponse, error) {
@@ -62,6 +65,9 @@ func (f *fakeTransport) FetchManifest(ctx context.Context, peer Peer, gameID str
 	}
 	if f.manifestErr != nil {
 		return ManifestResponse{}, f.manifestErr
+	}
+	if f.onFetchManifest != nil {
+		f.onFetchManifest()
 	}
 	m, err := delta.BuildManifest(f.remoteDir)
 	if err != nil {

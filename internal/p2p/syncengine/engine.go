@@ -393,7 +393,16 @@ func syncedNow() string { return time.Now().UTC().Format("2006-01-02T15:04:05.00
 // up to date with this save?" needs. The two are written together so they
 // cannot disagree about when.
 func (e *Engine) recordSynced(gameID, peerID string) {
-	ts := syncedNow()
+	e.recordSyncedAt(gameID, peerID, syncedNow())
+}
+
+// recordSyncedAt is recordSynced for a comparison that began at ts. The stamp
+// says the two devices were the same as of that time, and a location with no
+// merge base yet counts only the edits made after it as new. Stamped with the
+// time the comparison ended instead, it reached past edits made while it ran
+// — on a slow disk that is seconds — and an edit made on both devices then
+// read as neither having changed: one quietly replaced the other.
+func (e *Engine) recordSyncedAt(gameID, peerID, ts string) {
 	_ = e.Store.UpdatePeerLastSynced(peerID, ts)
 	_ = e.Store.UpdateGamePeerLastSynced(gameID, peerID, ts)
 }
@@ -1182,6 +1191,11 @@ func (e *Engine) ConfirmInSync(ctx context.Context, gameID string, peer Peer, cl
 // the lineage (making future local deletions of them propagate instead of
 // the file being pulled back).
 func (e *Engine) RefreshLineage(ctx context.Context, gameID string, peer Peer) {
+	// Taken before either side is read: whatever the comparison below finds,
+	// it found as of no earlier than this, and an edit made while it runs —
+	// after the peer's manifest was fetched, or after ours was read — must
+	// still count as made after the time it stamps (recordSyncedAt).
+	checkedAt := syncedNow()
 	game, err := e.Store.GetGame(gameID)
 	if err != nil {
 		return
@@ -1219,7 +1233,7 @@ func (e *Engine) RefreshLineage(ctx context.Context, gameID string, peer Peer) {
 	if local.ManifestHash() == remoteData.Manifest.ManifestHash() {
 		_ = e.Store.SetAgreedHash(gameID, peer.ID, local.ManifestHash())
 		if rootsAgree {
-			e.recordSynced(gameID, peer.ID)
+			e.recordSyncedAt(gameID, peer.ID, checkedAt)
 			e.notifySyncConfirmed(gameID)
 		}
 	}
