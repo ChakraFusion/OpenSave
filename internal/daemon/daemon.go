@@ -387,8 +387,24 @@ func (d *Daemon) Start() error {
 	})
 
 	// The database file gives back the space of what was deleted from it
-	// (store/compact.go), hourly.
+	// (store/compact.go): shortly after start, out of the way of everything a
+	// start does, and hourly after that. A database from an older build is
+	// switched over first, once: a rewrite of the whole file, which in
+	// store.Open would have held up the first start after updating.
 	d.P2P.GoSync(func(ctx context.Context) {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(dbCompactFirst):
+		}
+		began := time.Now()
+		if converted, err := d.Store.EnableIncrementalVacuum(); err != nil {
+			d.Log.Log("warn", fmt.Sprintf("the database could not be set to give unused space back to the disk: %v", err))
+		} else if converted {
+			d.Log.Log("info", fmt.Sprintf("the database now gives unused space back to the disk (a one-time rewrite, %s)",
+				time.Since(began).Round(100*time.Millisecond)))
+		}
+		d.Store.Compact()
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for {

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jmoiron/sqlx"
 )
 
 // Deleted rows give their space back to the disk: the file shrinks, rather
@@ -97,5 +99,39 @@ func TestDatabaseUsesWAL(t *testing.T) {
 	var mode string
 	if err := s.db.Get(&mode, `PRAGMA journal_mode`); err != nil || mode != "wal" {
 		t.Errorf("journal_mode = %q (%v), want wal", mode, err)
+	}
+}
+
+// A database created by an older build, without incremental auto-vacuum, is
+// not rewritten when it is opened: the start stays fast. It is switched over
+// once, by EnableIncrementalVacuum, and after that gives space back as usual.
+func TestOlderDatabaseIsSwitchedOverAfterOpenNotDuringIt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "opensave.db")
+	old, err := sqlx.Open("sqlite", "file:"+path) // as an older build left it: no auto-vacuum
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE older_build (k TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	old.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if s.incrementalVacuum() {
+		t.Fatal("Open rewrote an older database; that is for after the start")
+	}
+	converted, err := s.EnableIncrementalVacuum()
+	if err != nil || !converted {
+		t.Fatalf("EnableIncrementalVacuum = %v, %v; want it switched over", converted, err)
+	}
+	if !s.incrementalVacuum() {
+		t.Fatal("auto_vacuum is still not incremental")
+	}
+	if converted, err := s.EnableIncrementalVacuum(); err != nil || converted {
+		t.Errorf("a second EnableIncrementalVacuum = %v, %v; want nothing to do", converted, err)
 	}
 }
