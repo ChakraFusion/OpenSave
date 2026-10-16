@@ -12,6 +12,7 @@
   import { canLaunch } from '../../lib/gameactions.js';
   import Spinner from '../../components/ui/Spinner.svelte';
   import { restoreProgressText } from '../../lib/restoreprogress.js';
+  import { t } from '../../lib/i18n.js';
   import ArrowLeft from 'lucide-svelte/icons/arrow-left';
   import Play from 'lucide-svelte/icons/play';
   import RefreshCw from 'lucide-svelte/icons/refresh-cw';
@@ -136,7 +137,7 @@
         · <span class="syncing">syncing {activity.percentage ?? 0}%</span>
       {/if}
       {#if game.restoring}
-        · <span class="syncing"><Spinner size={11} /> {restoreProgressText(game.restoring)}</span>
+        · <span class="syncing"><Spinner size={11} /> {restoreProgressText(game.restoring, $t)}</span>
       {/if}
       {#if game.playingSince}
         · <span class="playing">in session since {new Date(game.playingSince).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>

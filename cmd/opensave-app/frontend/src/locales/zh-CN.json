@@ -190,5 +190,13 @@
   "home.findGame.pickAnother": "← 选择其他游戏",
   "home.findGame.already": "此处已作为“{tracked}”跟踪。再次跟踪会将相同的文件同步两次；请改为将该条目关联到 {name}，使其获得游戏数据库中的名称、App ID 和封面。",
   "home.findGame.link": "将“{tracked}”关联到 {name}",
-  "home.findGame.linked": "“{tracked}”现在是 {name}"
+  "home.findGame.linked": "“{tracked}”现在是 {name}",
+  "restoreProgress.rebuilding": "正在重建快照",
+  "restoreProgress.checking": "正在检查快照",
+  "restoreProgress.writing": "正在写入文件",
+  "restoreProgress.restoring": "正在恢复",
+  "restoreProgress.line": "{phase} — {percent}%（{done}/{total}）",
+  "restoreProgress.lineWithTimeLeft": "{phase} — {percent}%（{done}/{total}），还剩{left}",
+  "restoreProgress.underAMinute": "不到一分钟",
+  "restoreProgress.aboutMinutes": "约 {n} 分钟"
 }

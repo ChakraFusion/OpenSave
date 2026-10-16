@@ -211,5 +211,16 @@
   "home.findGame.pickAnother": "← Pick another game",
   "home.findGame.already": "Already tracked here as \"{tracked}\". Tracking it again would sync the same files twice; link that entry to {name} instead, so it gets the game database’s name, App ID and cover art.",
   "home.findGame.link": "Link \"{tracked}\" to {name}",
-  "home.findGame.linked": "\"{tracked}\" is now {name}"
+  "home.findGame.linked": "\"{tracked}\" is now {name}",
+  "restoreProgress.rebuilding": "Rebuilding the snapshot",
+  "restoreProgress.checking": "Checking the snapshot",
+  "restoreProgress.writing": "Writing the files",
+  "restoreProgress.restoring": "Restoring",
+  "restoreProgress.line": "{phase} — {percent}% ({done} of {total})",
+  "restoreProgress.lineWithTimeLeft": "{phase} — {percent}% ({done} of {total}), {left} left",
+  "restoreProgress.underAMinute": "under a minute",
+  "restoreProgress.aboutMinutes": {
+    "one": "about a minute",
+    "other": "about {n} minutes"
+  }
 }
