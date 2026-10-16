@@ -135,6 +135,10 @@ func (d *Daemon) suggestOtherDrive(gameID, name, savePath string) bool {
 	if strings.EqualFold(d.relocateDismissed[gameID], found[0]) {
 		return false // the user said this one is not it
 	}
+	if d.relocateFor == nil {
+		d.relocateFor = map[string]string{}
+	}
+	d.relocateFor[gameID] = savePath
 	if strings.EqualFold(d.relocateSuggested[gameID], found[0]) {
 		return true // offered already
 	}
@@ -159,21 +163,31 @@ func (d *Daemon) RelocateSuggestion(gameID string) string {
 
 // AcceptRelocation switches a game to the folder offered for it. path must be
 // the one offered, so an answer to an older question does not switch to a
-// folder nobody was shown.
+// folder nobody was shown. And the game must still be at the missing path the
+// offer was made for: a folder set by hand while the offer was open is the
+// answer that counts, and accepting the old offer would have overwritten it.
 func (d *Daemon) AcceptRelocation(gameID, path string) error {
 	d.missingMu.Lock()
-	offered := d.relocateSuggested[gameID]
+	offered, offeredFor := d.relocateSuggested[gameID], d.relocateFor[gameID]
 	d.missingMu.Unlock()
 	if offered == "" || !strings.EqualFold(offered, path) {
 		return fmt.Errorf("no folder is offered for this game at %s", path)
 	}
-	newPath, err := d.ValidateSavePath(offered)
-	if err != nil {
-		return fmt.Errorf("the folder at %s cannot be used: %w", offered, err)
-	}
 	game, err := d.Store.GetGame(gameID)
 	if err != nil {
 		return err
+	}
+	if !strings.EqualFold(filepath.Clean(game.SavePath), filepath.Clean(offeredFor)) {
+		d.missingMu.Lock()
+		delete(d.relocateSuggested, gameID)
+		delete(d.relocateFor, gameID)
+		d.missingMu.Unlock()
+		return fmt.Errorf("the save folder of %q was changed to %s after %s was offered; the offer no longer applies",
+			game.Name, game.SavePath, offered)
+	}
+	newPath, err := d.ValidateSavePath(offered)
+	if err != nil {
+		return fmt.Errorf("the folder at %s cannot be used: %w", offered, err)
 	}
 	old := game.SavePath
 	game.SavePath = newPath
@@ -182,6 +196,7 @@ func (d *Daemon) AcceptRelocation(gameID, path string) error {
 	}
 	d.missingMu.Lock()
 	delete(d.relocateSuggested, gameID)
+	delete(d.relocateFor, gameID)
 	delete(d.missing, gameID)
 	d.missingMu.Unlock()
 	d.Log.Log("success", fmt.Sprintf("the save folder of %q is now %s on this device, as confirmed (it was %s)",
@@ -202,6 +217,7 @@ func (d *Daemon) DismissRelocation(gameID string) error {
 		return fmt.Errorf("no folder is offered for this game")
 	}
 	delete(d.relocateSuggested, gameID)
+	delete(d.relocateFor, gameID)
 	if d.relocateDismissed == nil {
 		d.relocateDismissed = map[string]string{}
 	}
@@ -231,6 +247,7 @@ func (d *Daemon) noteMissing(gameID, name, savePath string, missing bool) {
 	} else {
 		delete(d.missing, gameID)
 		delete(d.relocateSuggested, gameID) // back where it was: nothing to offer
+		delete(d.relocateFor, gameID)
 	}
 	d.missingMu.Unlock()
 	if was == missing {

@@ -66,8 +66,10 @@ type Daemon struct {
 	// another drive (missing.go).
 	relocateChecked map[string]time.Time
 	// relocateSuggested: the folder offered for a missing one, per game;
+	// relocateFor: the missing save path that offer was made for;
 	// relocateDismissed: the one answered "not this one" (missing.go).
 	relocateSuggested map[string]string
+	relocateFor       map[string]string
 	relocateDismissed map[string]string
 
 	// Play sessions; see sessions.go.
