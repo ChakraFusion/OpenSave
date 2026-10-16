@@ -1,6 +1,7 @@
 package syncengine
 
 import (
+	"strings"
 	"time"
 
 	"github.com/opensave/opensave/internal/delta"
@@ -69,6 +70,23 @@ func (e *Engine) NoteServed(gameID, peerID string, m delta.Manifest) {
 		list = list[len(list)-servedKeep:]
 	}
 	e.served[key] = list
+}
+
+// ForgetServed drops every served state recorded for a game, with any peer.
+// Called when the game is untracked, with the rest of what it agreed with its
+// peers (store.ForgetGameSyncState). The records live in memory, so they
+// outlived the untrack: a game tracked again within the hour could bank a
+// state served before it was untracked as agreed, against a base that the
+// untrack had wiped.
+func (e *Engine) ForgetServed(gameID string) {
+	prefix := servedKey(gameID, "")
+	e.servedMu.Lock()
+	defer e.servedMu.Unlock()
+	for key := range e.served {
+		if strings.HasPrefix(key, prefix) {
+			delete(e.served, key)
+		}
+	}
 }
 
 // servedUnderBase reports whether this device served hash to the peer while

@@ -1083,6 +1083,7 @@ func (d *Daemon) UntrackGame(gameID string) error {
 	// same ID and would inherit all of it — and a stale lineage reads a file
 	// that went missing while untracked as a deletion to propagate.
 	_ = d.Store.ForgetGameSyncState(gameID)
+	d.P2P.Sync.ForgetServed(gameID)
 	d.P2P.ClearPendingResync(gameID)
 	d.P2P.NotifyUntrack(gameID)
 	return nil
@@ -1240,6 +1241,7 @@ func (d *Daemon) untrackFromPeer(gameID string) {
 	// And everything it agreed with any peer, for the reason given in
 	// UntrackGame: the ID comes back, and this must not come back with it.
 	_ = d.Store.ForgetGameSyncState(gameID)
+	d.P2P.Sync.ForgetServed(gameID)
 	d.P2P.ClearPendingResync(gameID)
 	d.Log.Log("info", fmt.Sprintf("game %q untracked on a paired device", gameID))
 }
