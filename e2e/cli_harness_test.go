@@ -143,6 +143,12 @@ func (c *cli) env() []string {
 		// Styling is suppressed when stdout is not a terminal, but be explicit:
 		// escape codes in the captured output would break every assertion.
 		"NO_COLOR=1",
+		// Nothing from the internet: the CLI is a separate program, out of
+		// reach of the Scanner settings the in-process test daemons get
+		// (testutil.NewTestDaemon). With a fresh home it has no manifest, so
+		// every run started a download of the 17.7 MB Ludusavi manifest from
+		// GitHub, and a CLI daemon finished it. Empty, as those daemons have it.
+		"OPENSAVE_MANIFEST_URL=",
 	)
 }
 
