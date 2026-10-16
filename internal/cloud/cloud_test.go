@@ -9,7 +9,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -91,17 +93,22 @@ func TestLocalFolderRoundTrip(t *testing.T) {
 func TestWebDAVProvider(t *testing.T) {
 	var uploaded []byte
 	var gotAuth string
+	objects := map[string][]byte{}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
+		name := path.Base(r.URL.Path)
 		switch r.Method {
 		case http.MethodPut:
-			uploaded, _ = io.ReadAll(r.Body)
+			objects[name], _ = io.ReadAll(r.Body)
 			w.WriteHeader(http.StatusCreated)
-		case http.MethodHead:
-			// Post-upload verification: report what was actually stored.
-			w.Header().Set("Content-Length", fmt.Sprint(len(uploaded)))
-			w.WriteHeader(http.StatusOK)
+		case "MOVE":
+			destination, _ := url.Parse(r.Header.Get("Destination"))
+			dst := path.Base(destination.Path)
+			objects[dst] = objects[name]
+			delete(objects, name)
+			uploaded = objects[dst]
+			w.WriteHeader(http.StatusCreated)
 		case "PROPFIND":
 			w.WriteHeader(http.StatusMultiStatus)
 			fmt.Fprint(w, `<?xml version="1.0"?>
@@ -119,7 +126,15 @@ func TestWebDAVProvider(t *testing.T) {
   </D:response>
 </D:multistatus>`)
 		case http.MethodGet:
-			fmt.Fprint(w, "webdav content")
+			body, ok := objects[name]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			_, _ = w.Write(body)
+		case http.MethodDelete:
+			delete(objects, name)
+			w.WriteHeader(http.StatusNoContent)
 		}
 	}))
 	defer server.Close()
@@ -157,7 +172,7 @@ func TestWebDAVProvider(t *testing.T) {
 		t.Fatalf("Download: %v", err)
 	}
 	got, _ := os.ReadFile(dl)
-	if string(got) != "webdav content" {
+	if string(got) != "dav data" {
 		t.Errorf("downloaded = %q", got)
 	}
 }
@@ -726,14 +741,25 @@ func TestChunkedUploads(t *testing.T) {
 // the PUT but stores a truncated/empty file must fail the upload loudly
 // (field report: an uploaded snapshot zip arrived empty and nobody knew).
 func TestWebDAVUploadVerificationCatchesTruncation(t *testing.T) {
+	objects := map[string][]byte{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name := path.Base(r.URL.Path)
 		switch r.Method {
 		case http.MethodPut:
 			_, _ = io.Copy(io.Discard, r.Body)
+			objects[name] = nil               // acknowledged, but nothing persisted
 			w.WriteHeader(http.StatusCreated) // "fine!" — but stores nothing
-		case http.MethodHead:
-			w.Header().Set("Content-Length", "0")
-			w.WriteHeader(http.StatusOK)
+		case http.MethodGet:
+			body, ok := objects[name]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+			_, _ = w.Write(body)
+		case http.MethodDelete:
+			delete(objects, name)
+			w.WriteHeader(http.StatusNoContent)
 		}
 	}))
 	defer server.Close()

@@ -14,6 +14,7 @@ require (
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/crypto v0.33.0
+	golang.org/x/net v0.35.0
 	golang.org/x/sys v0.44.0
 	golang.org/x/term v0.29.0
 	golang.org/x/text v0.22.0
@@ -47,7 +48,6 @@ require (
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
-	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	modernc.org/libc v1.73.4 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
