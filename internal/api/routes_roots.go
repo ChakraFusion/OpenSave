@@ -72,10 +72,12 @@ func (s *Server) handleAddGameRoot(w http.ResponseWriter, r *http.Request) {
 	// Rejections here are the overlap and naming rules, which are the user's
 	// to hear about rather than a server fault: "that folder is already
 	// covered by the main save" is a sentence, not a 500.
+	oldRoots, _ := s.Daemon.Store.GameRootPaths(gameID)
 	if err := s.Daemon.Store.AddGameRoot(gameID, body.Name, path); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.Daemon.LocationsChanged(gameID, oldRoots)
 	// Start watching it now, not at the next restart.
 	s.Daemon.RewatchGame(gameID)
 	s.BroadcastGamesUpdate()
@@ -90,10 +92,12 @@ func (s *Server) handleRemoveGameRoot(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid location name")
 		return
 	}
+	oldRoots, _ := s.Daemon.Store.GameRootPaths(gameID)
 	if err := s.Daemon.Store.RemoveGameRoot(gameID, name); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	s.Daemon.LocationsChanged(gameID, oldRoots)
 	// Stop watching it now, or it keeps waking the game up over a folder
 	// nobody is covering any more.
 	s.Daemon.RewatchGame(gameID)

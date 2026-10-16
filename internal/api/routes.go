@@ -447,14 +447,15 @@ func (s *Server) handleUpdateGame(w http.ResponseWriter, r *http.Request) {
 			s.Daemon.Log.Log("warn", fmt.Sprintf(
 				"could not reset sync agreement for %q after its exclusions changed: %v", game.Name, err))
 		}
-		// The last-snapshot hash goes too, for exactly the same reason: it was
+		// The last-snapshot hash too, for exactly the same reason: it was
 		// recorded over the old view, and the sync engine compares against it
 		// to decide whether the save holds changes a pull would overwrite. A
 		// value that can never match again makes that check fire on every
-		// pull. Clearing it disables the check until the next snapshot
-		// re-records it, which is the safe direction — it can cost one
-		// unnecessary prompt, never a silent overwrite.
-		game.LastManifestHash = ""
+		// pull. Restated in the new view when the save provably has not
+		// changed since that snapshot, and cleared otherwise, which disables
+		// the check until the next snapshot re-records it — the safe
+		// direction (daemon.LastSnapshotHashUnder).
+		game.LastManifestHash = s.Daemon.LastSnapshotHashUnder(game, oldIgnore)
 	}
 
 	if err := s.Daemon.Store.UpdateGame(game); err != nil {
@@ -614,7 +615,7 @@ func (s *Server) handleCreateSnapshot(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = readJSON(r, &body) // empty body is fine
 
-	snap, err := s.Daemon.Snapshots.Create(gameID, body.Comment, false)
+	snap, err := s.Daemon.SnapshotWithBaseline(gameID, body.Comment, false)
 	if err != nil {
 		writeError(w, notFoundToStatus(err), err.Error())
 		return
