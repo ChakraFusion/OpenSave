@@ -20,6 +20,11 @@ import (
 // (GitHub #60). The same goes for an entry that would land outside its folder,
 // which extraction refuses. So the layout is checked here, as extraction would
 // lay it out, and a restore or branch switch stops before touching the save.
+//
+// A file listed twice is refused too, also when the two names differ only in
+// case on a filesystem that ignores it. Extraction writes files in parallel,
+// so the two entries would be two writers on one file at once, and what is
+// left on disk could be neither of them.
 func CheckExtractable(zipPath string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
@@ -51,6 +56,9 @@ func CheckExtractable(zipPath string) error {
 		} else {
 			if other, ok := dirs[place]; ok {
 				return fmt.Errorf("%w: %s is a file, but %s needs a folder of that name", ErrDamaged, f.Name, other)
+			}
+			if other, ok := files[place]; ok {
+				return fmt.Errorf("%w: %s and %s are the same file", ErrDamaged, other, f.Name)
 			}
 			files[place] = f.Name
 		}
