@@ -33,6 +33,15 @@ All notable changes to OpenSave are documented here. This project adheres to
   sent could read as one it never had, and was fetched back. The record is
   now repaired too — except while a save is held back as emptied, where it is
   kept as it is so that "put them back" still works. (#65)
+- **Switching branch, or restoring, no longer empties a save and calls it
+  done.** A branch whose latest snapshot was missing or damaged was switched
+  to anyway: the save folder was cleared, nothing could be put back, and the
+  switch reported success. An archive whose checksums were fine but whose
+  files could not all be laid out on disk did the same to a restore. The
+  snapshot is now checked — there, whole, and able to be laid out — before
+  anything is cleared, and if it is not, nothing changes and you are told
+  why. If putting it back still fails part-way, the save that was there is
+  put back, and a branch switch stays on the branch it was on. (#59, #60)
 - **OpenSave's own changes no longer look like the game saving.** Files a
   sync writes or deletes no longer set off a run of automatic snapshots, or a
   sync straight back to the device they came from. A save the game writes
