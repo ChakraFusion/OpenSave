@@ -41,7 +41,7 @@ func (p localFolder) list() ([]CloudFile, error) {
 	}
 	entries, err := os.ReadDir(p.cfg.URL)
 	if err != nil {
-		return []CloudFile{}, nil
+		return nil, fmt.Errorf("read local folder destination %q: %w", p.cfg.URL, err)
 	}
 	var files []CloudFile
 	for _, e := range entries {
