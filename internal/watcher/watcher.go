@@ -114,6 +114,10 @@ type Callbacks struct {
 	SetLastManifestHash func(gameID, hash string) error
 	// CreateSnapshot takes the auto-snapshot. Retried on failure.
 	CreateSnapshot func(gameID string) error
+	// SnapshotGaveUp is told when a pass gave up on its auto-snapshot after
+	// every retry, with the last error; the change is taken again at the next
+	// pass. May be nil.
+	SnapshotGaveUp func(gameID string, err error)
 	// OnChanged fires after a successful auto-snapshot (the daemon uses it
 	// to kick off P2P sync). Optional-in-behavior: may be nil.
 	OnChanged func(gameID string)
@@ -962,6 +966,9 @@ func (e *Engine) handleChangeFrom(ctx context.Context, gw *gameWatch, ownOnly bo
 	}
 	if err != nil {
 		e.log("error", fmt.Sprintf("auto-snapshot permanently failed for %q: %v", gw.gameID, err))
+		if e.cb.SnapshotGaveUp != nil {
+			e.cb.SnapshotGaveUp(gw.gameID, err)
+		}
 		return
 	}
 
