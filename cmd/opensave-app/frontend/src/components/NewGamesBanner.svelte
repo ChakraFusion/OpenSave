@@ -12,6 +12,7 @@
   import { newGames, navigate, toast } from '../lib/stores.js';
   import { notifyPrefs } from '../lib/notifyprefs.js';
   import { api } from '../lib/api.js';
+  import { t, segments } from '../lib/i18n.js';
   import Gamepad2 from 'lucide-svelte/icons/gamepad-2';
 
   let busy = false;
@@ -39,9 +40,9 @@
   }
 
   const list = (items, rest) => {
-    const all = rest > 0 ? [...items, `${rest} more`] : items;
+    const all = rest > 0 ? [...items, $t('newGames.more', { n: rest })] : items;
     if (all.length === 1) return all[0];
-    return all.slice(0, -1).join(', ') + ' and ' + all[all.length - 1];
+    return all.slice(0, -1).join($t('newGames.listSep')) + $t('newGames.listAnd') + all[all.length - 1];
   };
 </script>
 
@@ -51,18 +52,18 @@
     <div class="new-body">
       <div class="new-title">
         {#if names.length === 1}
-          <strong>{names[0]}</strong> has saves OpenSave isn't keeping yet
+          {#each segments($t('newGames.titleOne'), { name: names[0] }, ['name']) as part}{#if part.bold}<strong>{part.text}</strong>{:else}{part.text}{/if}{/each}
         {:else}
-          <strong>{names.length} games</strong> have saves OpenSave isn't keeping yet
+          {#each segments($t('newGames.titleMany'), { count: names.length }, ['count']) as part}{#if part.bold}<strong>{part.text}</strong>{:else}{part.text}{/if}{/each}
         {/if}
       </div>
       <div class="new-sub">
-        {#if names.length > 1}{list(shown, more)} · {/if}nothing is tracked until you choose it
+        {#if names.length > 1}{list(shown, more)} · {/if}{$t('newGames.subNothing')}
       </div>
     </div>
     <div class="new-actions">
-      <button class="btn small" disabled={busy} on:click={dismiss}>Dismiss</button>
-      <button class="btn small primary" disabled={busy} on:click={review}>Review</button>
+      <button class="btn small" disabled={busy} on:click={dismiss}>{$t('common.dismiss')}</button>
+      <button class="btn small primary" disabled={busy} on:click={review}>{$t('newGames.review')}</button>
     </div>
   </div>
 {/if}

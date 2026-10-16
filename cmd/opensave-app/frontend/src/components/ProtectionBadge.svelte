@@ -1,10 +1,9 @@
 <script>
   import {
     protectionState,
-    PROTECTION_LABELS,
     PROTECTION_ICONS,
-    PROTECTION_DETAILS,
   } from '../lib/protection.js';
+  import { t, segments } from '../lib/i18n.js';
 
   // What protects traffic with one paired device, stated per device.
   //
@@ -24,9 +23,9 @@
   export let compact = false;
 
   $: state = protectionState(peer);
-  $: label = PROTECTION_LABELS[state];
+  $: label = $t(`protection.label.${state}`);
   $: icon = PROTECTION_ICONS[state];
-  $: detail = PROTECTION_DETAILS[state];
+  $: detail = $t(`protection.detail.${state}`);
 </script>
 
 <span class="protection {state}" class:compact title={detail}>
@@ -39,8 +38,7 @@
     {detail}
     {#if peer?.fingerprint}
       <div class="fingerprint">
-        Pairing fingerprint <code>{peer.fingerprint}</code> — it should read the same on the other
-        device.
+        {#each segments($t('protection.fingerprint'), { code: peer.fingerprint }, ['code']) as part}{#if part.bold}<code>{part.text}</code>{:else}{part.text}{/if}{/each}
       </div>
     {/if}
   </div>
