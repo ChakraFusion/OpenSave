@@ -12,10 +12,6 @@ import (
 	"github.com/opensave/opensave/internal/delta"
 )
 
-// clockSkewToleranceMs matches the JS engine's 2-second allowance when
-// comparing manifest mtimes against the last sync time.
-const clockSkewToleranceMs = 2000
-
 // DetectConflict reports whether both sides changed since the last sync —
 // the only situation that needs user intervention.
 //
@@ -24,7 +20,7 @@ const clockSkewToleranceMs = 2000
 //   - Never synced before (lastSyncTimeMs == 0): conflict only if BOTH
 //     sides already have files (two pre-existing, diverged save states).
 //   - Otherwise: conflict when both manifests' latest mtimes are newer
-//     than lastSyncTimeMs + 2s of skew tolerance.
+//     than lastSyncTimeMs.
 func DetectConflict(local, remote delta.Manifest, lastSyncTimeMs int64, agreedHash string) bool {
 	if local.ManifestHash() == remote.ManifestHash() {
 		return false
@@ -50,8 +46,19 @@ func DetectConflict(local, remote delta.Manifest, lastSyncTimeMs int64, agreedHa
 	if lastSyncTimeMs == 0 {
 		return len(local.Files) > 0 && len(remote.Files) > 0
 	}
-	localModified := int64(local.LatestMtime) > lastSyncTimeMs+clockSkewToleranceMs
-	remoteModified := int64(remote.LatestMtime) > lastSyncTimeMs+clockSkewToleranceMs
+	// Any edit after the last sync is a change. A conflict still needs both
+	// sides changed: one side alone wins as it always has. There used to be a
+	// 2 s clock-skew allowance after the sync, and edits made on both devices
+	// within it read as neither having changed, so one replaced the other
+	// with no conflict raised. An extra prompt right after a sync is the
+	// better failure.
+	//
+	// The allowance is not moved before the sync instead: a pulled file keeps
+	// the sender's mtime, which in a quick exchange is just before the stamp,
+	// and counting that copy as a change made the next edit on the other
+	// device a conflict (TestUntrackPropagatesAndRecovers).
+	localModified := int64(local.LatestMtime) > lastSyncTimeMs
+	remoteModified := int64(remote.LatestMtime) > lastSyncTimeMs
 	return localModified && remoteModified
 }
 
