@@ -23,7 +23,6 @@ func twoLocationPair(t *testing.T, name string, configFiles map[string]string) (
 	a, b *testutil.TestDaemon, gameID, aConfig, bConfig string) {
 	t.Helper()
 	a, b, gameID = pairAndTrack(t, name, map[string]string{"save.sav": "primary v1"})
-	logOnFailure(t, a, b)
 
 	aConfig = extraDir(t, a, "config")
 	bConfig = extraDir(t, b, "config")
