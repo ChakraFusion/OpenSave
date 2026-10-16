@@ -924,20 +924,33 @@ func (e *Engine) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if e.Sync.Progress.OnSyncComplete != nil {
 			e.Sync.Progress.OnSyncComplete(gameID, ev)
 		}
-		if peer, ok := e.peerByAddress(clientIP(r)); ok {
-			e.peerFinishedPulling(gameID, peer, body.Data)
-		}
+		// Answered first, recorded after: what it records waits for the
+		// database, which a snapshot or sync here can hold for seconds, and
+		// the peer gives up on an answer long before that (see
+		// ReportSyncEvent). Still recorded before this returns.
+		answerNow(w)
+		e.reports.once(body.Data, func() {
+			if peer, ok := e.peerByAddress(clientIP(r)); ok {
+				e.peerFinishedPulling(gameID, peer, body.Data)
+			}
+		})
+		return
 	case "in-sync":
 		// The peer verified both sides hold identical content; confirm on
 		// our side (hash re-check) before recording lineage + last-synced.
+		// Answered first, as above.
 		claimedHash, _ := body.Data["manifestHash"].(string)
-		if peer, ok := e.peerByAddress(clientIP(r)); ok {
-			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				defer cancel()
-				e.Sync.ConfirmInSync(ctx, gameID, peer, claimedHash)
-			}()
-		}
+		answerNow(w)
+		e.reports.once(body.Data, func() {
+			if peer, ok := e.peerByAddress(clientIP(r)); ok {
+				go func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+					defer cancel()
+					e.Sync.ConfirmInSync(ctx, gameID, peer, claimedHash)
+				}()
+			}
+		})
+		return
 	case "sync-error":
 		if e.Sync.Progress.OnSyncError != nil {
 			e.Sync.Progress.OnSyncError(gameID, ev)
