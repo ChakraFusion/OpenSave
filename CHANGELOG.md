@@ -59,6 +59,34 @@ All notable changes to OpenSave are documented here. This project adheres to
 - **A new installation starts faster.** Its database is set up in one step
   rather than some 150, which on a busy Windows disk took over 30 seconds;
   and an upgrade that fails part-way leaves the database as it was. (#61)
+- **A file deleted in a game's extra save folder no longer comes back.**
+  When the other device's "done" report went missing, or the record of what
+  both devices hold was rebuilt a moment too late, the deleted file read as
+  one this device never had, and the next sync fetched it back. Extra save
+  folders now keep track of deletions the way the main save folder does.
+  (#49)
+- **A deletion is no longer undone after the other device took a save from
+  this one.** The same missing record as above, on another path; it is
+  repaired the same way, and forgotten when a game is untracked so that a
+  game tracked again starts clean. (#70)
+- **A deleted save folder counts as missing, not emptied.** Deleting a folder
+  removes its files first, so OpenSave sometimes asked whether emptying the
+  save was meant, and kept asking after the folder came back. A folder that
+  is gone now pauses quietly until it returns. If it comes back empty, or
+  with fewer of the files both devices last had, it is held and asked about,
+  so it is never synced to your other devices as deletions. (#69)
+- **An edit made on both devices right after a sync is no longer lost.**
+  Edits within two seconds of the last sync used to count as unchanged, so if
+  both devices made one, one quietly replaced the other. Any edit after the
+  last sync now counts, and when both devices made one you are asked. (#72)
+- **A folder offered on another drive no longer overrides one you set by
+  hand.** If you set a game's save folder yourself while OpenSave was
+  offering one it found on another drive, the old offer is now dropped
+  rather than able to replace your choice. (#68)
+- **A local or network folder used for cloud backup that cannot be read is
+  reported, not taken for an empty backup.** A NAS that was offline or a
+  folder that could not be opened used to look like a backup with nothing in
+  it. (#47)
 
 ### Changed
 
