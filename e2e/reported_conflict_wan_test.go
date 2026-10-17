@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -91,24 +92,33 @@ func TestReportedWAN_AlternatingEditsMustNotConflict(t *testing.T) {
 	// Several turns each way. One device edits, it propagates, the other
 	// edits. Nobody ever edits at the same time, so nothing here is a
 	// genuine divergence and no turn may raise a conflict.
+	//
+	// Each turn writes something new. It used to write the same "a-turn" and
+	// "b-turn" every round, which is a different case: bytes coming back that
+	// a device's base, a round behind, still names. Then neither side can tell
+	// from hashes which one moved, and the two devices disagree (#71). That
+	// case is now a conflict rather than an endless exchange of pushes, and is
+	// tested on its own (syncengine's TestPushLoop_*).
 	for round := 0; round < 3; round++ {
 		time.Sleep(syncSettleWindow)
-		a.WriteSave("slot1.sav", "a-turn")
+		aTurn := fmt.Sprintf("a-turn %d", round)
+		a.WriteSave("slot1.sav", aTurn)
 		if status, _ := syncTo(a, gameID, b.NodeID()); status == "conflict" {
 			ca, _ := conflictOn(a, gameID)
 			t.Fatalf("round %d: A's turn conflicted: %+v", round, ca.DiffFiles)
 		}
-		if !testutil.WaitFor(60*time.Second, func() bool { return b.ReadSave("slot1.sav") == "a-turn" }) {
+		if !testutil.WaitFor(60*time.Second, func() bool { return b.ReadSave("slot1.sav") == aTurn }) {
 			t.Fatalf("round %d: A's edit never reached B", round)
 		}
 
 		time.Sleep(syncSettleWindow)
-		b.WriteSave("slot1.sav", "b-turn")
+		bTurn := fmt.Sprintf("b-turn %d", round)
+		b.WriteSave("slot1.sav", bTurn)
 		if status, _ := syncTo(b, gameID, a.NodeID()); status == "conflict" {
 			cb, _ := conflictOn(b, gameID)
 			t.Fatalf("round %d: B's turn conflicted: %+v", round, cb.DiffFiles)
 		}
-		if !testutil.WaitFor(60*time.Second, func() bool { return a.ReadSave("slot1.sav") == "b-turn" }) {
+		if !testutil.WaitFor(60*time.Second, func() bool { return a.ReadSave("slot1.sav") == bTurn }) {
 			t.Fatalf("round %d: B's edit never reached A", round)
 		}
 	}

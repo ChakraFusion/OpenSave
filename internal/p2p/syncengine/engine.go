@@ -131,6 +131,12 @@ type Engine struct {
 	// each peer, per game (served.go).
 	servedMu sync.Mutex
 	served   map[string][]servedState
+	// loopMu guards the push-loop watch: per game and peer, when the peer last
+	// asked this device to pull, and the push this device last answered with
+	// (pushloop.go).
+	loopMu    sync.Mutex
+	triggered map[string]time.Time
+	pushBacks map[string]pushBack
 
 	mu           sync.Mutex
 	activeSyncs  map[string]bool
@@ -693,6 +699,17 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		}
 	}
 	decision := ComputeWithDeletions(localManifest, remoteData.Manifest, lineageFiles, lineageDirs, agreedHash, deleted)
+
+	// The peer asked this device to pull, and this device would answer by
+	// asking it to pull again, with neither side changed since: the two
+	// disagree about which save is newer, and would go on asking each other
+	// forever (pushloop.go). Both versions stay; the user decides.
+	if e.pushLoop(gameID, peer.ID, decision, localManifest.ManifestHash(), remoteData.Manifest.ManifestHash()) {
+		e.Log("warn", fmt.Sprintf("%q and %q each hold %q as newer than the other's and keep asking each other to take it — holding it for a decision instead",
+			e.deviceName(), peer.Name, game.Name))
+		e.registerConflict(gameID, peer, localManifest, remoteData)
+		return Result{Status: "conflict", PeerID: peer.ID, PeerName: peer.Name}, nil
+	}
 
 	if !decision.HasChanges() {
 		e.Log("success", fmt.Sprintf("%q already in sync with %q", game.Name, peer.Name))
