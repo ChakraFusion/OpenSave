@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/owntouch"
 )
 
 // Pulling many small files, many to a request.
@@ -268,11 +269,23 @@ func writeBatchedFile(j batchJob, blocks []BlockData) error {
 		return fmt.Errorf("patch %s: %w", j.relPath, err)
 	}
 	committed = true
-	if j.remote.MtimeMs > 0 {
-		mtime := time.UnixMilli(int64(j.remote.MtimeMs))
-		_ = os.Chtimes(j.localPath, mtime, mtime)
-	}
+	setPulledMtime(j.localPath, j.remote.MtimeMs)
 	return nil
+}
+
+// setPulledMtime gives a pulled file the peer's modification time, as the
+// per-file path does: marked again first, and settled after, so the time it
+// ends with is known as OpenSave's own (owntouch). Set without that, the
+// watcher took a batched pull for the game saving, and snapshotted and synced
+// it back as a change of this device's own.
+func setPulledMtime(path string, mtimeMs delta.Milli) {
+	if mtimeMs <= 0 {
+		return
+	}
+	mtime := time.UnixMilli(int64(mtimeMs))
+	owntouch.Mark(path)
+	_ = os.Chtimes(path, mtime, mtime)
+	owntouch.Settled(path)
 }
 
 // pullBatchOneByOne is the fallback when the transport cannot batch for this
@@ -286,10 +299,7 @@ func (e *Engine) pullBatchOneByOne(ctx context.Context, peer Peer, gameID, root 
 			j.remote, j.indices, throttle, tracker, onProgress); err != nil {
 			return written, err
 		}
-		if j.remote.MtimeMs > 0 {
-			mtime := time.UnixMilli(int64(j.remote.MtimeMs))
-			_ = os.Chtimes(j.localPath, mtime, mtime)
-		}
+		setPulledMtime(j.localPath, j.remote.MtimeMs)
 		written = append(written, j.relPath)
 	}
 	return written, nil
