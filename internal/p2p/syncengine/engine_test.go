@@ -271,6 +271,35 @@ func TestSync_InSyncMirrorsPeerSnapshot(t *testing.T) {
 	}
 }
 
+// A device that already keeps a snapshot of its save as it stands takes no
+// mirror on an in-sync pass: nothing came from the peer, and the mirror would
+// be a second copy of the same save, named as synced from the peer. It used to
+// be taken whenever the peer's latest snapshot was newer.
+func TestSync_InSyncDoesNotMirrorASaveAlreadyKept(t *testing.T) {
+	env := setupEngine(t)
+	write(t, env.localDir, "save.dat", "same progress")
+	write(t, env.remoteDir, "save.dat", "same progress")
+	if _, err := env.engine.Snapshots.Create("game1", "Initial snapshot", true); err != nil {
+		t.Fatal(err)
+	}
+	m, err := delta.BuildManifest(env.localDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// As the watcher records it after that snapshot.
+	if err := env.store.SetLastManifestHash("game1", env.engine.contentHashOf("game1", m, env.localDir)); err != nil {
+		t.Fatal(err)
+	}
+	env.transport.latestSnap = &SnapshotInfo{ID: "snap_99999999999999", Timestamp: "2099-01-01T00:00:00.000Z", Comment: "Initial snapshot"}
+
+	if res, err := env.engine.SyncWithPeer(context.Background(), "game1", env.peer); err != nil || res.Status != "in_sync" {
+		t.Fatalf("result = %+v, %v; want in_sync", res, err)
+	}
+	if _, err := env.store.GetSnapshot("snap_99999999999999"); err == nil {
+		t.Error("the peer's snapshot was mirrored over a save this device already keeps")
+	}
+}
+
 // An empty save folder in sync with an empty peer has nothing to mirror.
 func TestSync_InSyncEmptyFolderTakesNoMirror(t *testing.T) {
 	env := setupEngine(t)
