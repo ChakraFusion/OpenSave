@@ -12,6 +12,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -28,6 +29,25 @@ import (
 // must exclude them, or an interrupted patch's leftover would sync to the
 // peer as a real file (and cascade into name.opensave.tmp.opensave.tmp).
 const TmpSuffix = ".opensave.tmp"
+
+// NeverSynced reports whether a file in a save folder is never part of the
+// save, on any device.
+//
+// remotecache.vdf is Steam's record of what Steam Cloud has uploaded for a
+// game, kept beside the game's files in Steam's userdata folder — which is
+// where a game whose saves live in Steam Cloud is tracked. Steam rewrites it
+// on every start, so it read as a new save: an automatic snapshot of a game
+// nobody played, and every other device taking it. It describes this
+// device's Steam, not the save, and where that folder is under Program Files
+// the copy failed with "access denied" on every pass, from every device.
+//
+// Left out where decisions are made — what to sync, whether the save changed
+// — exactly like an exclusion rule, and NOT from the manifest a device builds
+// and serves: a device on an older build would read the gap as the file
+// deleted, and delete its own copy (syncengine/ignore.go).
+func NeverSynced(rel string) bool {
+	return strings.EqualFold(path.Base(rel), "remotecache.vdf")
+}
 
 // staleTmpAge is how old a leftover TmpSuffix file must be before the
 // manifest walk garbage-collects it. Generous enough that a patch actively

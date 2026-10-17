@@ -114,10 +114,8 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 	rules := e.rulesFor(gameID)
 	remote := sr.remote
 	unfilteredLocal, unfilteredRemote := local, remote
-	if !rules.Empty() {
-		local = filterManifest(local, rules)
-		remote = filterManifest(remote, rules)
-	}
+	local = filterManifest(local, rules)
+	remote = filterManifest(remote, rules)
 
 	// A push is proven once the peer is seen holding exactly what was handed
 	// over, whatever became of its report — the repair the main folder makes
@@ -156,24 +154,20 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		return err
 	}
 	lineageFiles, lineageDirs := toSet(fileList), toSet(dirList)
-	if !rules.Empty() {
-		// Without this an exclusion added to a location that had already
-		// synced reads as "we both had this file and now I do not", and the
-		// deletion travels to the peer — destroying the copy the rule was
-		// written to protect.
-		lineageFiles = filterLineage(lineageFiles, rules)
-		lineageDirs = filterLineage(lineageDirs, rules)
-	}
+	// Without this an exclusion added to a location that had already
+	// synced reads as "we both had this file and now I do not", and the
+	// deletion travels to the peer — destroying the copy the rule was
+	// written to protect.
+	lineageFiles = filterLineage(lineageFiles, rules)
+	lineageDirs = filterLineage(lineageDirs, rules)
 	// And the deletions this device recorded in this location, as the main
 	// folder uses them (see SyncWithPeer): a recorded deletion does not depend
 	// on the lineage surviving, and is acted on only while the peer's copy is
 	// still exactly what was deleted.
 	deleted := e.recordedDeletions(gameID, sr.root.Name)
-	if !rules.Empty() {
-		for path := range deleted {
-			if rules.Match(path) {
-				delete(deleted, path)
-			}
+	for path := range deleted {
+		if excluded(rules, path) {
+			delete(deleted, path)
 		}
 	}
 	// The same base the conflict check below uses. Compute used to be called
@@ -186,7 +180,7 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 	// adds a rule. If a side's UNFILTERED state still hashes to the base then
 	// that side has not changed, and its filtered hash says the same thing in
 	// today's terms. Same translation the main folder does.
-	if !rules.Empty() && base != "" {
+	if base != "" {
 		switch base {
 		case unfilteredLocal.RootHash(delta.PrimaryRoot):
 			base = local.RootHash(delta.PrimaryRoot)
@@ -300,10 +294,9 @@ func (e *Engine) persistRootLineage(gameID, peerID, root string, local, remote d
 	}
 	// And excluded paths stay out of it, as in the main folder: the refresh
 	// rebuilds this from unfiltered manifests.
-	if rules := e.rulesFor(gameID); !rules.Empty() {
-		files = filterPathList(files, rules)
-		dirs = filterPathList(dirs, rules)
-	}
+	rules := e.rulesFor(gameID)
+	files = filterPathList(files, rules)
+	dirs = filterPathList(dirs, rules)
 	if err := e.Store.SetSyncStateForRoot(gameID, peerID, root, files, dirs); err != nil {
 		e.Log("warn", fmt.Sprintf("persist lineage for the %q location failed: %v", root, err))
 	}
