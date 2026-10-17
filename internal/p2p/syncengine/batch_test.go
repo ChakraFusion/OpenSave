@@ -9,8 +9,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/owntouch"
 	"github.com/opensave/opensave/internal/snapshot"
 )
 
@@ -233,5 +235,25 @@ func TestPull_ABatchRefusedAsTooLargeIsSplit(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(env.localDir, "chunks", fmt.Sprintf("c%02d.bin", i))); err != nil {
 			t.Fatalf("c%02d.bin did not arrive", i)
 		}
+	}
+}
+
+// A batched pull gives each file the peer's modification time after the patch
+// writer has committed it, and with it settled it as OpenSave's own
+// (owntouch). Changing the time without marking it again made the file the
+// game's: the watcher snapshotted the pull and synced it back as a change of
+// this device's own (TestLauncherFile_SteamRewritingRemotecacheIsNoSaveChange
+// on #27's CI).
+func TestSetPulledMtime_KeepsThePullOpenSavesOwn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "save.dat")
+	if err := os.WriteFile(path, []byte("pulled"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	owntouch.Mark(path) // as the patch writer's commit leaves it
+	owntouch.Settled(path)
+
+	setPulledMtime(path, delta.Milli(time.Now().Add(-time.Hour).UnixMilli()))
+	if !owntouch.Recent(path) {
+		t.Error("a pulled file given the peer's time is no longer known as OpenSave's own")
 	}
 }
