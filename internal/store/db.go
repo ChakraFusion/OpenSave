@@ -23,7 +23,8 @@ var migrationsFS embed.FS
 // methods (see settings.go, games.go, branches.go, snapshots.go, peers.go,
 // cloudtokens.go).
 type Store struct {
-	db *sqlx.DB
+	db   *sqlx.DB
+	path string // the database file, for EnableIncrementalVacuum's space check
 }
 
 // Open creates (if needed) and opens the SQLite database at path, applying
@@ -34,7 +35,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, path: path}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
@@ -55,7 +56,18 @@ func openDB(path string) (*sqlx.DB, error) {
 	// _pragma params ensure foreign keys are enforced (SQLite defaults them
 	// off per-connection) and busy_timeout avoids spurious SQLITE_BUSY
 	// errors from the watcher/api/p2p goroutines all touching the DB.
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)", path)
+	//
+	// WAL: a write is appended to one log and the database file is updated
+	// from it later, rather than every write creating, flushing and deleting a
+	// rollback journal of its own — which made a quarter of a million small
+	// writes take most of an hour. synchronous NORMAL is what WAL is meant to
+	// run with: the database stays whole whatever happens; a power cut can
+	// only lose the last moments' writes, never corrupt it.
+	//
+	// auto_vacuum INCREMENTAL comes first: it takes effect only while the
+	// file is still empty, before WAL writes its header (see compact.go). On
+	// an existing database it changes nothing.
+	dsn := fmt.Sprintf("file:%s?_pragma=auto_vacuum(2)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)", path)
 	db, err := sqlx.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)

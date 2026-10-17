@@ -19,6 +19,9 @@ const (
 	compactEvery = 3 * time.Hour
 	// compactPace is a pause between snapshots, as for the daily check.
 	compactPace = 50 * time.Millisecond
+	// dbCompactFirst is when the database file first gives its unused space
+	// back (see daemon.go), once the start's own work is done.
+	dbCompactFirst = 2 * time.Minute
 )
 
 // CompactSnapshots has every snapshot that can share its large files with
