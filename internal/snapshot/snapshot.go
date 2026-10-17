@@ -44,8 +44,12 @@ type UploadHook func(zipPath, remoteFileName string)
 // Manager performs snapshot/branch operations against the store and
 // filesystem.
 type Manager struct {
-	Store    *store.Store
-	OnUpload UploadHook
+	Store *store.Store
+	// OnRestoreProgress is told how far a restore of a game has come: its
+	// phase (PhaseRebuilding, PhaseChecking, PhaseWriting) and how many of
+	// how many done; phase "" when it is over. Optional.
+	OnRestoreProgress func(gameID, phase string, done, total int)
+	OnUpload          UploadHook
 	// OnCreated fires for every snapshot written, before its upload starts.
 	// current is false for a copy kept of a save about to be replaced (see
 	// CreateBeforeReplacing). Optional; runs on the snapshotting goroutine
@@ -747,14 +751,19 @@ func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
 	// restore empties the save folder and then extracts; an archive found
 	// damaged part-way through would leave neither the save that was there
 	// nor this one.
-	archive, done, err := OpenArchive(snap.ZipPath)
+	progress := m.progressFor(gameID)
+	defer m.progressDone(gameID)
+	archive, done, err := OpenArchiveProgress(snap.ZipPath, progress)
 	if err == nil {
 		defer done()
 		// Read back whole, and laid out as extraction would lay it out: an
 		// archive whose checksums are fine can still hold a file where a
 		// folder has to go, found only after the save had been cleared
 		// (GitHub #60).
-		err = checkRestorable(archive)
+		err = VerifyArchiveProgress(archive, progress)
+		if err == nil {
+			err = CheckExtractable(archive)
+		}
 	} else {
 		err = damagedArchive(snap.ZipPath, err)
 	}
@@ -789,7 +798,7 @@ func (m *Manager) Restore(gameID, snapshotID string) (store.Snapshot, error) {
 	if rootsErr != nil {
 		restoreRoots = nil
 	}
-	unplaced, err := UnzipRoots(restoreZip, game.SavePath, restoreRoots)
+	unplaced, err := UnzipRootsProgress(restoreZip, game.SavePath, restoreRoots, progress)
 	for _, name := range unplaced {
 		// Named but not placed: the snapshot holds files for a location this
 		// device has no folder for. Saying so is the only honest option —

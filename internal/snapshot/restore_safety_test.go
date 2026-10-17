@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -168,18 +169,34 @@ func TestCheckExtractable(t *testing.T) {
 		entries []string
 		ok      bool
 	}{
-		"ordinary files and folders":     {[]string{"a.sav", "slots/", "slots/1.sav", "slots/2.sav"}, true},
-		"a file, then a file inside it":  {[]string{"block", "block/child.sav"}, false},
-		"a file inside, then the file":   {[]string{"block/child.sav", "block"}, false},
-		"a folder entry and a file":      {[]string{"block/", "block"}, false},
-		"an entry escaping its folder":   {[]string{"../outside.sav"}, false},
-		"the same clash in an extra one": {[]string{RootPrefix + "config/x", RootPrefix + "config/x/y"}, false},
-		"the same name in two locations": {[]string{"x", RootPrefix + "config/x/y"}, true},
+		"ordinary files and folders":      {[]string{"a.sav", "slots/", "slots/1.sav", "slots/2.sav"}, true},
+		"a file, then a file inside it":   {[]string{"block", "block/child.sav"}, false},
+		"a file inside, then the file":    {[]string{"block/child.sav", "block"}, false},
+		"a folder entry and a file":       {[]string{"block/", "block"}, false},
+		"an entry escaping its folder":    {[]string{"../outside.sav"}, false},
+		"the same clash in an extra one":  {[]string{RootPrefix + "config/x", RootPrefix + "config/x/y"}, false},
+		"the same name in two locations":  {[]string{"x", RootPrefix + "config/x/y"}, true},
+		"the same file twice":             {[]string{"slots/1.sav", "slots/1.sav"}, false},
+		"the same file twice in an extra": {[]string{RootPrefix + "config/x", RootPrefix + "config/x"}, false},
+		"one file in two locations":       {[]string{"x", RootPrefix + "config/x"}, true},
 	} {
 		path := filepath.Join(dir, strings.ReplaceAll(name, " ", "_")+".zip")
 		writeZip(t, path, c.entries...)
 		if err := CheckExtractable(path); (err == nil) != c.ok {
 			t.Errorf("%s: CheckExtractable = %v, want ok=%v", name, err, c.ok)
 		}
+	}
+}
+
+// On a filesystem that ignores case, two names differing only in case are one
+// file, and parallel extraction would write it twice at once.
+func TestCheckExtractable_NamesDifferingOnlyInCase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "case.zip")
+	writeZip(t, path, "Slots/1.sav", "slots/1.sav")
+	err := CheckExtractable(path)
+	if caseInsensitive := runtime.GOOS == "windows" || runtime.GOOS == "darwin"; caseInsensitive && err == nil {
+		t.Errorf("CheckExtractable = nil, want the two names refused as one file")
+	} else if !caseInsensitive && err != nil {
+		t.Errorf("CheckExtractable = %v, want two different files accepted", err)
 	}
 }
