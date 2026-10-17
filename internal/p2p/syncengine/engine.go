@@ -804,10 +804,12 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 		// that tracked it and none on any other. The local files ARE the
 		// peer's at this point, so the mirror describes the same content.
 		// Once per peer snapshot: recordMirrorSnapshot skips an id it has.
+		// And only where this device keeps no snapshot of this save yet
+		// (keepsCurrentSave): nothing came from the peer in this pass.
 		//
 		// Last, after the other locations have synced: it zips every location,
 		// and taking that time before them delayed their sync for nothing.
-		if remoteData.LatestSnapshot != nil && len(localManifest.Files) > 0 {
+		if remoteData.LatestSnapshot != nil && len(localManifest.Files) > 0 && !e.keepsCurrentSave(gameID, game, localManifest) {
 			e.recordMirrorSnapshot(gameID, game, peer, *remoteData.LatestSnapshot,
 				fmt.Sprintf("Synced from peer: %s (%s)", peer.Name, remoteData.LatestSnapshot.Comment))
 		}
@@ -2022,6 +2024,23 @@ func fetchWithRetry(ctx context.Context, t Transport, peer Peer, ref FileRef,
 		}
 	}
 	return nil, lastErr
+}
+
+// keepsCurrentSave reports whether this device already has a snapshot of its
+// save as it stands: the content recorded with its last snapshot (the
+// watcher's baseline) is the content now. A sync that found both sides
+// identical then has nothing to add to the history. Mirroring the peer's
+// latest snapshot anyway made a second copy of a save already kept, named
+// as synced from a peer that sent nothing — whenever the peer's latest
+// snapshot happened to be newer, even its first one of an empty folder
+// (TestLauncherFile_SteamRewritingRemotecacheIsNoSaveChange, which then
+// failed or passed by which device had tracked the game a few milliseconds
+// later).
+func (e *Engine) keepsCurrentSave(gameID string, game store.Game, local delta.Manifest) bool {
+	if g, err := e.Store.GetGame(gameID); err == nil {
+		game = g
+	}
+	return game.LastManifestHash != "" && game.LastManifestHash == e.contentHashOf(gameID, local, game.SavePath)
 }
 
 // recordMirrorSnapshot zips the (just-updated) local save under the peer's
