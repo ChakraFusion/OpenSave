@@ -159,7 +159,7 @@ func (s *Service) transferClient() *http.Client {
 	return &http.Client{Timeout: 0}
 }
 
-const perRequestTransferTimeout = 30 * time.Minute
+var perRequestTransferTimeout = 30 * time.Minute
 
 // doTransfer runs one bulk-data request with a per-request deadline and
 // returns the response. Caller closes the body.
@@ -272,6 +272,25 @@ func writeFileWhole(path string, fill func(io.Writer) error) (err error) {
 // returned (the snapshot hook logs them without failing the snapshot).
 func (s *Service) Upload(filePath, fileName string) error {
 	return s.upload(filePath, fileName, true)
+}
+
+// ListedFileCompletesRetry reports whether a later provider listing is proof
+// enough to forget a failed upload without asking the provider to verify it.
+// WebDAV publication can have an uncertain MOVE outcome, so its upload path
+// must compare the remote bytes before the retry is complete.
+func (s *Service) ListedFileCompletesRetry() bool {
+	cfg, err := s.config()
+	if err != nil {
+		return false
+	}
+	p, ok := s.providerFor(cfg)
+	if !ok {
+		return false
+	}
+	if policy, ok := p.(retryListingPolicy); ok {
+		return policy.listedFileCompletesRetry()
+	}
+	return true
 }
 
 // upload is Upload, with the activity log optional: a head is bookkeeping,

@@ -1,9 +1,19 @@
 package daemon
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/opensave/opensave/internal/cloud"
+	"github.com/opensave/opensave/internal/store"
 )
 
 // A cloud copy that fails to go up — the network down, a name that will not
@@ -72,5 +82,102 @@ func TestAFailedUploadOfASnapshotSinceRemovedIsForgotten(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(cloudDir); len(entries) != 0 {
 		t.Errorf("something was sent for a snapshot that is gone: %v", entries)
+	}
+}
+
+// A WebDAV MOVE response can be lost after the server committed it. A later
+// listing therefore proves only that the name exists, not that the bytes are
+// the ones this failed upload meant to publish. Re-entering upload compares
+// them: an identical object completes the retry; a different one remains a
+// visible failed upload and is never overwritten.
+func TestWebDAVListedNameDoesNotSilentlyCompleteFailedUpload(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		changeRemote  bool
+		wantRemaining bool
+	}{
+		{"identical remote completes retry", false, false},
+		{"different remote keeps retry", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			initialCloud := t.TempDir()
+			dev := newCloudDevice(t, "Desktop", initialCloud)
+			snap := dev.play("save waiting for confirmation")
+			remoteName := cloudSnapshotName(cloudGame, "main", snap.ID)
+			archive, err := os.ReadFile(filepath.Join(initialCloud, remoteName))
+			if err != nil {
+				t.Fatal(err)
+			}
+			remote := bytes.Clone(archive)
+			if test.changeRemote {
+				remote[len(remote)/2] ^= 0x5a
+			}
+
+			objects := map[string][]byte{remoteName: remote}
+			getCount := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				name := path.Base(r.URL.Path)
+				switch r.Method {
+				case http.MethodGet:
+					getCount++
+					body, ok := objects[name]
+					if !ok {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+					_, _ = w.Write(body)
+				case http.MethodPut:
+					objects[name], _ = io.ReadAll(r.Body)
+					w.WriteHeader(http.StatusCreated)
+				case http.MethodDelete:
+					delete(objects, name)
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				}
+			}))
+			defer server.Close()
+
+			cfg, err := dev.d.Store.GetCloudConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg.Provider = "webdav"
+			cfg.URL = server.URL + "/dav/"
+			if err := dev.d.Store.UpdateCloudConfig(cfg); err != nil {
+				t.Fatal(err)
+			}
+			game, err := dev.d.Store.GetGame(cloudGame)
+			if err != nil {
+				t.Fatal(err)
+			}
+			game.MaxSnapshots = -1 // keep this test out of retention/listing
+			if err := dev.d.Store.UpdateGame(game); err != nil {
+				t.Fatal(err)
+			}
+			if err := dev.d.Store.SetCloudHead(store.CloudHead{GameID: cloudGame}); err != nil {
+				t.Fatal(err)
+			}
+			if err := dev.d.Store.NoteCloudUploadFailed(cloudGame, remoteName, snap.ZipPath, time.Now().UnixMilli()); err != nil {
+				t.Fatal(err)
+			}
+
+			dev.d.retryFailedUploads([]cloud.CloudFile{{Name: remoteName}})
+			dev.d.uploads.Wait(0)
+			pending, err := dev.d.Store.CloudRetries()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(pending) != 0) != test.wantRemaining {
+				t.Fatalf("pending = %+v, wantRemaining=%t", pending, test.wantRemaining)
+			}
+			if getCount != 1 {
+				t.Fatalf("listed WebDAV object bypassed byte verification: GET count=%d", getCount)
+			}
+			if !bytes.Equal(objects[remoteName], remote) {
+				t.Fatal("retry replaced the listed WebDAV object")
+			}
+		})
 	}
 }

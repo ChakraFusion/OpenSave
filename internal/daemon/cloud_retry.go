@@ -30,7 +30,8 @@ func (d *Daemon) noteUploadFailed(zipPath, remoteName string) {
 // runs from the cloud check once a listing has worked, which is the proof
 // that the provider can be reached again. Each is sent once per check at
 // most, and forgotten once it is there — sent by this, by hand, or by another
-// path — or once the snapshot is gone here.
+// path — or once the snapshot is gone here. A WebDAV name alone is not proof:
+// its upload path compares the bytes before the retry is forgotten.
 func (d *Daemon) retryFailedUploads(inCloud []cloud.CloudFile) {
 	pending, err := d.Store.CloudRetries()
 	if err != nil || len(pending) == 0 {
@@ -40,9 +41,10 @@ func (d *Daemon) retryFailedUploads(inCloud []cloud.CloudFile) {
 	for _, f := range inCloud {
 		present[f.Name] = true
 	}
+	listingCompletesRetry := d.Cloud.ListedFileCompletesRetry()
 	var send []store.CloudRetry
 	for _, p := range pending {
-		if present[p.RemoteName] || !snapshot.ArchiveExists(p.ZipPath) {
+		if (present[p.RemoteName] && listingCompletesRetry) || !snapshot.ArchiveExists(p.ZipPath) {
 			_ = d.Store.ForgetCloudRetry(p.RemoteName)
 			continue
 		}

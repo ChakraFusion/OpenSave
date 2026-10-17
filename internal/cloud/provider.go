@@ -12,8 +12,10 @@ import (
 // four switches that had to agree, in a file where a change to Dropbox meant
 // reading past Google Drive, OneDrive and WebDAV to find it.
 type provider interface {
-	// upload stores the open file under fileName, replacing any file of that
-	// name. size is f's length.
+	// upload stores the open file under fileName. Providers that give archive
+	// names immutable publication semantics may accept an identical retry but
+	// must not replace different bytes already stored under the same name.
+	// size is f's length.
 	upload(f *os.File, size int64, fileName string) error
 	// list returns every snapshot zip stored, not one page of them.
 	list() ([]CloudFile, error)
@@ -21,6 +23,15 @@ type provider interface {
 	download(fileName, localPath string) error
 	// remove deletes one stored file.
 	remove(f CloudFile) error
+}
+
+// retryListingPolicy is implemented by a provider when seeing a failed
+// upload's name in a later listing is not enough to prove that upload complete.
+// Most provider APIs make the upload request itself the commit. WebDAV can
+// lose a MOVE response after the server committed it, so it has to compare the
+// listed object with the source by entering upload again.
+type retryListingPolicy interface {
+	listedFileCompletesRetry() bool
 }
 
 // providerFor returns the provider cfg names, or false for one this build

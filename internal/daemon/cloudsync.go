@@ -404,6 +404,47 @@ func (d *Daemon) currentContentHash(game store.Game) (string, error) {
 	return watcher.ContentHash(m, game.SyncIgnore), nil
 }
 
+// verifyWebDAVHeadBootstrap guards exceptional unpublished-head recovery.
+// A listed ZIP does not prove that a legacy or failed WebDAV upload completed.
+// Normal uploads already announce heads after verified publication, so only
+// recovery pays for this additional remote verification.
+func (d *Daemon) verifyWebDAVHeadBootstrap(game store.Game, rec store.CloudHead, expectedURL string) bool {
+	cfg, err := d.Store.GetCloudConfig()
+	if err != nil || cfg.Provider != "webdav" || cfg.URL != expectedURL {
+		return false
+	}
+	pending, err := d.Store.CloudRetries()
+	if err != nil {
+		d.Log.Log("warn", fmt.Sprintf("cloud: cannot check WebDAV pending uploads: %v", err))
+		return false
+	}
+	for _, retry := range pending {
+		if retry.RemoteName == rec.File {
+			return false
+		}
+	}
+	snap, err := d.Store.GetSnapshot(rec.Snapshot)
+	if err != nil || snap.GameID != game.ID || snap.BranchName != game.ActiveBranch ||
+		rec.File != cloudSnapshotName(game.ID, snap.BranchName, snap.ID) {
+		d.Log.Log("warn", "cloud: cannot verify the unpublished WebDAV snapshot's local source")
+		return false
+	}
+	archive, done, err := snapshot.OpenArchive(snap.ZipPath)
+	if err != nil {
+		d.Log.Log("warn", fmt.Sprintf("cloud: cannot open unpublished WebDAV snapshot: %v", err))
+		return false
+	}
+	defer done()
+	// The provider verifies existing remote bytes before accepting a retry;
+	// a vanished destination is uploaded using staged verified publication.
+	if err := d.Cloud.Upload(archive, rec.File); err != nil {
+		d.noteUploadFailed(snap.ZipPath, rec.File)
+		d.Log.Log("warn", fmt.Sprintf("cloud: cannot announce unverified WebDAV snapshot: %v", err))
+		return false
+	}
+	return true
+}
+
 // CheckCloud reads the other devices' heads and acts on the ones ahead of
 // this device: takes what continues from its save, asks about the rest.
 func (d *Daemon) CheckCloud() {
@@ -499,7 +540,10 @@ func (d *Daemon) CheckCloud() {
 		// device upgraded from a version without heads, or an announcement
 		// that failed.
 		if rec.Snapshot != "" && rec.Published != rec.Snapshot && fileFor(rec.Snapshot) != "" {
-			_ = d.publishHead(game.ID)
+			// WebDAV cannot equate a listed filename with verified bytes.
+			if cfg.Provider != "webdav" || d.verifyWebDAVHeadBootstrap(game, rec, cfg.URL) {
+				_ = d.publishHead(game.ID)
+			}
 		}
 		var heads []cloud.Head
 		for _, id := range ids {
