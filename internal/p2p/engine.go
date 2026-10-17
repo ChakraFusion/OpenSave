@@ -129,6 +129,10 @@ type Engine struct {
 	deleteRefreshMu sync.Mutex
 	deleteRefresh   map[string]bool
 
+	// reports are what a peer's state-carrying reports leave to be done once
+	// they are answered (see handleSyncEvent).
+	reports reportsRecorded
+
 	// Lifecycle of background work this engine starts. Syncs triggered by a
 	// peer appearing, or by the retry failsafe, used to run on
 	// context.Background() and so outlived Stop entirely — leaving a partly

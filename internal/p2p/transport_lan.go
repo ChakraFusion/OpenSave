@@ -3,6 +3,8 @@ package p2p
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -115,6 +117,35 @@ const eventQueueSize = 64
 // it stops, so a peer that has gone away does not keep a goroutine forever.
 const eventQueueIdle = time.Minute
 
+// How a report that carries state is sent: each try given stateReportTimeout,
+// then a pause of stateReportBackoff, doubling, between tries — about half a
+// minute in all before it is given up. Variables so a test can shorten them.
+var (
+	stateReportTimeout = 5 * time.Second
+	stateReportBackoff = time.Second
+)
+
+const stateReportTries = 4
+
+// carriesState says whether a report tells the other device something it
+// records — what both devices now hold — rather than how a sync is going.
+func carriesState(eventType string) bool {
+	return eventType == "sync-complete" || eventType == "in-sync"
+}
+
+// withReportID is the report's data with an ID of its own added, the same for
+// every send of it (see ReportSyncEvent). The caller's map is not changed.
+func withReportID(data map[string]any) map[string]any {
+	out := make(map[string]any, len(data)+1)
+	for k, v := range data {
+		out[k] = v
+	}
+	var id [8]byte
+	_, _ = rand.Read(id[:])
+	out["reportId"] = hex.EncodeToString(id[:])
+	return out
+}
+
 // ReportSyncEvent tells the peer how a sync is going, without waiting for it.
 //
 // In order, through one sender per peer. Each report used to go out on its
@@ -122,19 +153,46 @@ const eventQueueIdle = time.Minute
 // the "finished": the peer then showed a sync running that was already over —
 // in its transfers list, and on the game's card — until something timed it
 // out.
+//
+// A lost progress report costs nothing, and is sent once. A report that
+// carries state (carriesState) is sent again until it is answered: sent once
+// with a short limit, it was lost whenever the other device was busy for a
+// moment, which left that device's record of what both hold a round behind,
+// and the next save read as both sides having changed — a false conflict
+// (upstream CI #385). Later reports to the peer wait meanwhile, so the order
+// holds. Each send carries the same reportId, so a report that did arrive,
+// and whose answer was what got lost, is recorded once.
 func (t *lanTransport) ReportSyncEvent(peer syncengine.Peer, gameID, eventType string, data map[string]any) {
+	stateful := carriesState(eventType)
+	if stateful {
+		data = withReportID(data)
+	}
 	post := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		err := t.postJSON(ctx, peer, peerURL(peer, "/sync-event/"+gameID), map[string]any{
-			"eventType": eventType, "data": data,
-		}, nil)
-		// A lost progress report costs nothing. These two carry state — what
-		// the other device records as synced and agreed — and losing one
-		// was invisible on both sides.
-		if err != nil && (eventType == "in-sync" || eventType == "sync-complete") && t.engine != nil && t.engine.Log != nil {
-			t.engine.Log("info", fmt.Sprintf("could not tell %s that %s is %s: %v",
-				peer.Name, gameID, eventType, err))
+		send := func(limit time.Duration) error {
+			ctx, cancel := context.WithTimeout(context.Background(), limit)
+			defer cancel()
+			return t.postJSON(ctx, peer, peerURL(peer, "/sync-event/"+gameID), map[string]any{
+				"eventType": eventType, "data": data,
+			}, nil)
+		}
+		if !stateful {
+			_ = send(2 * time.Second)
+			return
+		}
+		var err error
+		wait := stateReportBackoff
+		for try := 1; try <= stateReportTries; try++ {
+			if err = send(stateReportTimeout); err == nil {
+				return
+			}
+			if try < stateReportTries {
+				time.Sleep(wait)
+				wait *= 2
+			}
+		}
+		if t.engine != nil && t.engine.Log != nil {
+			t.engine.Log("info", fmt.Sprintf("could not tell %s that %s is %s, after %d tries: %v",
+				peer.Name, gameID, eventType, stateReportTries, err))
 		}
 	}
 	t.eventsMu.Lock()
