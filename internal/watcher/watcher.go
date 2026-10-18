@@ -721,7 +721,9 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 			}
 			// New subdirectory in directory mode: extend the watch — on
 			// registerFolders, never here. See registerFolders.
-			if !gw.isFile && event.Has(fsnotify.Create) {
+			// EXPERIMENT: also on a Write to a folder, which on Windows is what
+			// its parent reports when an entry inside it was created.
+			if !gw.isFile && (event.Has(fsnotify.Create) || event.Has(fsnotify.Write)) {
 				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
 					if !own {
 						gw.foreignFolders = true
