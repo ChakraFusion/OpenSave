@@ -20,7 +20,6 @@
   let authCode = '';
   let authInProgress = false;
   let authAuto = false; // backend caught the redirect automatically
-  let showManualCode = false;
 
   $: current = providerById(config.provider);
 
@@ -30,7 +29,6 @@
     if (!ev || !authInProgress) return;
     cloudAuthEvent.set(null);
     authInProgress = false;
-    showManualCode = false;
     if (ev.success) {
       toast(`Connected as ${ev.userEmail}`, 'success');
       reload();
@@ -47,11 +45,10 @@
       native.openExternal(res.authUrl);
       authInProgress = true;
       authAuto = !!res.autoCallback;
-      showManualCode = !authAuto;
       if (authAuto) {
         toast('Finish signing in — OpenSave connects automatically.');
       } else {
-        toast('Sign in using the browser window, then paste the code from the redirect URL here.');
+        toast('Sign in using the browser window, then paste the address it lands on here.');
       }
     } catch (e) {
       toast(e.message, 'error');
@@ -62,7 +59,6 @@
 
   function cancelAuth() {
     authInProgress = false;
-    showManualCode = false;
     authCode = '';
   }
 
@@ -72,7 +68,6 @@
       const res = await api.post('/api/auth/callback', { code: authCode.trim() });
       toast(`Connected as ${res.userEmail}`, 'success');
       authInProgress = false;
-      showManualCode = false;
       authCode = '';
       await reload();
     } catch (e) {
@@ -131,27 +126,25 @@
         <Spinner size={16} />
         <div class="waiting-text">
           <strong>Waiting for you to finish signing in…</strong>
-          <span class="quiet">Approve access in your browser — OpenSave connects by itself.</span>
+          <span class="quiet">
+            {authAuto ? 'Approve access in your browser — OpenSave connects by itself.' : 'Approve access in your browser, then paste below where it lands.'}
+          </span>
         </div>
         <button class="btn small" on:click={cancelAuth}>Cancel</button>
       </div>
-      {#if !showManualCode && authAuto}
-        <button class="linkish" on:click={() => (showManualCode = true)}>
-          Having trouble? Paste the code manually
-        </button>
-      {/if}
-      {#if showManualCode}
-        <div class="code">
-          <p class="quiet">
-            After approving access, the browser lands on a localhost page. Copy the <code>code</code> value
-            from its address bar and paste it here:
-          </p>
-          <div class="path-row">
-            <input placeholder="4/0AY0e-g7…" bind:value={authCode} />
-            <button class="btn primary" disabled={!authCode || $busy} on:click={finishAuth}>Connect</button>
-          </div>
+      <!-- Always shown, not behind a link: when the browser can't reach
+           OpenSave it shows an error page with the code in its address bar,
+           and this is the only way on from there (GitHub #39). -->
+      <div class="code">
+        <p class="quiet">
+          {authAuto ? "If your browser shows an error page instead, " : 'After approving access, the browser lands on a localhost page. '}copy
+          the whole address from its address bar and paste it here:
+        </p>
+        <div class="path-row">
+          <input placeholder="http://localhost/callback?code=…" bind:value={authCode} aria-label="Address or code from the browser" />
+          <button class="btn primary" disabled={!authCode.trim() || $busy} on:click={finishAuth}>Connect</button>
         </div>
-      {/if}
+      </div>
     {/if}
   {/if}
 {/if}
@@ -224,25 +217,7 @@
     gap: 2px;
     font-size: 0.88rem;
   }
-  .linkish {
-    margin-top: 10px;
-    border: none;
-    background: transparent;
-    color: var(--text-faint);
-    font-size: 0.8rem;
-    cursor: pointer;
-    text-decoration: underline;
-    padding: 2px 0;
-  }
-  .linkish:hover {
-    color: var(--text-dim);
-  }
   .code {
     margin-top: 12px;
-  }
-  .code code {
-    background: var(--bg);
-    padding: 1px 5px;
-    border-radius: 4px;
   }
 </style>
