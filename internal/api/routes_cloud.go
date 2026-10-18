@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"github.com/opensave/opensave/internal/ignore"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -199,10 +200,16 @@ func (s *Server) handleAuthCallback(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Code string `json:"code"`
 	}
-	if err := readJSON(r, &body); err != nil || body.Code == "" {
+	if err := readJSON(r, &body); err != nil || strings.TrimSpace(body.Code) == "" {
 		writeError(w, http.StatusBadRequest, "code is required")
 		return
 	}
+	code, err := pastedAuthCode(body.Code)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	body.Code = code
 
 	pendingPKCE.Lock()
 	provider, verifier := pendingPKCE.provider, pendingPKCE.verifier
@@ -530,4 +537,33 @@ func (s *Server) handleCloudSyncLocal(w http.ResponseWriter, r *http.Request) {
 	}
 	progress(uploaded, "", true)
 	writeJSON(w, http.StatusOK, map[string]int{"uploaded": uploaded, "skipped": skipped})
+}
+
+// pastedAuthCode is the authorization code in what was pasted: the code
+// itself, or the whole address the browser landed on after signing in
+// (http://localhost/callback?code=…), which is what is in front of someone
+// whose browser could not reach OpenSave there (GitHub #39).
+func pastedAuthCode(pasted string) (string, error) {
+	pasted = strings.TrimSpace(pasted)
+	if !strings.Contains(pasted, "code=") && !strings.Contains(pasted, "error=") {
+		return pasted, nil
+	}
+	query := pasted
+	if i := strings.Index(pasted, "?"); i >= 0 {
+		query = pasted[i+1:]
+	}
+	if i := strings.Index(query, "#"); i >= 0 {
+		query = query[:i]
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return "", fmt.Errorf("could not read the pasted address: %v", err)
+	}
+	if e := values.Get("error"); e != "" {
+		return "", fmt.Errorf("sign-in was cancelled or denied (%s) — start again", e)
+	}
+	if c := values.Get("code"); c != "" {
+		return c, nil
+	}
+	return "", fmt.Errorf("there is no code in the pasted address")
 }
