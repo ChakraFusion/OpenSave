@@ -85,11 +85,19 @@ describe('segments', () => {
 describe('locale choice', () => {
   it('rejects unknown locale ids, and region tags that are not languages', () => {
     expect(sanitizeLocale('fr')).toBe(null);
-    expect(sanitizeLocale('zh-CN')).toBe(null);
-    expect(sanitizeLocale('zh-TW')).toBe(null);
     expect(sanitizeLocale('zh-Hans')).toBe('zh-Hans');
     expect(sanitizeLocale('zh-Hant')).toBe('zh-Hant');
     expect(sanitizeLocale('system')).toBe('system');
+  });
+
+  it('maps a Chinese choice saved before the script split onto its script', () => {
+    expect(sanitizeLocale('zh-CN')).toBe('zh-Hans');
+    expect(sanitizeLocale('zh-SG')).toBe('zh-Hans');
+    expect(sanitizeLocale('zh-TW')).toBe('zh-Hant');
+    expect(sanitizeLocale('zh-HK')).toBe('zh-Hant');
+    expect(sanitizeLocale('zh')).toBe('zh-Hans');
+    expect(loadLocale({ getItem: () => 'zh-CN' })).toBe('zh-Hans');
+    expect(loadLocale({ getItem: () => 'zh-TW' })).toBe('zh-Hant');
   });
 
   it("reports 'system' when the user has never picked one", () => {

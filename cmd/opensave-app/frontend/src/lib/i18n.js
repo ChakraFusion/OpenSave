@@ -31,9 +31,13 @@ const CATALOGS = { en, 'zh-Hans': zhHans, 'zh-Hant': zhHant };
 const FALLBACK = 'en';
 const KEY = 'opensave.locale';
 
-/** A locale id if valid, otherwise null. */
+/** A locale id if valid, otherwise null. A Chinese tag saved before the
+ *  script split (`zh-CN`, `zh-TW`, `zh-HK`, bare `zh`, …) maps through
+ *  `scriptFor`, so someone who picked Chinese keeps it. */
 export function sanitizeLocale(raw) {
-  return typeof raw === 'string' && (raw === SYSTEM_LOCALE || raw in LOCALES) ? raw : null;
+  if (typeof raw !== 'string') return null;
+  if (raw === SYSTEM_LOCALE || raw in LOCALES) return raw;
+  return scriptFor(raw);
 }
 
 /** The saved choice, or 'system' when the user has never picked one. */
