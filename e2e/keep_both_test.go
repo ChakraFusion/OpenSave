@@ -47,16 +47,18 @@ func sideBranch(st branchState) string {
 }
 
 // branchHolds is what a file holds in a branch's newest snapshot: what
-// switching to that branch would put back.
+// switching to that branch would put back. /api/games lists a branch's
+// snapshots oldest first, so the newest is the last.
 func branchHolds(t *testing.T, st branchState, branch, rel string) string {
 	t.Helper()
 	snaps := st.Branches[branch].Snapshots
 	if len(snaps) == 0 {
 		return ""
 	}
-	path, done, err := snapshot.OpenArchive(snaps[0].ZipPath)
+	newest := snaps[len(snaps)-1]
+	path, done, err := snapshot.OpenArchive(newest.ZipPath)
 	if err != nil {
-		t.Fatalf("open %s: %v", snaps[0].ZipPath, err)
+		t.Fatalf("open %s: %v", newest.ZipPath, err)
 	}
 	defer done()
 	zr, err := zip.OpenReader(path)
