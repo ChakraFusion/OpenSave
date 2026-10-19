@@ -90,8 +90,8 @@ type Manager struct {
 	// stagingSeq names the in-progress archive uniquely, independently of
 	// the clock.
 	stagingSeq atomic.Uint64
-	// inFlight counts snapshots currently being written, so shutdown can wait
-	// for them. A snapshot is started from several places — the watcher, a
+	// inFlight counts snapshots currently being written, and restores and
+	// branch switches under way (writing), so shutdown can wait for them. A snapshot is started from several places — the watcher, a
 	// sync following the peer's branch, a safety copy before a restore — and
 	// each writes an archive into the backups directory and then a row. Left
 	// running past shutdown it wrote into a directory that was being deleted
@@ -977,12 +977,51 @@ func (m *Manager) CreateBranch(gameID, branchName string, copyCurrentSave bool) 
 	return clean, nil
 }
 
-// writing holds WriteGate for a game, when there is one.
-func (m *Manager) writing(gameID string) (done func()) {
-	if m.WriteGate == nil {
-		return func() {}
+// staleStagingAge is how long an archive must have sat unchanged under a
+// staging name before RemoveStaleStaging takes it for abandoned. One being
+// written changes as it grows; an hour is far past any pause in that.
+const staleStagingAge = time.Hour
+
+// RemoveStaleStaging deletes archives left under a staging name — a snapshot
+// (.staging-*.zip) or a backup import (.import-*.tmp) that a process ended
+// part-way through, before it was named and recorded. They are no snapshot,
+// nothing lists them, and nothing else ever removes them. Reports how many it
+// deleted.
+func (m *Manager) RemoveStaleStaging() int {
+	settings, err := m.Store.GetSettings()
+	if err != nil || settings.BackupsDir == "" {
+		return 0
 	}
-	return m.WriteGate(gameID)
+	removed := 0
+	for _, pattern := range []string{".staging-*.zip", ".import-*.tmp"} {
+		matches, _ := filepath.Glob(filepath.Join(settings.BackupsDir, "*", "*", pattern))
+		for _, path := range matches {
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || time.Since(info.ModTime()) < staleStagingAge {
+				continue
+			}
+			if os.Remove(path) == nil {
+				removed++
+			}
+		}
+	}
+	return removed
+}
+
+// writing holds WriteGate for a game, when there is one, and counts the
+// restore or branch switch it guards in inFlight: shutdown waits for it as
+// for a snapshot being written. One cut off part-way leaves the save folder
+// half restored.
+func (m *Manager) writing(gameID string) (done func()) {
+	m.inFlight.Add()
+	if m.WriteGate == nil {
+		return m.inFlight.Done
+	}
+	release := m.WriteGate(gameID)
+	return func() {
+		release()
+		m.inFlight.Done()
+	}
 }
 
 // gameOf is a small helper for the places that need a game's fields and have

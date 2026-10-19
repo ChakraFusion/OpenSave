@@ -105,6 +105,10 @@ type Daemon struct {
 	// uploads counts cloud mirrors still running, so Stop can wait for them
 	// rather than letting process exit truncate one.
 	uploads drain.Group
+	// sending names the cloud copies being sent right now, so a retry of one
+	// (cloud_retry.go) is not sent alongside it.
+	sendingMu sync.Mutex
+	sending   map[string]bool
 
 	// held are the cloud copies of snapshots taken while syncing was paused,
 	// sent when it resumes. See pause.go.
@@ -223,6 +227,10 @@ func New(opts Options) (*Daemon, error) {
 		// Counted here, on the caller's goroutine, and only then moved to the
 		// background, so that Stop, once it has seen the snapshot finish,
 		// also sees its upload.
+		// Owed from now until it is up: a process that ends before then — a
+		// crash, or an installer stopping the app to update it — leaves it
+		// to be sent at the next cloud check rather than never.
+		d.noteUploadDue(zipPath, remoteFileName)
 		if d.P2P.Pause.Paused() {
 			d.holdUpload(zipPath, remoteFileName)
 			return
@@ -307,6 +315,10 @@ func (d *Daemon) Start() error {
 	// stale record is what lets a long-deleted file come back.
 	if err := d.Store.PruneDeletedFiles(); err != nil {
 		d.Log.Log("warn", "could not expire old deletion records: "+err.Error())
+	}
+	// Archives a snapshot or an import was writing when the process ended.
+	if n := d.Snapshots.RemoveStaleStaging(); n > 0 {
+		d.Log.Log("info", fmt.Sprintf("removed %d unfinished snapshot archive(s) left by an earlier run", n))
 	}
 
 	games, err := d.Store.ListGames()
@@ -601,6 +613,10 @@ func SteamCoverURL(appID string) string {
 // incremented by the caller, and it owns releasing that count.
 func (d *Daemon) runCloudUpload(zipPath, remoteFileName string, log *logging.Logger) {
 	defer d.uploads.Done()
+	if !d.startSending(remoteFileName) {
+		return // already being sent
+	}
+	defer d.doneSending(remoteFileName)
 
 	// Whole, even if it has been compacted since it was queued (a pause can
 	// hold an upload back for as long as it lasts).
