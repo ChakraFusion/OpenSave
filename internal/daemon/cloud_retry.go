@@ -26,6 +26,46 @@ func (d *Daemon) noteUploadFailed(zipPath, remoteName string) {
 	}
 }
 
+// noteUploadDue keeps a snapshot's cloud copy as owed before it is sent, the
+// way a failed one is kept: forgotten once it is up (runCloudUpload), sent
+// again by retryFailedUploads otherwise. Noted only when the cloud is set up
+// to take it and can be listed, which is what retrying needs; otherwise every
+// snapshot would be kept for a retry that can never run.
+func (d *Daemon) noteUploadDue(zipPath, remoteName string) {
+	cfg, err := d.Store.GetCloudConfig()
+	if err != nil || !cloud.Ready(cfg) || !cloudListable(cfg.Provider) {
+		return
+	}
+	d.noteUploadFailed(zipPath, remoteName)
+}
+
+// startSending marks a cloud copy as being sent, and reports false when it
+// already is.
+func (d *Daemon) startSending(remoteName string) bool {
+	d.sendingMu.Lock()
+	defer d.sendingMu.Unlock()
+	if d.sending[remoteName] {
+		return false
+	}
+	if d.sending == nil {
+		d.sending = map[string]bool{}
+	}
+	d.sending[remoteName] = true
+	return true
+}
+
+func (d *Daemon) isSending(remoteName string) bool {
+	d.sendingMu.Lock()
+	defer d.sendingMu.Unlock()
+	return d.sending[remoteName]
+}
+
+func (d *Daemon) doneSending(remoteName string) {
+	d.sendingMu.Lock()
+	delete(d.sending, remoteName)
+	d.sendingMu.Unlock()
+}
+
 // retryFailedUploads sends again the cloud copies that failed to go up. It
 // runs from the cloud check once a listing has worked, which is the proof
 // that the provider can be reached again. Each is sent once per check at
@@ -47,6 +87,9 @@ func (d *Daemon) retryFailedUploads(inCloud []cloud.CloudFile) {
 		if (present[p.RemoteName] && listingCompletesRetry) || !snapshot.ArchiveExists(p.ZipPath) {
 			_ = d.Store.ForgetCloudRetry(p.RemoteName)
 			continue
+		}
+		if d.isSending(p.RemoteName) {
+			continue // owed, and on its way up now
 		}
 		send = append(send, p)
 	}

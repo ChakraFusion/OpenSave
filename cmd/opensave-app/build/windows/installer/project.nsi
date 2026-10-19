@@ -233,8 +233,12 @@ Function ${un}StopRunningOpenSave
         Pop $0
     ${EndIf}
 
-    ; Up to ten seconds for a clean exit, checked every half second, so a
+    ; Up to 100 seconds for a clean exit, checked every half second, so a
     ; quick shutdown costs half a second rather than the whole allowance.
+    ; As long as the app's own shutdown can take (daemon.Stop): a sync
+    ; winding down, then a snapshot, a restore or a cloud upload finishing,
+    ; each allowed half a minute. Ten seconds cut those off when one was
+    ; under way, which is what asking rather than killing is there to avoid.
     StrCpy $1 0
     ${Do}
         Sleep 500
@@ -246,7 +250,7 @@ Function ${un}StopRunningOpenSave
             Goto done
         ${EndIf}
         IntOp $1 $1 + 1
-        ${If} $1 >= 20
+        ${If} $1 >= 200
             ${Break}
         ${EndIf}
     ${Loop}
