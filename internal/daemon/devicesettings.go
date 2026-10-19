@@ -15,6 +15,12 @@ import (
 // and a game's answer only changes when its name, App ID or folder does —
 // which makes it a different key here. A database update takes effect at the
 // next start, where adoptExclusionView carries every recorded hash over.
+//
+// First needed while the daemon starts, before the window can open, so it does
+// not wait for the database to be rebuilt: that parses the whole manifest,
+// about a minute, and is due after an update changes the index format and
+// after every weekly manifest download. The rebuild runs in the background and
+// is what the next start reads.
 
 type devSettingsCache struct {
 	loaded   bool
@@ -30,7 +36,7 @@ func (d *Daemon) deviceSettingsFor(game store.Game) []string {
 	d.devMu.Lock()
 	defer d.devMu.Unlock()
 	if !d.dev.loaded {
-		d.dev.db = d.Scanner.DeviceSettings()
+		d.dev.db = d.Scanner.DeviceSettingsNoWait()
 		d.dev.patterns = map[string][]string{}
 		d.dev.loaded = true
 	}

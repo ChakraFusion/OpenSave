@@ -644,23 +644,78 @@ func (sc *Scanner) loadManifestIndex() []indexedGame {
 	}
 
 	// Reuse the index when it's newer than the YAML it was built from.
-	if idxInfo, err := os.Stat(indexPath); err == nil && idxInfo.ModTime().After(yamlInfo.ModTime()) {
-		if raw, err := os.ReadFile(indexPath); err == nil {
-			var games []indexedGame
-			if json.Unmarshal(raw, &games) == nil && len(games) > 0 {
-				return games
-			}
-		}
+	if games, fresh := readManifestIndex(indexPath, yamlInfo); fresh {
+		return games
 	}
 
+	if games := rebuildManifestIndex(yamlPath, indexPath); len(games) > 0 {
+		return games
+	}
+	return embedded()
+}
+
+// loadManifestIndexNoWait is loadManifestIndex for a caller that must not wait
+// on a rebuild: the daemon while it starts, before the window can open.
+// Building the index parses the whole manifest, about a minute on an ordinary
+// PC, and it is due at the first start after the index format changes and
+// after every weekly manifest download. This takes the index on disk as it is,
+// stale or not, or the embedded one when there is none, and rebuilds it in the
+// background; the next start reads the new one.
+func (sc *Scanner) loadManifestIndexNoWait() []indexedGame {
+	yamlPath, indexPath := sc.manifestPaths()
+
+	sc.refreshManifestAsync(yamlPath)
+
+	yamlInfo, err := os.Stat(yamlPath)
+	if err != nil {
+		if sc.ManifestURL == "" {
+			return nil
+		}
+		return loadEmbeddedIndex()
+	}
+	games, fresh := readManifestIndex(indexPath, yamlInfo)
+	if !fresh && rebuildInFlight.CompareAndSwap(false, true) {
+		go func() {
+			defer rebuildInFlight.Store(false)
+			rebuildManifestIndex(yamlPath, indexPath)
+		}()
+	}
+	if len(games) > 0 {
+		return games
+	}
+	if sc.ManifestURL == "" {
+		return nil
+	}
+	return loadEmbeddedIndex()
+}
+
+// rebuildInFlight guards against overlapping background index builds.
+var rebuildInFlight atomic.Bool
+
+// readManifestIndex reads the index on disk, and says whether it is newer
+// than the manifest it was built from. Nil when there is none or it does not
+// parse.
+func readManifestIndex(indexPath string, yamlInfo os.FileInfo) (games []indexedGame, fresh bool) {
+	idxInfo, err := os.Stat(indexPath)
+	if err != nil {
+		return nil, false
+	}
+	raw, err := os.ReadFile(indexPath)
+	if err != nil || json.Unmarshal(raw, &games) != nil || len(games) == 0 {
+		return nil, false
+	}
+	return games, idxInfo.ModTime().After(yamlInfo.ModTime())
+}
+
+// rebuildManifestIndex builds the index from the manifest and saves it.
+func rebuildManifestIndex(yamlPath, indexPath string) []indexedGame {
 	games := buildManifestIndex(yamlPath)
 	if len(games) > 0 {
 		if raw, err := json.Marshal(games); err == nil {
 			_ = writeFileAtomic(indexPath, raw)
 		}
-		return games
 	}
-	return embedded()
+	return games
 }
 
 // refreshInFlight guards against overlapping background downloads.
