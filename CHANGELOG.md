@@ -118,6 +118,19 @@ All notable changes to OpenSave are documented here. This project adheres to
   under a temporary name, read back and compared, and only then given its
   real name, so a server that stored it damaged, or a failed retry, can no
   longer leave a broken or replaced backup. (#79, issues #44 and #45)
+- **Importing a backup no longer overwrites a snapshot taken moments
+  before.** The imported save could be given the same name as a snapshot
+  taken just before the import: that snapshot's archive was replaced, and
+  the import was not recorded. It now always gets a name of its own. (#99,
+  issue #89)
+- **Updating no longer cuts off what OpenSave was doing.** The installer
+  gave a running OpenSave ten seconds to close before stopping it, which
+  could cut off a snapshot being written, a cloud backup on its way up, or
+  a restore. It now waits for OpenSave to finish, and OpenSave waits for a
+  restore as it does for a snapshot. A backup copy that still did not go
+  up — OpenSave stopped, crashed, or was paused until it restarted — is
+  sent at the next cloud check rather than never, and an unfinished
+  archive left in the backups folder is cleaned up. (#103)
 
 ### Changed
 
@@ -132,7 +145,7 @@ All notable changes to OpenSave are documented here. This project adheres to
   longer synced between devices, so a handheld no longer gets a desktop's
   4K settings. They are still in every snapshot. A game's configuration tab
   lists them, and "Sync these settings between devices too" brings them
-  back. (#84)
+  back. (#84, #102)
 - **Restoring a save of many files is faster, and shows its progress.**
   Files are written several at a time on an SSD, one at a time on a hard
   disk. (#55)
@@ -141,6 +154,13 @@ All notable changes to OpenSave are documented here. This project adheres to
   starts. (#53)
 - **No wait after the weekly save-catalogue download.** The next scan or
   tracked game used to spend about thirty seconds reading it first. (#74)
+- **Clearer controller and keyboard navigation.** The selected control is
+  marked by one ring drawn above everything, so a list or a card can no
+  longer cut it off, and it slides from one control to the next as you
+  move. It shows when you move with a controller or the keyboard, not after
+  a click. A move now stays in the part of the window it starts in — the
+  sidebar, the page, the title bar — and only crosses into another at its
+  edge. (#101)
 
 ### Added
 
@@ -156,6 +176,9 @@ All notable changes to OpenSave are documented here. This project adheres to
   "Rename…" in its menu and Ctrl+K, or `opensave rename` — changes what this
   device calls it. Your other devices keep their own name, and syncing,
   snapshots and backups carry on as before. (#86)
+- **Dismiss notifications.** Each new-save, update and offer notification
+  under the bell has a × to dismiss it, and "Clear all" clears the earlier
+  ones. Dismissed notifications stay dismissed on this device. (#96)
 
 ## [2.4.1] — 2026-10-02
 
