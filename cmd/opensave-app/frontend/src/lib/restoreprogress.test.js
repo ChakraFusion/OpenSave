@@ -30,7 +30,7 @@ describe('restoreProgressText', () => {
     expect(say('en', { phase: 'later', done: 0, total: 0 })).toContain('Restoring');
   });
   it('says the line in the chosen language', () => {
-    const line = say('zh-CN', { phase: 'writing', done: 60000, total: 240000, secondsLeft: 150 });
+    const line = say('zh-Hans', { phase: 'writing', done: 60000, total: 240000, secondsLeft: 150 });
     expect(line).toContain('正在写入文件');
     expect(line).toContain('25%');
     expect(line).toContain('约 3 分钟');
