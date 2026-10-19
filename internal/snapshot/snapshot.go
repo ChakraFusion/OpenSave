@@ -466,6 +466,18 @@ func (m *Manager) claimAndInsert(gameID, branch, backupDir, stagingPath, comment
 	return store.Snapshot{}, "", fmt.Errorf("could not find a free snapshot id near %d", ms)
 }
 
+// AdoptArchive records an archive made elsewhere, a backup being imported, as
+// a new snapshot of a game's branch: moved from stagingPath into backupDir,
+// then named and recorded the way a snapshot taken here is (claimAndInsert).
+// So it gets an id no other snapshot holds. An import that named it
+// snap_<now> itself could hit an id a snapshot taken moments before already
+// held, or one the manager had moved ahead to, and then recorded nothing
+// while its archive replaced that snapshot's own (GitHub #89).
+func (m *Manager) AdoptArchive(gameID, branch, backupDir, stagingPath, comment string) (store.Snapshot, error) {
+	snap, _, err := m.claimAndInsert(gameID, branch, backupDir, stagingPath, comment, true)
+	return snap, err
+}
+
 // isIDCollision reports whether an insert failed because the id was already
 // taken, as opposed to any other database error. SQLite reports this as a
 // uniqueness violation naming the column; the driver (modernc) surfaces it as
