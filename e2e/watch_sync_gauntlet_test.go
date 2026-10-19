@@ -259,6 +259,11 @@ func TestReverseDeletionPropagation(t *testing.T) {
 	}) {
 		t.Fatal("initial sync to B failed")
 	}
+	// The file showing up on B is the first pull landing, not the sync being
+	// over. A second pull of the same state still in flight wrote it back
+	// after the delete below, and B, holding it again, had nothing to pass on.
+	time.Sleep(syncSettleWindow)
+	testutil.SettleSync(t, gameID, a, b)
 
 	if err := os.Remove(filepath.Join(b.SaveDir, "kill-me.sav")); err != nil {
 		t.Fatal(err)
