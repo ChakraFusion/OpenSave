@@ -87,6 +87,37 @@ All notable changes to OpenSave are documented here. This project adheres to
   reported, not taken for an empty backup.** A NAS that was offline or a
   folder that could not be opened used to look like a backup with nothing in
   it. (#47)
+- **"Keep mine" and a branch switch stick until the other device acts.** A
+  choice made on one device that the other had not acted on yet — "Keep
+  mine" while the other device's user was still deciding, or a branch
+  switched by hand while the other device was still on the old one — was
+  undone by this device's own next sync. It is now kept, also across a
+  restart, until the other device takes it or moves on. (#90, issues #81
+  and #85)
+- **Two devices no longer ask each other to take a save forever.** When a
+  save went back to exactly an earlier state, two devices could each decide
+  the other should take theirs, over and over, and the change never
+  arrived. They now stop and ask you which to keep. (#78, issue #71)
+- **A report that a sync finished is no longer lost on a busy device.** It is
+  sent again until it is answered, and recorded once; a lost one used to
+  leave a false conflict at the next save. (#80)
+- **No snapshots of a save while a sync is still writing it.** A large pull
+  could leave dozens of automatic snapshots of a half-copied save, pushing
+  the real ones out. An automatic snapshot that could not read every file is
+  now discarded and taken again; if a game keeps a file open so that this
+  keeps happening, OpenSave says so. (#54)
+- **Steam's own bookkeeping file is no longer a save change.** Steam
+  rewrites `remotecache.vdf` every time it starts, which took a snapshot of
+  a game nobody played and could keep a real change from reaching your
+  other devices. It is left out of syncing. (#52)
+- **Signing in to cloud backup works again for those it failed for.** The
+  browser came back to an error page: the short wait for its return was cut
+  off by an earlier attempt or by the page being reloaded. The box to paste
+  the address into is also always shown while it waits. (#94, issue #39)
+- **A backup to a WebDAV server is checked before it counts.** It is written
+  under a temporary name, read back and compared, and only then given its
+  real name, so a server that stored it damaged, or a failed retry, can no
+  longer leave a broken or replaced backup. (#79, issues #44 and #45)
 
 ### Changed
 
@@ -96,12 +127,35 @@ All notable changes to OpenSave are documented here. This project adheres to
   again: 80 seconds became 9 for a 204,000-file save. (#25)
 - **Less memory.** The app gives memory back sooner, with a soft limit of
   1 GB. (#28)
+- **Each device keeps its own game settings.** Files the save catalogue
+  marks as a game's settings — graphics, resolution and the like — are no
+  longer synced between devices, so a handheld no longer gets a desktop's
+  4K settings. They are still in every snapshot. A game's configuration tab
+  lists them, and "Sync these settings between devices too" brings them
+  back. (#84)
+- **Restoring a save of many files is faster, and shows its progress.**
+  Files are written several at a time on an SSD, one at a time on a hard
+  disk. (#55)
+- **A faster database.** Large saves are recorded much faster, and the
+  database file gives back space it no longer uses, a little after OpenSave
+  starts. (#53)
+- **No wait after the weekly save-catalogue download.** The next scan or
+  tracked game used to spend about thirty seconds reading it first. (#74)
 
 ### Added
 
 - **Simplified Chinese** for the Home screen, and a Language choice in
   Settings → Appearance, which follows the system by default. (#48, from
   #19 and #20)
+- **Track a game from the save catalogue.** "Track game" beside "Track
+  folder" finds a game by name, by the program you pick, or one that is
+  running, and tracks it with its name, cover and save folder. A folder
+  inside one that is already tracked is refused, with an offer to link the
+  two instead. (#73)
+- **Rename a game.** A pencil beside a game's name on its page — or
+  "Rename…" in its menu and Ctrl+K, or `opensave rename` — changes what this
+  device calls it. Your other devices keep their own name, and syncing,
+  snapshots and backups carry on as before. (#86)
 
 ## [2.4.1] — 2026-10-02
 
