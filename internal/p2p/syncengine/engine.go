@@ -439,10 +439,11 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 
 	// 1. Fetch remote manifest + branch info.
 	isFile, _ := delta.ResolveLocalSaveFilePath(game.SavePath)
-	remoteData, err := e.Transport.FetchManifest(ctx, peer, gameID, ManifestQuery{
+	query := ManifestQuery{
 		Name: game.Name, SavePath: game.SavePath, IsFile: isFile,
 		AppID: game.AppID, CoverURL: game.CoverURL,
-	})
+	}
+	remoteData, err := e.Transport.FetchManifest(ctx, peer, gameID, query)
 	if err != nil {
 		// The peer simply isn't tracking this game (they untracked it, or
 		// never had it). That's a stable state, not a transient network
@@ -678,6 +679,25 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 			agreedHash = localManifest.ManifestHash()
 		case unfilteredRemote.ManifestHash():
 			agreedHash = remoteData.Manifest.ManifestHash()
+		}
+	}
+
+	// Nothing agreed yet, and both hold a save: one of them may have held the
+	// other's before, which makes it a base like any other (heldstate.go). The
+	// record of shared files is what that state held, as for the push proof;
+	// not while the game is held as emptied, for the same reason.
+	if agreedHash == "" {
+		if base := e.heldBase(ctx, gameID, peer, query, localManifest, remoteData.Manifest); base != "" {
+			shared, whose := localManifest, peer.Name+" has held this device's save"
+			if base == remoteData.Manifest.ManifestHash() {
+				shared, whose = remoteData.Manifest, "this device has held "+peer.Name+"'s save"
+			}
+			if _, held, err := e.Store.GetDeletionHold(gameID); err == nil && !held {
+				e.persistLineage(gameID, peer.ID, shared, shared)
+			}
+			_ = e.Store.SetAgreedHash(gameID, peer.ID, base)
+			agreedHash = base
+			e.Log("info", fmt.Sprintf("first sync of %q with %q: %s before, so it is not asked which to keep", game.Name, peer.Name, whose))
 		}
 	}
 

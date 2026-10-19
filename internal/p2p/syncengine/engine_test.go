@@ -50,6 +50,9 @@ type fakeTransport struct {
 	// onFetchManifest runs as the peer's manifest is served, before it is
 	// read: a test's way to stand in a comparison that is part-way through.
 	onFetchManifest func()
+	// heldByPeer answers a manifest request asking whether the peer has held
+	// this device's save (ManifestQuery.Held, heldstate.go).
+	heldByPeer func(filesHash string) bool
 }
 
 func (f *fakeTransport) FetchManifest(ctx context.Context, peer Peer, gameID string, q ManifestQuery) (ManifestResponse, error) {
@@ -77,7 +80,7 @@ func (f *fakeTransport) FetchManifest(ctx context.Context, peer Peer, gameID str
 	if branch == "" {
 		branch = "main"
 	}
-	return ManifestResponse{Manifest: m, ActiveBranch: branch, LatestSnapshot: f.latestSnap}, nil
+	return ManifestResponse{Manifest: m, ActiveBranch: branch, LatestSnapshot: f.latestSnap, HeldYours: q.Held != "" && f.heldByPeer != nil && f.heldByPeer(q.Held)}, nil
 }
 
 func (f *fakeTransport) FetchBlocks(ctx context.Context, peer Peer, ref FileRef, blockIndices []int, blockSize int) ([]BlockData, error) {

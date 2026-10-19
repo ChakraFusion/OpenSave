@@ -31,12 +31,13 @@ type manifestRequestBody struct {
 	IsFile   bool   `json:"isFile"`
 	AppID    string `json:"appId,omitempty"`
 	CoverURL string `json:"coverUrl,omitempty"`
+	Held     string `json:"held,omitempty"`
 }
 
 func (t *wanTransport) FetchManifest(ctx context.Context, peer syncengine.Peer, gameID string, q syncengine.ManifestQuery) (syncengine.ManifestResponse, error) {
 	body := manifestRequestBody{
 		Name: q.Name, SavePath: q.SavePath, IsFile: q.IsFile,
-		AppID: q.AppID, CoverURL: q.CoverURL,
+		AppID: q.AppID, CoverURL: q.CoverURL, Held: q.Held,
 	}
 	// The peer holds its answer while a sync is writing the save, for up to
 	// ServeSettleWait, before it has the usual time to send it.

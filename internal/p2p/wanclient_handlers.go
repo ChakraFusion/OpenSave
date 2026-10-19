@@ -599,9 +599,10 @@ func (w *WanClient) serveManifest(route string, body json.RawMessage, peerID str
 			IsFile   bool   `json:"isFile"`
 			AppID    string `json:"appId"`
 			CoverURL string `json:"coverUrl"`
+			Held     string `json:"held"`
 		}
 		if json.Unmarshal(body, &b) == nil && (b.Name != "" || b.SavePath != "") {
-			query = manifestGameQuery{Name: b.Name, SavePath: b.SavePath, IsFile: b.IsFile, AppID: b.AppID, CoverURL: b.CoverURL}
+			query = manifestGameQuery{Name: b.Name, SavePath: b.SavePath, IsFile: b.IsFile, AppID: b.AppID, CoverURL: b.CoverURL, Held: b.Held}
 		}
 	}
 
@@ -632,6 +633,9 @@ func (w *WanClient) serveManifest(route string, body json.RawMessage, peerID str
 	resp := map[string]any{
 		"gameId": gameID, "activeBranch": game.ActiveBranch, "manifest": manifest,
 		"deletionConfirmed": w.engine.Sync.DeletionConfirmed(game.ID),
+	}
+	if query.Held != "" && w.engine.Sync.HeldState(game.ID, query.Held) {
+		resp["heldYours"] = true
 	}
 	if latest, err := w.engine.Snapshots.LatestSnapshot(gameID, ""); err == nil {
 		resp["latestSnapshot"] = syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}

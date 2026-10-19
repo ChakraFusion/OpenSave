@@ -56,6 +56,10 @@ type ManifestResponse struct {
 	// did (see hold.go). Without it an empty location is not taken as every
 	// file in it deleted — see emptiedUnconfirmed.
 	DeletionConfirmed bool `json:"deletionConfirmed,omitempty"`
+
+	// HeldYours answers ManifestQuery.Held: a snapshot here holds exactly the
+	// asker's files (heldstate.go). Absent from a peer that predates it.
+	HeldYours bool `json:"heldYours,omitempty"`
 }
 
 // FileRef identifies one file inside one of a game's save locations.
@@ -81,6 +85,9 @@ type ManifestQuery struct {
 	// cover art, instead of a blank tile.
 	AppID    string
 	CoverURL string
+	// Held is the hash of this device's files (heldstate.go), sent only when it
+	// has no agreed state with the peer: has the peer held this save?
+	Held string
 }
 
 // BlockData is one fetched block.

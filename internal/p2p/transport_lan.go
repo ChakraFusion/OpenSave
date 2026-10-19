@@ -56,6 +56,9 @@ func (t *lanTransport) FetchManifest(ctx context.Context, peer syncengine.Peer, 
 	if q.CoverURL != "" {
 		params.Set("coverUrl", q.CoverURL)
 	}
+	if q.Held != "" {
+		params.Set("held", q.Held)
+	}
 
 	var resp syncengine.ManifestResponse
 	err := t.getJSON(ctx, peer, peerURL(peer, "/manifest/"+gameID)+"?"+params.Encode(), &resp)

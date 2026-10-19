@@ -92,3 +92,29 @@ func (s *Store) SnapshotFiles(snapshotID string) ([]CapturedFile, error) {
 	}
 	return rows, nil
 }
+
+// SnapshotFileSets returns, for every snapshot of a game that has records,
+// the files it captured in one save location: path to content hash. Snapshots
+// taken before these records existed are absent, as SnapshotFiles has them
+// empty.
+func (s *Store) SnapshotFileSets(gameID, root string) (map[string]map[string]string, error) {
+	var rows []struct {
+		SnapshotID string `db:"snapshot_id"`
+		Path       string `db:"path"`
+		Hash       string `db:"hash"`
+	}
+	if err := s.db.Select(&rows, `
+		SELECT sf.snapshot_id, sf.path, sf.hash FROM snapshot_files sf
+		JOIN snapshots s ON s.id = sf.snapshot_id
+		WHERE s.game_id = ? AND sf.root = ?`, gameID, root); err != nil {
+		return nil, fmt.Errorf("list snapshot files of %s: %w", gameID, err)
+	}
+	sets := map[string]map[string]string{}
+	for _, r := range rows {
+		if sets[r.SnapshotID] == nil {
+			sets[r.SnapshotID] = map[string]string{}
+		}
+		sets[r.SnapshotID][r.Path] = r.Hash
+	}
+	return sets, nil
+}
