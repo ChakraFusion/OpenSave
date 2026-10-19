@@ -706,24 +706,25 @@ func (s *Server) importBackupV2(zr *zip.Reader, manifest *backupManifest, mode s
 			if branch == "" {
 				branch = "main"
 			}
-			snapID := fmt.Sprintf("snap_%d", baseMs+int64(i))
+			//
+			// Under an id the snapshot manager picks, never one computed
+			// here: snap_<now> could already belong to a snapshot taken moments
+			// before, and the import then recorded nothing while its archive
+			// replaced that snapshot's own (GitHub #89).
 			destDir := filepath.Join(settings.BackupsDir, gameID, branch)
-			destPath := filepath.Join(destDir, snapID+".zip")
+			var snap store.Snapshot
 			err := os.MkdirAll(destDir, 0o777)
 			if err == nil {
-				err = copyFile(tmpPath, destPath)
-			}
-			var size int64
-			if err == nil {
-				if info, statErr := os.Stat(destPath); statErr == nil {
-					size = info.Size()
+				staging := filepath.Join(destDir, fmt.Sprintf(".import-%d-%d.tmp", baseMs, i))
+				if err = copyFile(tmpPath, staging); err == nil {
+					snap, err = s.Daemon.ImportArchive(gameID, branch, destDir, staging)
 				}
-				err = s.Daemon.EnsureImportedSnapshot(gameID, branch, snapID, destPath, size)
+				os.Remove(staging) // a no-op once it has been moved into place
 			}
 			if err == nil && mode == "overwrite" {
 				// A backup file may come from another device: this one's
 				// excluded files stay its own (Manager.RestoreKeeping).
-				_, err = s.Daemon.Snapshots.RestoreKeeping(gameID, snapID, ignore.Parse(s.Daemon.IgnoreText(local)))
+				_, err = s.Daemon.Snapshots.RestoreKeeping(gameID, snap.ID, ignore.Parse(s.Daemon.IgnoreText(local)))
 				res.Path = local.SavePath
 				res.Action = "restored"
 			} else if err == nil {

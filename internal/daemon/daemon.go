@@ -1084,29 +1084,43 @@ func (d *Daemon) checkSavePathShape(abs string) error {
 	return nil
 }
 
-// EnsureImportedSnapshot registers a snapshot restored from an .sscb
-// backup: creates the branch if missing and inserts the metadata row
-// unless that snapshot id is already known (idempotent re-imports).
-func (d *Daemon) EnsureImportedSnapshot(gameID, branch, snapID, zipPath string, sizeBytes int64) error {
-	if _, err := d.Store.GetSnapshot(snapID); err == nil {
-		return nil // already registered
+// ImportArchive records a backup's archive for a game that is tracked here as
+// a new snapshot ("Imported from backup") on branch, creating the branch if
+// missing. The archive at stagingPath is moved into backupDir under a free
+// id (snapshot.Manager.AdoptArchive).
+func (d *Daemon) ImportArchive(gameID, branch, backupDir, stagingPath string) (store.Snapshot, error) {
+	if err := d.ensureBranch(gameID, branch); err != nil {
+		return store.Snapshot{}, err
 	}
+	return d.Snapshots.AdoptArchive(gameID, branch, backupDir, stagingPath, "Imported from backup")
+}
 
+// ensureBranch creates a game's branch if it does not exist yet.
+func (d *Daemon) ensureBranch(gameID, branch string) error {
 	branches, err := d.Store.ListBranches(gameID)
 	if err != nil {
 		return err
 	}
-	haveBranch := false
 	for _, b := range branches {
 		if b == branch {
-			haveBranch = true
-			break
+			return nil
 		}
 	}
-	if !haveBranch {
-		if err := d.Store.CreateBranch(gameID, branch); err != nil {
-			return err
-		}
+	return d.Store.CreateBranch(gameID, branch)
+}
+
+// EnsureImportedSnapshot registers a snapshot restored from an .sscb
+// backup: creates the branch if missing and inserts the metadata row
+// unless that snapshot id is already known (idempotent re-imports).
+// It is for an archive that keeps the backup's own id (the snapshot history
+// a backup carries); a tracked game's imported save goes through
+// ImportArchive, which picks a free id.
+func (d *Daemon) EnsureImportedSnapshot(gameID, branch, snapID, zipPath string, sizeBytes int64) error {
+	if _, err := d.Store.GetSnapshot(snapID); err == nil {
+		return nil // already registered
+	}
+	if err := d.ensureBranch(gameID, branch); err != nil {
+		return err
 	}
 
 	// snap_<ms> ids carry their creation time; reconstruct the timestamp
