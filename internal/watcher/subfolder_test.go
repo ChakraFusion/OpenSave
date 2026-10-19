@@ -79,6 +79,19 @@ func TestSubfolder_AMissedOneIsWatchedOnTheNextChangeInItsParent(t *testing.T) {
 	if !waitFor(t, 10*time.Second, func() bool { return col.snapshotCount() > before }) {
 		t.Error("a save written into the folder watched again was not seen")
 	}
+
+	// A second missed subfolder in the same parent is found the same way: the
+	// first check must not leave profiles marked as pending, or every later
+	// Write to it is dropped (found in review on #100).
+	if err := gw.fsw.Remove(slot1); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(saveDir, "profiles", "slot3"), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if !waitFor(t, 10*time.Second, func() bool { return watching(eng, "game1", slot1) }) {
+		t.Fatal("round 2: slot1 was not put under watch again after another change in profiles")
+	}
 }
 
 // A folder holding only files is listed and nothing more; a burst of Writes

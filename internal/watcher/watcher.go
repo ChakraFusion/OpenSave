@@ -1081,7 +1081,7 @@ func (e *Engine) registerFolders(ctx context.Context, gw *gameWatch) {
 			}
 		case dir := <-gw.checks:
 			gw.checkingMu.Lock()
-			delete(gw.checking, dir)
+			delete(gw.checking, watchKey(dir)) // the key queueCheck marked it under
 			gw.checkingMu.Unlock()
 			if e.checkFolders(ctx, gw, dir) {
 				added = true
