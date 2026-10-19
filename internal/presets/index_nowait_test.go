@@ -27,8 +27,16 @@ New Game:
 	if err := os.WriteFile(indexPath, raw, 0o666); err != nil {
 		t.Fatal(err)
 	}
+	// The manifest downloaded half an hour ago, after the index was built.
+	// Both in the past: a filesystem with coarse timestamps can give the
+	// rebuilt index the same time as a manifest written moments before it,
+	// and it would never count as newer.
 	past := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(indexPath, past, past); err != nil {
+		t.Fatal(err)
+	}
+	downloaded := time.Now().Add(-30 * time.Minute)
+	if err := os.Chtimes(yamlPath, downloaded, downloaded); err != nil {
 		t.Fatal(err)
 	}
 
@@ -83,8 +91,12 @@ New Game:
     "<winAppData>/New/save":
       tags: [save]
 `)
-	_, indexPath := sc.manifestPaths()
+	yamlPath, indexPath := sc.manifestPaths()
 	waitForRebuild(t)
+	downloaded := time.Now().Add(-30 * time.Minute)
+	if err := os.Chtimes(yamlPath, downloaded, downloaded); err != nil {
+		t.Fatal(err)
+	}
 	if got := sc.loadManifestIndexNoWait(); len(got) != 0 {
 		t.Fatalf("got %+v, want nothing until the index is built", got)
 	}
