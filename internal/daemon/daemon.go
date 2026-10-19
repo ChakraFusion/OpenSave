@@ -78,6 +78,10 @@ type Daemon struct {
 	// Play sessions; see sessions.go.
 	sessions sessionState
 
+	// Device settings; see devicesettings.go.
+	devMu sync.Mutex
+	dev   devSettingsCache
+
 	// OnCloudOffers receives the saves from other devices' cloud backups
 	// that are waiting for an answer, whenever that list changes, and
 	// OnCloudPulled each one put in place without asking. See cloudsync.go.
@@ -176,6 +180,9 @@ func New(opts Options) (*Daemon, error) {
 
 	d.initSessions()
 
+	// A game's device settings are left out of syncing (devicesettings.go).
+	d.P2P.Sync.DeviceSettingsFor = d.deviceSettingsFor
+
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
 	// may read it half-way (syncengine/settle.go).
 	snaps.WriteGate = d.P2P.Sync.Writing
@@ -234,7 +241,7 @@ func New(opts Options) (*Daemon, error) {
 			if err != nil {
 				return ""
 			}
-			return game.SyncIgnore
+			return d.IgnoreText(game)
 		},
 		GetLastManifestHash: func(gameID string) (string, error) {
 			game, err := s.GetGame(gameID)
@@ -315,6 +322,9 @@ func (d *Daemon) Start() error {
 	// hundred — and too small is the expensive direction, because the cache
 	// then evicts entries it is about to want and starts re-reading saves.
 	delta.SetHashCacheBudgetForGames(len(games))
+
+	// Before anything is watched or compared.
+	d.adoptExclusionView(games)
 
 	for _, game := range games {
 		// Backfill cover art for games tracked before covers existed (or

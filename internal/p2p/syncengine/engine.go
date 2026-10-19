@@ -152,6 +152,11 @@ type Engine struct {
 	// rootConflicts holds divergences in a game's EXTRA save locations, keyed
 	// by game and location so several can wait on a decision at once.
 	rootConflicts map[string]*RootConflict
+
+	// DeviceSettingsFor returns the exclusion patterns for a game's device
+	// settings (presets/devicesettings.go), set by the daemon; nil leaves
+	// them syncing. See IgnoreText.
+	DeviceSettingsFor func(store.Game) []string
 }
 
 // New creates an Engine.
