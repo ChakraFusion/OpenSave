@@ -75,6 +75,38 @@ export function nextInDirection(rects, from, dir) {
   return best;
 }
 
+/**
+ * nextInDirection, staying in the part of the window `from` is in first:
+ * `regions[i]` names the part rects[i] is in (the title bar, the sidebar, the
+ * page, the status bar). Only when nothing lies that way in the same part does
+ * it cross into another. Up from the top row of the page used to land in the
+ * title bar, and left from a card in the status bar's row could reach the
+ * sidebar, because whatever was nearest in the whole window won.
+ * @param {Rect[]} rects
+ * @param {(string|null)[]} regions
+ * @param {number} fromIndex
+ * @param {'up'|'down'|'left'|'right'} dir
+ */
+export function nextInRegion(rects, regions, fromIndex, dir) {
+  const here = regions[fromIndex];
+  if (here != null) {
+    const same = [];
+    rects.forEach((r, i) => {
+      if (regions[i] === here) same.push(i);
+    });
+    const j = nextInDirection(
+      same.map((i) => rects[i]),
+      rects[fromIndex],
+      dir
+    );
+    if (j >= 0) return same[j];
+  }
+  return nextInDirection(rects, rects[fromIndex], dir);
+}
+
+/** The parts of the window movement stays within before crossing. */
+export const REGIONS = '.titlebar, aside, main, footer';
+
 /** Whatever is in front of the page: a dialog, the palette, a menu. Focus
  *  stays inside the frontmost one, and B closes it rather than going back. */
 export const LAYERS = '.overlay, .backdrop[role="presentation"], .menu, [role="dialog"]';
@@ -107,7 +139,8 @@ export function moveFocus(dir, doc = globalThis.document) {
     return true;
   }
   const rects = els.map((el) => el.getBoundingClientRect());
-  const i = nextInDirection(rects, rects[els.indexOf(current)], dir);
+  const regions = els.map((el) => el.closest(REGIONS));
+  const i = nextInRegion(rects, regions, els.indexOf(current), dir);
   if (i < 0) return false;
   els[i].focus();
   els[i].scrollIntoView?.({ block: 'nearest', inline: 'nearest' });

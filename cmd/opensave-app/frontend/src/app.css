@@ -660,3 +660,38 @@ h2.page-title {
 :root[data-controller='on'][data-input='pad'] .tile:focus {
   outline-offset: 3px;
 }
+
+/* What is selected from the keyboard or a controller: one ring drawn over
+   everything, on the control's box (lib/focusring.js), so no list or card can
+   clip it, and it slides from one control to the next. It replaces the
+   outlines above wherever it is on; a text field a click put focus in keeps
+   its own focused border. */
+.focus-ring {
+  position: fixed;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+  z-index: 2147483000;
+  border: 2px solid var(--accent);
+  opacity: 0;
+  transition:
+    transform 0.14s cubic-bezier(0.2, 0.8, 0.2, 1),
+    width 0.14s cubic-bezier(0.2, 0.8, 0.2, 1),
+    height 0.14s cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-radius 0.14s,
+    opacity 0.12s;
+}
+.focus-ring.on {
+  opacity: 1;
+}
+.focus-ring.jump {
+  transition: none;
+}
+:root[data-focus-ring='on'] :focus-visible:not(input, textarea, [contenteditable='true']),
+:root[data-focus-ring='on'][data-controller='on'][data-input='pad'] :focus {
+  outline: none;
+}
+/* Room for the ring when a selected control is scrolled into view. */
+:root[data-focus-ring='on'] :focus {
+  scroll-margin: 12px;
+}
