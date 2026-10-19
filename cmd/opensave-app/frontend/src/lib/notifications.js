@@ -120,6 +120,61 @@ export function saveSeenAt(ms, storage = globalThis.localStorage) {
   }
 }
 
+// Clearing the bell. What happened can be dismissed one by one or all at
+// once, and of what waits on you, only what is news rather than a problem:
+// games found, an update, a newer save offered from the cloud. A conflict, an
+// emptied or missing save folder, a damaged snapshot or a device asking to pair
+// stays until it is dealt with — hiding one would hide a game that is not
+// syncing. Clearing only takes things out of the bell: Activity still has
+// them. Kept per device, like what has been read.
+
+const CLEARED_KEY = 'opensave.notificationsCleared';
+
+/** What was cleared from the bell here: everything that happened up to
+ *  `before` (ms), and single items by id. */
+export function loadCleared(storage = globalThis.localStorage) {
+  try {
+    const v = JSON.parse(storage?.getItem(CLEARED_KEY) ?? 'null');
+    return {
+      before: Number(v?.before) || 0,
+      ids: Array.isArray(v?.ids) ? v.ids.filter((id) => typeof id === 'string') : []
+    };
+  } catch {
+    return { before: 0, ids: [] };
+  }
+}
+
+export function saveCleared(cleared, storage = globalThis.localStorage) {
+  try {
+    storage?.setItem(CLEARED_KEY, JSON.stringify(cleared));
+  } catch {
+    // Storage refused: cleared items come back after a restart.
+  }
+}
+
+/** Whether an item that waits on you can be dismissed: news, not a problem. */
+export const canDismiss = (item) => /^(new|update|offer):/.test(item?.id ?? '');
+
+/** The items still to show: those not cleared. An item waiting on you has no
+ *  time, so only "Clear all" of what happened passes it by. */
+export function notCleared(list, cleared) {
+  const ids = new Set(cleared.ids);
+  return list.filter((it) => !ids.has(it.id) && !(typeof it.atMs === 'number' && it.atMs <= cleared.before));
+}
+
+/** cleared with one more item dismissed. Ids of items no longer listed
+ *  anywhere (`listed`) are dropped, so the list does not grow for ever: the
+ *  ids of what waits on you name what it is about, so the next "new games",
+ *  update or offer is a new id and shows. */
+export function dismissOne(cleared, id, listed) {
+  return { before: cleared.before, ids: [...new Set([...cleared.ids.filter((i) => listed.has(i)), id])] };
+}
+
+/** cleared with everything that happened up to now cleared. */
+export function clearAllHappened(cleared, now, listed) {
+  return { before: now, ids: cleared.ids.filter((i) => listed.has(i)) };
+}
+
 // A save arriving from another device is said in the corner too — at most
 // once in a while for each game, since a game played on the other device
 // saves every few minutes, and each of those arrives here.

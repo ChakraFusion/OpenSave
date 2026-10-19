@@ -6,16 +6,31 @@
   import Bell from 'lucide-svelte/icons/bell';
   import TriangleAlert from 'lucide-svelte/icons/triangle-alert';
   import Info from 'lucide-svelte/icons/info';
+  import X from 'lucide-svelte/icons/x';
   import CoverImage from './CoverImage.svelte';
   import { unfold } from '../lib/motion.js';
   import { api, gameCover } from '../lib/api.js';
   import { stateLoaded, games, conflicts, locationConflicts, pairingRequests, cloudOffers, newGames, navigate, activityTick, availableUpdate } from '../lib/stores.js';
-  import { waitingOnYou, happened, badgeCount, loadSeenAt, saveSeenAt, exampleEvents } from '../lib/notifications.js';
+  import {
+    waitingOnYou,
+    happened,
+    badgeCount,
+    loadSeenAt,
+    saveSeenAt,
+    exampleEvents,
+    loadCleared,
+    saveCleared,
+    canDismiss,
+    notCleared,
+    dismissOne,
+    clearAllHappened
+  } from '../lib/notifications.js';
   import { timeAgo } from '../lib/timeago.js';
 
   let open = false;
   let items = [];
   let seenAt = loadSeenAt();
+  let cleared = loadCleared();
   let bell;
   let panel;
 
@@ -44,7 +59,7 @@
     clearInterval(tick);
   });
 
-  $: waiting = waitingOnYou({
+  $: allWaiting = waitingOnYou({
     games: $games,
     conflicts: $conflicts,
     locationConflicts: $locationConflicts,
@@ -53,8 +68,22 @@
     newGames: $newGames,
     update: $availableUpdate
   });
-  $: events = [...$exampleEvents, ...happened(items, $games, seenAt, now)];
+  $: allEvents = [...$exampleEvents, ...happened(items, $games, seenAt, now)];
+  // What is shown, and counted on the bell: what has not been cleared.
+  $: waiting = notCleared(allWaiting, cleared);
+  $: events = notCleared(allEvents, cleared);
   $: count = badgeCount(waiting, events);
+  $: listed = new Set([...allWaiting, ...allEvents].map((it) => it.id));
+
+  function dismiss(item) {
+    cleared = dismissOne(cleared, item.id, listed);
+    saveCleared(cleared);
+  }
+  function clearAll() {
+    cleared = clearAllHappened(cleared, Date.now(), listed);
+    saveCleared(cleared);
+    exampleEvents.set([]);
+  }
 
   // Opened and then closed, everything shown has been seen. Marked on
   // closing, so the dots are still there to read while the panel is open.
@@ -112,7 +141,8 @@
         {#if waiting.length}
           <div class="section">Needs you</div>
           {#each waiting as w, i (w.id)}
-            <button class="item tone-{w.tone}" style="--i: {i}" on:click={() => go(w)}>
+            <div class="row">
+            <button class="item tone-{w.tone}" class:dismissable={canDismiss(w)} style="--i: {i}" on:click={() => go(w)}>
               {#if w.gameId && $games[w.gameId]}
                 <span class="thumb"><span class="initials">{initials($games[w.gameId].name)}</span><CoverImage src={gameCover($games[w.gameId])} alt="" /></span>
               {:else}
@@ -120,12 +150,20 @@
               {/if}
               <span class="text"><span class="t">{w.title}</span><span class="d">{w.detail}</span></span>
             </button>
+            {#if canDismiss(w)}
+              <button class="dismiss" title="Dismiss" aria-label="Dismiss: {w.title}" on:click={() => dismiss(w)}><X size={13} /></button>
+            {/if}
+            </div>
           {/each}
         {/if}
         {#if events.length}
-          <div class="section">Earlier</div>
+          <div class="section section-row">
+            <span>Earlier</span>
+            <button class="linklike" on:click={clearAll} title="Take these out of the bell. Activity still has them.">Clear all</button>
+          </div>
           {#each events as e, i (e.id)}
-            <button class="item" class:unread={e.unread} style="--i: {Math.min(waiting.length + i, 10)}" on:click={() => go(e)}>
+            <div class="row">
+            <button class="item dismissable" class:unread={e.unread} style="--i: {Math.min(waiting.length + i, 10)}" on:click={() => go(e)}>
               {#if e.example}
                 <span class="thumb icon"><Info size={15} /></span>
               {:else}
@@ -137,6 +175,8 @@
               </span>
               {#if e.unread}<span class="dot" aria-label="Unread"></span>{/if}
             </button>
+            <button class="dismiss" title="Dismiss" aria-label="Dismiss: {e.title}" on:click={() => dismiss(e)}><X size={13} /></button>
+            </div>
           {/each}
         {/if}
         {#if !waiting.length && !events.length}
@@ -351,5 +391,47 @@
   }
   .linklike:hover {
     text-decoration: underline;
+  }
+  .section-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .section-row .linklike {
+    text-transform: none;
+    letter-spacing: normal;
+    font-weight: normal;
+  }
+  .row {
+    position: relative;
+  }
+  .item.dismissable {
+    padding-right: 34px;
+  }
+  /* Shown on pointing at the row or reaching it by keyboard, so the list
+     stays as quiet as it was. */
+  .dismiss {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-dim);
+    cursor: pointer;
+    opacity: 0;
+  }
+  .row:hover .dismiss,
+  .row:focus-within .dismiss {
+    opacity: 1;
+  }
+  .dismiss:hover {
+    background: var(--bg-hover);
+    color: var(--text);
   }
 </style>
