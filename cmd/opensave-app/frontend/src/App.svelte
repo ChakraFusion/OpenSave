@@ -4,6 +4,7 @@
   import { initApi, connectWS, native } from './lib/api.js';
   import { applyMessage, wsConnected, view, appUpdate, toast, showAbout, cloudOffers, newGames, navigate, settings, games, availableUpdate } from './lib/stores.js';
   import { startController, controllerOn, padUsed, pageStep } from './lib/controller.js';
+  import { startFocusRing } from './lib/focusring.js';
   import { appearance } from './lib/appearance.js';
   import { locale, resolveLocale } from './lib/i18n.js';
   import { paletteOpen } from './lib/shortcuts.js';
@@ -89,6 +90,8 @@
   // The document language follows the chosen locale ('system' resolved); a
   // wrong lang makes Windows render some Han characters with Japanese shapes.
   $: document.documentElement.lang = resolveLocale($locale);
+  // The highlight on what the keyboard or the controller has selected.
+  onMount(() => startFocusRing());
   onMount(() =>
     startController({
       isOn: () => controllerActive,

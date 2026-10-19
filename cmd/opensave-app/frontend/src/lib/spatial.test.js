@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nextInDirection } from './spatial.js';
+import { nextInDirection, nextInRegion } from './spatial.js';
 
 const box = (left, top, w = 100, h = 60) => ({ left, top, right: left + w, bottom: top + h });
 
@@ -61,5 +61,40 @@ describe('nextInDirection', () => {
     const restore = box(1110, 340, 63, 30);
     const del = box(1180, 340, 45, 30);
     expect(nextInDirection([wide, restore, del], wide, 'down')).toBe(1);
+  });
+});
+
+describe('nextInRegion', () => {
+  // The title bar's bell above the page, the sidebar to the left, two rows of
+  // tiles in the page, and the status bar below.
+  const bell = box(560, 0, 30, 30);
+  const side = box(0, 100, 200, 30);
+  const t1 = box(300, 100);
+  const t2 = box(420, 100);
+  const t3 = box(300, 200);
+  const status = box(300, 400, 80, 20);
+  const rects = [bell, side, t1, t2, t3, status];
+  const regions = ['title', 'sidebar', 'main', 'main', 'main', 'status'];
+
+  it('stays in the page while there is somewhere to go in it', () => {
+    // Right along the row, and down to the next row, as before.
+    expect(nextInRegion(rects, regions, 2, 'right')).toBe(3);
+    expect(nextInRegion(rects, regions, 2, 'down')).toBe(4);
+    // Up from the second row goes to the first, never to the title bar.
+    expect(nextInRegion(rects, regions, 4, 'up')).toBe(2);
+  });
+
+  it('crosses into another part only at the edge of this one', () => {
+    // Up from the top row: nothing above it in the page, so the title bar.
+    expect(nextInRegion(rects, regions, 3, 'up')).toBe(0);
+    // Left from the first tile: the sidebar.
+    expect(nextInRegion(rects, regions, 2, 'left')).toBe(1);
+    // Down from the last row: the status bar.
+    expect(nextInRegion(rects, regions, 4, 'down')).toBe(5);
+  });
+
+  it('searches everything for a control in no part, such as a dialog', () => {
+    const dlg = box(300, 300);
+    expect(nextInRegion([...rects, dlg], [...regions, null], 6, 'up')).toBe(4);
   });
 });
