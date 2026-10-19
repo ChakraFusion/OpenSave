@@ -29,7 +29,21 @@ func (sc *Scanner) DeviceSettings() *DeviceSettings {
 	if sc == nil || sc.CacheFile == "" {
 		return nil
 	}
-	idx := sc.loadManifestIndex()
+	return sc.deviceSettings(sc.loadManifestIndex())
+}
+
+// DeviceSettingsNoWait is DeviceSettings for the daemon while it starts, which
+// must not wait for an index that is due a rebuild (loadManifestIndexNoWait):
+// until the rebuild is done, settings files are left out as the index on disk
+// names them, and the next start goes by the new one.
+func (sc *Scanner) DeviceSettingsNoWait() *DeviceSettings {
+	if sc == nil || sc.CacheFile == "" {
+		return nil
+	}
+	return sc.deviceSettings(sc.loadManifestIndexNoWait())
+}
+
+func (sc *Scanner) deviceSettings(idx []indexedGame) *DeviceSettings {
 	if len(idx) == 0 {
 		return nil
 	}
