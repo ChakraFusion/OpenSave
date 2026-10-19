@@ -23,6 +23,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -236,6 +237,14 @@ type gameWatch struct {
 	// Buffered by one, and sent without waiting — one pending request covers
 	// any number more.
 	rescan chan struct{}
+
+	// checks carries folders whose immediate subfolders are to be checked
+	// for any not yet watched, to registerFolders (see checkFolders).
+	// checking holds the folders queued and not yet checked, so a burst of
+	// Writes to one folder costs one check, not one per Write.
+	checks     chan string
+	checkingMu sync.Mutex
+	checking   map[string]bool
 }
 
 // folderQueueSize bounds the directories waiting to be registered. A burst
@@ -490,6 +499,7 @@ func (e *Engine) WatchWithLocations(gameID, savePath string, extra map[string]st
 		log:      e.log,
 		folders:  make(chan string, folderQueueSize),
 		rescan:   make(chan struct{}, 1),
+		checks:   make(chan string, folderQueueSize),
 	}
 	if busy {
 		gw.rewatch.Store(true)
@@ -750,6 +760,18 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 						gw.foreignFolders = true
 					}
 					gw.queueFolder(event.Name)
+				}
+			}
+			// A Write to a watched folder: an entry inside it was created,
+			// removed or renamed. If that entry is a folder whose own Create
+			// was missed, nothing else ever puts it under watch, so its
+			// immediate subfolders are checked (checkFolders).
+			if !gw.isFile && event.Has(fsnotify.Write) {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					if !own {
+						gw.foreignFolders = true
+					}
+					gw.queueCheck(event.Name)
 				}
 			}
 			resetDebounce()
@@ -1057,20 +1079,91 @@ func (e *Engine) registerFolders(ctx context.Context, gw *gameWatch) {
 			} else {
 				added = true
 			}
-			// Once the queue is empty, not per folder: a burst of new folders
-			// costs one more read of the tree, not hundreds. And not after a
-			// failure alone — the retry waits for the next real change, as it
-			// always has, rather than rescanning every two seconds against a
-			// folder that cannot be watched.
-			if added && len(gw.folders) == 0 {
-				added = false
-				select {
-				case gw.rescan <- struct{}{}:
-				default:
-				}
+		case dir := <-gw.checks:
+			gw.checkingMu.Lock()
+			delete(gw.checking, watchKey(dir)) // the key queueCheck marked it under
+			gw.checkingMu.Unlock()
+			if e.checkFolders(ctx, gw, dir) {
+				added = true
+			}
+			if ctx.Err() != nil {
+				return
+			}
+		}
+		// Once the queues are empty, not per folder: a burst of new folders
+		// costs one more read of the tree, not hundreds. And not after a
+		// failure alone — the retry waits for the next real change, as it
+		// always has, rather than rescanning every two seconds against a
+		// folder that cannot be watched.
+		if added && len(gw.folders) == 0 && len(gw.checks) == 0 {
+			added = false
+			select {
+			case gw.rescan <- struct{}{}:
+			default:
 			}
 		}
 	}
+}
+
+// checkFolders puts under watch any immediate subfolder of dir that is not
+// watched yet, and reports whether it added one (GitHub #91).
+//
+// A folder created together with its parent — MkdirAll of profiles\slot1,
+// then a save written into slot1 — could end up unwatched under load: the
+// parent's Create came, the parent was registered, but no Create for the
+// subfolder ever arrived, and every file written into it afterwards went
+// unseen until the fifteen-minute reconcile. What did arrive was a Write on
+// the parent: that is how Windows reports, from the grandparent's watch, an
+// entry added inside it. So on a Write to a folder its immediate subfolders
+// are checked.
+//
+// Cheap for folders with many entries: the listing comes without a stat per
+// entry, a folder holding only files stops there, and what is watched is
+// looked up once per check, only when there are subfolders to look up. A
+// burst of Writes to one folder is one check (queueCheck).
+func (e *Engine) checkFolders(ctx context.Context, gw *gameWatch, dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false // gone again, or unreadable: its own events will tell
+	}
+	var subs []string
+	for _, en := range entries {
+		if en.IsDir() && !strings.HasPrefix(en.Name(), ".") {
+			subs = append(subs, filepath.Join(dir, en.Name()))
+		}
+	}
+	if len(subs) == 0 {
+		return false
+	}
+	watched := map[string]bool{}
+	for _, w := range gw.fsw.WatchList() {
+		watched[watchKey(w)] = true
+	}
+	added := false
+	for _, sub := range subs {
+		if watched[watchKey(sub)] {
+			continue
+		}
+		if err := addRecursive(ctx, gw.fsw, sub); err != nil {
+			if ctx.Err() != nil {
+				return added
+			}
+			gw.rewatch.Store(true)
+			e.log("warn", fmt.Sprintf("could not watch folder %q for %q (%v) — will retry", sub, gw.gameID, err))
+			continue
+		}
+		added = true
+	}
+	return added
+}
+
+// watchKey compares watched paths as the filesystem does.
+func watchKey(p string) string {
+	p = filepath.Clean(p)
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		p = strings.ToLower(p)
+	}
+	return p
 }
 
 // queueFolder hands a directory to registerFolders without waiting. When the
@@ -1080,6 +1173,31 @@ func (gw *gameWatch) queueFolder(dir string) {
 	select {
 	case gw.folders <- dir:
 	default:
+		gw.rewatch.Store(true)
+	}
+}
+
+// queueCheck asks registerFolders to check dir's immediate subfolders
+// (checkFolders), once while a check of it is pending. Without waiting; when
+// the queue is full, the whole tree is registered on the next pass instead.
+func (gw *gameWatch) queueCheck(dir string) {
+	key := watchKey(dir)
+	gw.checkingMu.Lock()
+	if gw.checking[key] {
+		gw.checkingMu.Unlock()
+		return
+	}
+	if gw.checking == nil {
+		gw.checking = map[string]bool{}
+	}
+	gw.checking[key] = true
+	gw.checkingMu.Unlock()
+	select {
+	case gw.checks <- dir:
+	default:
+		gw.checkingMu.Lock()
+		delete(gw.checking, key)
+		gw.checkingMu.Unlock()
 		gw.rewatch.Store(true)
 	}
 }
