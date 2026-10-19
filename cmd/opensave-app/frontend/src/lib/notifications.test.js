@@ -1,5 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { arrivalMessage, badgeCount, happened, incompleteSnapshotsMessage, loadSeenAt, saveSeenAt, waitingOnYou, ARRIVAL_QUIET_MS } from './notifications.js';
+import {
+  arrivalMessage,
+  badgeCount,
+  canDismiss,
+  clearAllHappened,
+  dismissOne,
+  happened,
+  incompleteSnapshotsMessage,
+  loadCleared,
+  loadSeenAt,
+  notCleared,
+  saveCleared,
+  saveSeenAt,
+  waitingOnYou,
+  ARRIVAL_QUIET_MS
+} from './notifications.js';
 import { translate } from './i18n.js';
 import en from '../locales/en.json';
 
@@ -88,5 +103,52 @@ describe('incompleteSnapshotsMessage', () => {
     expect(one).toContain('missing a, b, c and one more file, which');
     const more = incompleteSnapshotsMessage({ gameName: 'Hades', files: ['a', 'b', 'c'], count: 9 }, t);
     expect(more).toContain('missing a, b, c and 6 more files, which');
+  });
+});
+
+describe('clearing the bell', () => {
+  const ev = (id, atMs) => ({ id, atMs });
+  const store = () => {
+    const m = new Map();
+    return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, v) };
+  };
+
+  it('dismisses news but never a problem', () => {
+    for (const id of ['new:Hades', 'update:2.5.0', 'offer:hades:snap_1']) expect(canDismiss({ id }), id).toBe(true);
+    for (const id of ['conflict:hades', 'location:hades:config', 'emptied:hades', 'missing:hades', 'damaged:hades', 'pair:node_1', 'relocate:hades:E:/Games/x'])
+      expect(canDismiss({ id }), id).toBe(false);
+  });
+
+  it('hides a dismissed item, and everything up to a clear-all', () => {
+    const list = [ev('received:a:100', 100), ev('received:a:200', 200), ev('received:a:300', 300), { id: 'update:2.5.0' }];
+    let cleared = { before: 0, ids: [] };
+    const listed = new Set(list.map((x) => x.id));
+    cleared = dismissOne(cleared, 'received:a:300', listed);
+    expect(notCleared(list, cleared).map((x) => x.id)).toEqual(['received:a:100', 'received:a:200', 'update:2.5.0']);
+    cleared = clearAllHappened(cleared, 250, listed);
+    // What happened after the clear still shows; what waits on you is not
+    // passed by a clear of what happened.
+    expect(notCleared([...list, ev('received:a:400', 400)], cleared).map((x) => x.id)).toEqual(['update:2.5.0', 'received:a:400']);
+  });
+
+  it('shows the next one of the same kind', () => {
+    let cleared = dismissOne({ before: 0, ids: [] }, 'update:2.5.0', new Set(['update:2.5.0']));
+    expect(notCleared([{ id: 'update:2.5.0' }], cleared)).toEqual([]);
+    expect(notCleared([{ id: 'update:2.6.0' }], cleared)).toEqual([{ id: 'update:2.6.0' }]);
+  });
+
+  it('forgets ids of what is no longer listed', () => {
+    let cleared = { before: 0, ids: ['update:2.4.0', 'new:Old'] };
+    cleared = dismissOne(cleared, 'update:2.5.0', new Set(['update:2.5.0', 'new:Old']));
+    expect(cleared.ids.sort()).toEqual(['new:Old', 'update:2.5.0']);
+  });
+
+  it('is kept across a restart, and survives storage that refuses', () => {
+    const s = store();
+    saveCleared({ before: 5, ids: ['new:Hades'] }, s);
+    expect(loadCleared(s)).toEqual({ before: 5, ids: ['new:Hades'] });
+    expect(loadCleared({ getItem: () => 'not json' })).toEqual({ before: 0, ids: [] });
+    expect(loadCleared({ getItem: () => { throw new Error('no'); } })).toEqual({ before: 0, ids: [] });
+    expect(() => saveCleared({ before: 1, ids: [] }, { setItem: () => { throw new Error('no'); } })).not.toThrow();
   });
 });
