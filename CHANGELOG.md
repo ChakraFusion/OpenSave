@@ -152,6 +152,10 @@ All notable changes to OpenSave are documented here. This project adheres to
   running, and tracks it with its name, cover and save folder. A folder
   inside one that is already tracked is refused, with an offer to link the
   two instead. (#73)
+- **Rename a game.** A pencil beside a game's name on its page — or
+  "Rename…" in its menu and Ctrl+K, or `opensave rename` — changes what this
+  device calls it. Your other devices keep their own name, and syncing,
+  snapshots and backups carry on as before. (#86)
 
 ## [2.4.1] — 2026-10-02
 
