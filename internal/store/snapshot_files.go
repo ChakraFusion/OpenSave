@@ -92,3 +92,43 @@ func (s *Store) SnapshotFiles(snapshotID string) ([]CapturedFile, error) {
 	}
 	return rows, nil
 }
+
+// SnapshotFileCount is how many files a snapshot captured in one save location.
+type SnapshotFileCount struct {
+	SnapshotID string `db:"snapshot_id"`
+	Files      int    `db:"files"`
+}
+
+// SnapshotFileCounts lists a game's snapshots that captured at least minFiles
+// files in one save location, with their counts, newest first. Only counts:
+// a save can hold hundreds of thousands of files, and a caller looking for one
+// snapshot reads them one at a time (SnapshotRootFiles) rather than all at once.
+func (s *Store) SnapshotFileCounts(gameID, root string, minFiles int) ([]SnapshotFileCount, error) {
+	var rows []SnapshotFileCount
+	if err := s.db.Select(&rows, `
+		SELECT sf.snapshot_id, COUNT(*) AS files FROM snapshot_files sf
+		JOIN snapshots s ON s.id = sf.snapshot_id
+		WHERE s.game_id = ? AND sf.root = ?
+		GROUP BY sf.snapshot_id
+		HAVING COUNT(*) >= ?
+		ORDER BY s.timestamp DESC, s.id DESC`, gameID, root, minFiles); err != nil {
+		return nil, fmt.Errorf("count snapshot files of %s: %w", gameID, err)
+	}
+	return rows, nil
+}
+
+// SnapshotRootFiles returns what one snapshot captured in one save location:
+// path to content hash.
+func (s *Store) SnapshotRootFiles(snapshotID, root string) (map[string]string, error) {
+	var rows []CapturedFile
+	if err := s.db.Select(&rows,
+		`SELECT root, path, hash FROM snapshot_files WHERE snapshot_id = ? AND root = ?`,
+		snapshotID, root); err != nil {
+		return nil, fmt.Errorf("list snapshot files for %s: %w", snapshotID, err)
+	}
+	files := make(map[string]string, len(rows))
+	for _, r := range rows {
+		files[r.Path] = r.Hash
+	}
+	return files, nil
+}

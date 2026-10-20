@@ -456,6 +456,8 @@ type manifestGameQuery struct {
 	AppID    string
 	CoverURL string
 	IsFile   bool
+	// Held asks whether this device has held the asker's save (syncengine/heldstate.go).
+	Held string
 }
 
 func manifestQueryFromURL(q interface{ Get(string) string }) manifestGameQuery {
@@ -465,6 +467,7 @@ func manifestQueryFromURL(q interface{ Get(string) string }) manifestGameQuery {
 		AppID:    q.Get("appId"),
 		CoverURL: q.Get("coverUrl"),
 		IsFile:   q.Get("isFile") == "true",
+		Held:     q.Get("held"),
 	}
 }
 
@@ -670,7 +673,8 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 	if peer, ok := e.peerByAddress(clientIP(r)); ok {
 		askingPeer = peer.ID
 	}
-	game, err := e.ensureManifestGame(gameID, manifestQueryFromURL(r.URL.Query()), askingPeer)
+	query := manifestQueryFromURL(r.URL.Query())
+	game, err := e.ensureManifestGame(gameID, query, askingPeer)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, err.Error())
 		return
@@ -721,6 +725,9 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 		ActiveBranch:      game.ActiveBranch,
 		Proto:             ServedProto(),
 		DeletionConfirmed: e.Sync.DeletionConfirmed(game.ID),
+	}
+	if query.Held != "" {
+		resp.HeldYours = e.Sync.HeldState(game.ID, query.Held)
 	}
 	if latest, err := e.Snapshots.LatestSnapshot(gameID, ""); err == nil {
 		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
