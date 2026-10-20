@@ -131,6 +131,11 @@ All notable changes to OpenSave are documented here. This project adheres to
   up — OpenSave stopped, crashed, or was paused until it restarted — is
   sent at the next cloud check rather than never, and an unfinished
   archive left in the backups folder is cleaned up. (#103)
+- **A save in a newly made folder is no longer missed.** When a game made a
+  folder and its subfolder at once, on a busy PC the subfolder could go
+  unwatched, and saves written into it were not noticed until the next
+  full check, up to fifteen minutes later. It is now picked up at the next
+  change in the folder above it. (#100, issue #91)
 
 ### Changed
 
@@ -164,9 +169,11 @@ All notable changes to OpenSave are documented here. This project adheres to
 
 ### Added
 
-- **Simplified Chinese** for the Home screen, and a Language choice in
-  Settings → Appearance, which follows the system by default. (#48, from
-  #19 and #20)
+- **Chinese, Simplified and Traditional,** for the Home screen, the title
+  bar, the status bar, notifications and the Transfers panel, and a Language
+  choice in Settings → Appearance, which follows the system by default:
+  Taiwan, Hong Kong and Macau get Traditional, the rest Simplified. (#48,
+  #77, from #19 and #20)
 - **Track a game from the save catalogue.** "Track game" beside "Track
   folder" finds a game by name, by the program you pick, or one that is
   running, and tracks it with its name, cover and save folder. A folder
