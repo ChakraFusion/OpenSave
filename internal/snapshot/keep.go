@@ -96,6 +96,7 @@ func walkMatching(root string, keep ignore.Rules, fn func(rel string) error) err
 	if err != nil || !info.IsDir() {
 		return nil
 	}
+	root = delta.RealRoot(root) // a linked save folder is walked where it points (delta.RealRoot)
 	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // unreadable: nothing to keep from it

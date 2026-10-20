@@ -360,6 +360,15 @@ func InvalidateRoot(root string) {
 	if strings.TrimSpace(root) == "" {
 		return
 	}
+	// A linked save folder's files are cached under the folder it points at,
+	// where they were read (RealRoot).
+	if real := RealRoot(root); real != root {
+		invalidatePrefix(real)
+	}
+	invalidatePrefix(root)
+}
+
+func invalidatePrefix(root string) {
 	prefix := cacheKeyFor(root)
 	hashCache.Lock()
 	defer hashCache.Unlock()

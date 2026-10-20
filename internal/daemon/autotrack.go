@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/store"
 	"github.com/opensave/opensave/internal/watcher"
 )
@@ -72,6 +73,7 @@ func saveHasAFile(savePath string) bool {
 	if !info.IsDir() {
 		return true
 	}
+	savePath = delta.RealRoot(savePath) // a linked save folder is walked where it points (delta.RealRoot)
 	err = filepath.WalkDir(savePath, func(_ string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return nil // an unreadable corner is not a file

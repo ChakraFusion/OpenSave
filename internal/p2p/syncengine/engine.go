@@ -768,6 +768,7 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 			peer.Name, game.Name))
 		return Result{Status: "peer_holding", PeerID: peer.ID, PeerName: peer.Name}, nil
 	}
+	e.keepHeldFiles(gameID, "", game.Name, peer, &decision)
 	handedOverDeletion := e.handOverEmptying(gameID, peer, localManifest.Files, &decision)
 
 	// A sync about to delete a large part of a save — here or on the peer —

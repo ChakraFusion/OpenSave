@@ -1,6 +1,7 @@
 package syncengine
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -164,5 +165,72 @@ func TestHoldForALocationEmptiedAfterASnapshotOfItsFolder(t *testing.T) {
 	h, _, _ := env.store.GetDeletionHold("game1")
 	if got := h.Files()["config"]; len(got) != 1 || got[0] != "settings.ini" {
 		t.Errorf("the hold covers %v; want the config location's settings.ini", h.Files())
+	}
+}
+
+// sharedEarlier makes files written on both sides read as synced half an hour
+// ago, and untouched since: what a deletion here is judged against.
+func sharedEarlier(t *testing.T, env *engineEnv, files ...string) {
+	t.Helper()
+	hourAgo := time.Now().Add(-time.Hour)
+	for _, dir := range []string{env.localDir, env.remoteDir} {
+		for _, f := range files {
+			if err := os.Chtimes(filepath.Join(dir, f), hourAgo, hourAgo); err != nil && !os.IsNotExist(err) {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := env.store.SetSyncState("game1", env.peer.ID, files, nil); err != nil {
+		t.Fatal(err)
+	}
+	lastSync := time.Now().Add(-30 * time.Minute).UTC().Format("2006-01-02T15:04:05.000Z")
+	if err := env.store.UpdatePeerLastSynced(env.peer.ID, lastSync); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// While a game's files are being put back, none of them is deleted on the
+// other device, whatever this device's folder reads as.
+//
+// "Put them back" with nothing to restore fetches the files from the other
+// device, and this device syncs meanwhile to do it. If the fetched files still
+// read as missing here, that sync took them for deleted and sent the deletion
+// on: the other device deleted the very files it was being asked for.
+func TestFetchingNeverDeletesTheHeldFilesOnTheOtherDevice(t *testing.T) {
+	for _, state := range []string{store.HoldFetching, store.HoldAsking} {
+		t.Run(state, func(t *testing.T) {
+			env := setupEngine(t)
+			write(t, env.remoteDir, "a.sav", "the card being put back")
+			write(t, env.remoteDir, "b.sav", "another")
+			write(t, env.localDir, "b.sav", "another")
+			sharedEarlier(t, env, "a.sav", "b.sav")
+			if err := env.store.SetDeletionHold("game1", state, 1, map[string][]string{"": {"a.sav"}}); err != nil {
+				t.Fatal(err)
+			}
+
+			_, _ = env.engine.SyncWithPeer(context.Background(), "game1", env.peer)
+
+			if _, err := os.Stat(filepath.Join(env.remoteDir, "a.sav")); err != nil {
+				t.Errorf("the held file was deleted on the other device (deleted: %v)", env.transport.deletedOnPeer)
+			}
+		})
+	}
+}
+
+// A deletion someone confirmed still goes on.
+func TestConfirmedHoldStillDeletesOnTheOtherDevice(t *testing.T) {
+	env := setupEngine(t)
+	write(t, env.remoteDir, "a.sav", "meant to go")
+	write(t, env.remoteDir, "b.sav", "another")
+	write(t, env.localDir, "b.sav", "another")
+	sharedEarlier(t, env, "a.sav", "b.sav")
+	if err := env.store.SetDeletionHold("game1", store.HoldConfirmed, 1, map[string][]string{"": {"a.sav"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.engine.SyncWithPeer(context.Background(), "game1", env.peer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(env.remoteDir, "a.sav")); err == nil {
+		t.Error("a confirmed deletion did not reach the other device")
 	}
 }

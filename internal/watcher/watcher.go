@@ -191,7 +191,12 @@ type gameWatch struct {
 	// way the main folder is: a change in any of them is a change to the game,
 	// and without this a settings folder would only ever sync when the user
 	// pressed the button.
-	extra  map[string]string
+	extra map[string]string
+	// linked maps the folder a linked save location points at to the
+	// location's own path (delta.RealRoot). The folders are watched where
+	// they point, so that is where events are reported from; what OpenSave
+	// itself wrote is recorded under the path it wrote through.
+	linked map[string]string
 	isFile bool
 	fsw    *fsnotify.Watcher
 	cancel context.CancelFunc
@@ -492,6 +497,7 @@ func (e *Engine) WatchWithLocations(gameID, savePath string, extra map[string]st
 		gameID:   gameID,
 		savePath: savePath,
 		extra:    watched,
+		linked:   linkedRoots(savePath, watched),
 		isFile:   isFile,
 		fsw:      fsw,
 		cancel:   cancel,
@@ -746,7 +752,7 @@ func (e *Engine) run(ctx context.Context, gw *gameWatch) {
 			if !gw.eventRelevant(event) {
 				continue
 			}
-			own := owntouch.Recent(event.Name)
+			own := owntouch.Recent(gw.asWritten(event.Name))
 			if own {
 				gw.ownEvents = true
 			} else {
@@ -1031,6 +1037,7 @@ func AnyFileLocked(savePath string) bool {
 		return isFileLocked(savePath)
 	}
 	locked := false
+	savePath = delta.RealRoot(savePath) // a linked save folder is walked where it points (delta.RealRoot)
 	filepath.Walk(savePath, func(path string, walkInfo os.FileInfo, walkErr error) error {
 		if walkErr != nil || walkInfo.IsDir() {
 			return nil
@@ -1166,6 +1173,43 @@ func watchKey(p string) string {
 	return p
 }
 
+// linkedRoots maps where each linked save location points to the location's
+// own path, for the locations that are links.
+func linkedRoots(savePath string, extra map[string]string) map[string]string {
+	var out map[string]string
+	for _, p := range append([]string{savePath}, mapValues(extra)...) {
+		if real := delta.RealRoot(p); real != p {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[filepath.Clean(real)] = filepath.Clean(p)
+		}
+	}
+	return out
+}
+
+func mapValues(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
+}
+
+// asWritten is an event's path as OpenSave writes it: under a linked save
+// location's own path rather than the folder it points at.
+func (gw *gameWatch) asWritten(name string) string {
+	for real, link := range gw.linked {
+		if name == real {
+			return link
+		}
+		if strings.HasPrefix(name, real+string(filepath.Separator)) {
+			return link + name[len(real):]
+		}
+	}
+	return name
+}
+
 // queueFolder hands a directory to registerFolders without waiting. When the
 // queue is full it asks for the whole tree to be registered on the next pass
 // instead: waiting here is the very thing registerFolders exists to avoid.
@@ -1262,6 +1306,7 @@ func drainWhileRegistering(fsw *fsnotify.Watcher) (finish func() (sawActivity bo
 // could not be shown to change the outcome under realistic load. What actually
 // guarantees shutdown is the bounded wait in stop().
 func addRecursive(ctx context.Context, fsw *fsnotify.Watcher, root string) error {
+	root = delta.RealRoot(root) // a linked save folder is walked where it points (delta.RealRoot)
 	return filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if ctx.Err() != nil {
 			return filepath.SkipAll

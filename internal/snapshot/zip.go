@@ -70,6 +70,7 @@ func zipPathCapturing(sourcePath, outPath string, reuse *reuseSource) (skipped [
 	// WalkDir, not Walk: Walk's extra Lstat per entry opens every file on
 	// Windows, which on a save of a quarter-million files cost more than the
 	// archiving itself once unchanged files are copied (reuse.go).
+	sourcePath = delta.RealRoot(sourcePath) // a linked save folder is walked where it points (delta.RealRoot)
 	walkErr := filepath.WalkDir(sourcePath, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			// Unreadable subtree — record it and move on.
