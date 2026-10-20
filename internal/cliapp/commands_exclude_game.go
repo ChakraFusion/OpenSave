@@ -119,6 +119,7 @@ func saveIgnore(d *daemon.Daemon, asJSON bool, gameID, gameName string, lines []
 	if err != nil {
 		return fail(asJSON, err)
 	}
+	oldIgnore := game.SyncIgnore
 	game.SyncIgnore = strings.Join(lines, "\n")
 
 	// Same reset the API performs: the recorded agreement was measured over a
@@ -129,11 +130,12 @@ func saveIgnore(d *daemon.Daemon, asJSON bool, gameID, gameName string, lines []
 		d.P2P.Sync.FilteredContentHash(gameID, game)); err != nil {
 		d.Log.Log("warn", "could not reset sync agreement after an exclusion change: "+err.Error())
 	}
-	game.LastManifestHash = ""
+	game.LastManifestHash = d.LastSnapshotHashUnder(game, oldIgnore)
 
 	if err := d.Store.UpdateGame(game); err != nil {
 		return fail(asJSON, err)
 	}
+	d.ExclusionsChanged(game, oldIgnore)
 	if asJSON {
 		if lines == nil {
 			lines = []string{}

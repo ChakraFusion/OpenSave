@@ -72,7 +72,11 @@ type Game struct {
 	// else — snapshots keep capturing every file, so a restore can never be
 	// the thing that deletes an excluded config.
 	SyncIgnore string `db:"sync_ignore" json:"syncIgnore"`
-	CreatedAt  string `db:"created_at" json:"createdAt"`
+	// SyncDeviceSettings syncs the files the game database names as the
+	// game's settings, which are otherwise left out of syncing
+	// (presets/devicesettings.go). Off unless the user turns it on.
+	SyncDeviceSettings bool   `db:"sync_device_settings" json:"syncDeviceSettings"`
+	CreatedAt          string `db:"created_at" json:"createdAt"`
 }
 
 // CreateGame inserts a new game and its default "main" branch in one
@@ -159,7 +163,8 @@ func (s *Store) UpdateGame(g Game) error {
 			exe_path = :exe_path,
 			cover_url = :cover_url,
 			last_manifest_hash = :last_manifest_hash,
-			sync_ignore = :sync_ignore
+			sync_ignore = :sync_ignore,
+			sync_device_settings = :sync_device_settings
 		WHERE id = :id`, g)
 	if err != nil {
 		return fmt.Errorf("update game %s: %w", g.ID, err)
@@ -175,6 +180,19 @@ func (s *Store) SetLastManifestHash(gameID, hash string) error {
 		return fmt.Errorf("set last manifest hash %s: %w", gameID, err)
 	}
 	return checkRowAffected(res)
+}
+
+// SetLastManifestHashIf records hash only while the recorded value is still
+// was: a hash taken before a snapshot must not replace one a later snapshot
+// recorded in the meantime. Reports whether it was recorded.
+func (s *Store) SetLastManifestHashIf(gameID, was, hash string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE games SET last_manifest_hash = ? WHERE id = ? AND COALESCE(last_manifest_hash, '') = ?`,
+		hash, gameID, was)
+	if err != nil {
+		return false, fmt.Errorf("set last manifest hash %s: %w", gameID, err)
+	}
+	n, err := res.RowsAffected()
+	return err == nil && n > 0, err
 }
 
 // RenameGameIf renames a game only while it still has the name from: a name

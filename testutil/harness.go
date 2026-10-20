@@ -20,6 +20,8 @@ import (
 
 	"github.com/opensave/opensave/internal/api"
 	"github.com/opensave/opensave/internal/daemon"
+	"github.com/opensave/opensave/internal/delta"
+	"github.com/opensave/opensave/internal/store"
 )
 
 // TestDaemon is one running daemon + API server.
@@ -110,7 +112,7 @@ func NewTestDaemon(t *testing.T, name string) *TestDaemon {
 	if err := os.MkdirAll(home, 0o777); err != nil {
 		t.Fatal(err)
 	}
-	d, err := daemon.New(daemon.Options{HomeOverride: home, DisableDiscovery: true})
+	d, err := daemon.New(daemon.Options{HomeOverride: home, DisableDiscovery: true, SyncEveryChange: true})
 	if err != nil {
 		t.Fatalf("daemon.New(%s): %v", name, err)
 	}
@@ -173,6 +175,13 @@ func NewTestDaemon(t *testing.T, name string) *TestDaemon {
 	}
 
 	td := &TestDaemon{T: t, Daemon: d, Server: srv, Addr: addr, Port: port, SaveDir: saveDir}
+	t.Cleanup(func() {
+		if t.Failed() {
+			for _, e := range d.Log.History() {
+				t.Logf("[%s] %s %s", name, e.Level, e.Message)
+			}
+		}
+	})
 	t.Cleanup(func() {
 		srv.Stop()
 		d.Stop()
@@ -425,4 +434,23 @@ func SettleSync(t *testing.T, gameID string, devices ...*TestDaemon) {
 				"so anything asserted after this would be about a system still in motion", i, gameID)
 		}
 	}
+}
+
+// KnowSaveFolder marks path as a folder this device's own scan found. A game
+// arriving from a peer is tracked by itself only at such a folder (or inside
+// an emulator's save folder here) since CVE-2026-103398; anywhere else it is
+// offered for the user to place. In use, the background scan notes a game's
+// folder once the game has saved on this device.
+func (d *TestDaemon) KnowSaveFolder(path string) {
+	d.T.Helper()
+	if err := d.Daemon.Store.RememberSaves([]store.KnownSave{{Path: path, Name: filepath.Base(path)}}); err != nil {
+		d.T.Fatalf("remember %s as a known save: %v", path, err)
+	}
+}
+
+// KnowPeersSaveFolder is KnowSaveFolder for where a peer's save at peerPath
+// lands on this device, with no translation rules of its own.
+func (d *TestDaemon) KnowPeersSaveFolder(peerPath string) {
+	d.T.Helper()
+	d.KnowSaveFolder(delta.TranslatePathToLocal(peerPath, nil))
 }

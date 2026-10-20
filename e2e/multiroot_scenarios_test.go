@@ -10,6 +10,7 @@ import (
 
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
+	"github.com/opensave/opensave/internal/snapshot"
 	"github.com/opensave/opensave/testutil"
 )
 
@@ -426,9 +427,11 @@ func TestMultiRootScenario_ResolveALocationConflictKeepingTheirs(t *testing.T) {
 	if len(a.Daemon.P2P.Sync.ActiveRootConflicts()) != 0 {
 		t.Error("the conflict is still open after being resolved")
 	}
-	// Undoable: a snapshot was taken before anything was overwritten.
-	if after := len(snapshotsOn(a, gameID, "main")); after <= before {
-		t.Errorf("snapshots %d -> %d; no safety snapshot was taken before overwriting", before, after)
+	// Undoable: what was overwritten is in a snapshot — taken before the
+	// overwrite, or already there from when it was written.
+	_ = before
+	if !snapshotHolds(t, a, gameID, snapshot.RootPrefix+"config/settings.ini", "A-version") {
+		t.Error("the overwritten version is in no snapshot")
 	}
 	if got := a.ReadSave("save.sav"); got != "primary v1" {
 		t.Errorf("resolving a location changed the save folder: %q", got)
@@ -480,6 +483,14 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 			if err := a.Daemon.Store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", ""); err != nil {
 				t.Fatal(err)
 			}
+			// With no base, the edits are judged against when the two were
+			// last confirmed the same, and only one made more than the 2 s
+			// clock-skew allowance after it counts as new (DetectConflict). A
+			// refresh the setup's own reports started can stamp that time
+			// after SettleSync returns; edits made in the next two seconds
+			// then read as neither side having changed, and the test failed on
+			// its own timing (Windows CI: stamped 1.8 s before the edits).
+			waitPastLastSynced(t, a, b.NodeID())
 
 			writeIn(t, aConfig, "settings.ini", "A-version")
 			writeIn(t, bConfig, "settings.ini", "B-version")
@@ -512,6 +523,32 @@ func TestMultiRootScenario_ALateReportDoesNotHideADivergence(t *testing.T) {
 			}
 		})
 	}
+}
+
+// waitPastLastSynced waits until a's "last synced" time for the peer has
+// stopped moving and lies further back than the clock-skew allowance a
+// location without a merge base is judged with (syncengine's
+// clockSkewToleranceMs, 2 s), so an edit made after it counts as new.
+func waitPastLastSynced(t *testing.T, a *testutil.TestDaemon, peerID string) {
+	t.Helper()
+	const past = 3 * time.Second // the 2 s allowance, and a margin
+	stamp := func() string {
+		p, err := a.Daemon.Store.GetPeer(peerID)
+		if err != nil || !p.LastSynced.Valid {
+			return ""
+		}
+		return p.LastSynced.String
+	}
+	deadline := time.Now().Add(45 * time.Second)
+	for time.Now().Before(deadline) {
+		s := stamp()
+		at, err := time.Parse("2006-01-02T15:04:05.000Z", s)
+		if s == "" || (err == nil && time.Since(at) > past) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("the last-synced time kept moving: %s", stamp())
 }
 
 // The location's own TestStaleBase_OneSidedEditDoesNotConflict. A report that
@@ -930,5 +967,160 @@ func TestIgnore_ExcludedFilesInExtraLocationsAreStillSnapshotted(t *testing.T) {
 	if got := readIn(cfg, "Config.gs"); got != "this machine only" {
 		t.Errorf("the EXCLUDED file in the extra location was not restored: %q — "+
 			"rollback empties the folder first, so anything missing from the snapshot is destroyed", got)
+	}
+}
+
+// The same deletion when the peer's report that it took the location never
+// arrived: on a loaded machine it can time out ("could not tell ... that ...
+// is sync-complete: context deadline exceeded"), and then this device has no
+// record that the peer holds those files. It must still not take the deleted
+// file back from the peer as one it never had.
+func TestMultiRootScenario_ADeletionSurvivesALostReport(t *testing.T) {
+	a, b, gameID, aConfig, bConfig := twoLocationPair(t, "LocLostReport", map[string]string{
+		"settings.ini": "fullscreen=1",
+		"keys.cfg":     "jump=space",
+	})
+	pauseAutoSync(t, a, b, gameID)
+
+	// Where A stands when the report is lost: it handed the location over and
+	// recorded that, and nothing since says the peer took it.
+	pushed, err := delta.BuildManifest(aConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := a.Daemon.Store
+	if err := store.SetSyncStateForRoot(gameID, b.NodeID(), "config", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPushedHashForRoot(gameID, b.NodeID(), "config", pushed.RootHash(delta.PrimaryRoot)); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Remove(filepath.Join(aConfig, "keys.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(syncSettleWindow)
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		return readIn(bConfig, "keys.cfg") == ""
+	}) {
+		t.Fatalf("the deletion never reached the peer: keys.cfg there=%q, here=%q",
+			readIn(bConfig, "keys.cfg"), readIn(aConfig, "keys.cfg"))
+	}
+	if got := readIn(aConfig, "keys.cfg"); got != "" {
+		t.Errorf("the deleted file came back here: %q", got)
+	}
+	if got := readIn(bConfig, "settings.ini"); got != "fullscreen=1" {
+		t.Errorf("an untouched file on the peer changed: %q", got)
+	}
+}
+
+// The report that the peer took the location arrives, and the refresh it
+// starts in the background runs only after a file has been deleted here — a
+// moment's delay on a loaded machine. The refresh must not drop the deleted
+// file from the record of what both hold, or the next sync fetches it back.
+func TestMultiRootScenario_ADeletionSurvivesALateRefresh(t *testing.T) {
+	a, b, gameID, aConfig, bConfig := twoLocationPair(t, "LocLateRefresh", map[string]string{
+		"settings.ini": "fullscreen=1",
+		"keys.cfg":     "jump=space",
+	})
+	pauseAutoSync(t, a, b, gameID)
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		files, _, _ := a.Daemon.Store.GetSyncStateForRoot(gameID, b.NodeID(), "config")
+		for _, f := range files {
+			if f == "keys.cfg" {
+				return true
+			}
+		}
+		return false
+	}) {
+		t.Fatal("setup: A never recorded that B holds keys.cfg")
+	}
+
+	if err := os.Remove(filepath.Join(aConfig, "keys.cfg")); err != nil {
+		t.Fatal(err)
+	}
+	var peer syncengine.Peer
+	for _, p := range a.Daemon.P2P.OnlinePeers() {
+		if p.ID == b.NodeID() {
+			peer = p
+		}
+	}
+	if peer.ID == "" {
+		t.Fatal("B is not online for A")
+	}
+	// The refresh the report started, running late.
+	a.Daemon.P2P.Sync.RefreshLineage(context.Background(), gameID, peer)
+
+	time.Sleep(syncSettleWindow)
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	if !testutil.WaitFor(45*time.Second, func() bool {
+		return readIn(bConfig, "keys.cfg") == ""
+	}) {
+		t.Fatalf("the deletion never reached the peer: keys.cfg there=%q, here=%q",
+			readIn(bConfig, "keys.cfg"), readIn(aConfig, "keys.cfg"))
+	}
+	if got := readIn(aConfig, "keys.cfg"); got != "" {
+		t.Errorf("the deleted file came back here: %q", got)
+	}
+}
+
+// "Put them back" for an emptied extra location, with no snapshot to restore,
+// fetches its files even when a lost report has left the location's base
+// behind. The push-proof repair records what both devices held; while the
+// game is held as emptied it must leave alone the lineage put back takes the
+// files out of, or they read as deleted here and the peer loses them too.
+func TestMultiRootScenario_PutBackOfAnEmptiedLocationSurvivesALostReport(t *testing.T) {
+	files := map[string]string{"settings.ini": "shared v1", "keys.cfg": "jump=space"}
+	a, b, gameID, aConfig, bConfig := twoLocationPair(t, "LocPutBack", files)
+	testutil.SettleSync(t, gameID, a, b)
+
+	emptyFolder(t, aConfig)
+	syncBothWays(t, gameID, a, b)
+	if e := emptiedState(t, a, gameID); e == nil {
+		t.Fatal("setup: emptying the location did not hold the game back")
+	}
+	var snaps map[string]struct {
+		Branches map[string]struct {
+			Snapshots []struct {
+				ID string `json:"id"`
+			} `json:"snapshots"`
+		} `json:"branches"`
+	}
+	a.API(http.MethodGet, "/api/games", nil, &snaps)
+	for _, br := range snaps[gameID].Branches {
+		for _, s := range br.Snapshots {
+			if err := a.Daemon.Store.SetSnapshotCheck(s.ID, time.Now().UnixMilli(), "damaged for this test"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a.API(http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]string{"answer": "restore"}, nil)
+
+	// What a lost report leaves for the location: the base behind what the
+	// peer holds, and the push still on record.
+	m, err := delta.BuildManifest(bConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetAgreedHashForRoot(gameID, b.NodeID(), "config", "a base from before"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetPushedHashForRoot(gameID, b.NodeID(), "config", m.RootHash(delta.PrimaryRoot)); err != nil {
+		t.Fatal(err)
+	}
+
+	syncBothWays(t, gameID, a, b)
+	for rel, want := range files {
+		if got := readIn(bConfig, rel); got != want {
+			t.Errorf("the other device: config/%s is %q, want %q", rel, got, want)
+		}
+		if got := readIn(aConfig, rel); got != want {
+			t.Errorf("the emptied device, from the other: config/%s is %q, want %q", rel, got, want)
+		}
 	}
 }

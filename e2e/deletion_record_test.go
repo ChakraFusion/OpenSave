@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/testutil"
 )
 
@@ -133,5 +134,154 @@ func TestDeletion_NeverRemovesAnEditThePeerMadeAfterwards(t *testing.T) {
 	if got := b.ReadSave("shared.sav"); got != "B PLAYED ON AND SAVED" {
 		t.Errorf("the peer's newer save is %q — a recorded deletion destroyed work "+
 			"that was done after the file was deleted elsewhere", got)
+	}
+}
+
+// A file handed over just before a sync-complete report went missing must
+// still be deletable.
+//
+// The report is what moves the shared base forward and records the files both
+// devices hold. Lost, it leaves the old base and a record without the new file;
+// only the push stays on record. A later sync proves the push from it and
+// banks the base, but the record of shared files stayed behind. Deleted before
+// the watcher noticed, the file then read as one the peer had and this device
+// never did, and was fetched straight back. On Windows CI this was
+// TestWatchAutoSyncChain's "deletion never auto-synced to B". The lost report
+// is set up directly here rather than raced for.
+//
+// On this fork the versions decide an automatic sync (version.go), and the
+// device that deleted the file holds the newer one, so there the deletion
+// goes through either way. A game synced by hand is still decided file by
+// file, and that is where the lost report bit.
+func TestDeletion_SurvivesALostReport(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		autoSync bool
+	}{
+		{"synced automatically", true},
+		{"synced by hand", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { deletionAfterALostReport(t, tc.autoSync) })
+	}
+}
+
+func deletionAfterALostReport(t *testing.T, autoSync bool) {
+	a, b, gameID := pairAndTrack(t, "Lost Report Deletion", map[string]string{"seed.sav": "seed"})
+	testutil.SettleSync(t, gameID, a, b)
+	st := a.Daemon.Store
+	var oldBase string
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		oldBase = st.GetAgreedHash(gameID, b.NodeID())
+		return oldBase != ""
+	}) {
+		t.Fatal("setup: the devices never recorded that they agree")
+	}
+
+	a.WriteSave("auto.sav", "v1")
+	time.Sleep(syncSettleWindow)
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	if !testutil.WaitFor(30*time.Second, func() bool { return b.ReadSave("auto.sav") == "v1" }) {
+		t.Fatal("setup: auto.sav never reached B")
+	}
+	testutil.SettleSync(t, gameID, a, b)
+
+	// The report is let through and then undone, rather than dropped: written
+	// over while it is still being recorded, it would leave a mix of before
+	// and after that no lost report produces.
+	handedOver, err := delta.BuildManifest(a.SaveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		return st.GetAgreedHash(gameID, b.NodeID()) == handedOver.ManifestHash()
+	}) {
+		t.Fatal("setup: the report never arrived")
+	}
+	if err := st.SetAgreedHash(gameID, b.NodeID(), oldBase); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetPushedHash(gameID, b.NodeID(), handedOver.ManifestHash()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSyncState(gameID, b.NodeID(), []string{"seed.sav"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if !autoSync {
+		a.API(http.MethodPatch, "/api/games/"+gameID, map[string]any{"autoSync": false}, nil)
+	}
+	if err := os.Remove(filepath.Join(a.SaveDir, "auto.sav")); err != nil {
+		t.Fatal(err)
+	}
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil) // before the watcher records the deletion
+	time.Sleep(5 * time.Second)
+
+	if got := a.ReadSave("auto.sav"); got != "" {
+		t.Errorf("the deleted file came back: %q", got)
+	}
+	if got := b.ReadSave("auto.sav"); got != "" {
+		t.Errorf("the deletion never reached B: %q", got)
+	}
+}
+
+// The same with the proof from the other direction: B pulled what A served it
+// and holds it still, while the report that records the files both hold is
+// lost. A banks the served state as agreed; the record of shared files is
+// repaired with it, so a file A deletes before its watcher notices is a
+// deletion for B, not a file to fetch back (#66).
+func TestDeletion_SurvivesALostReportWhenServed(t *testing.T) {
+	a, b, gameID := pairAndTrack(t, "Lost Report Served Deletion", map[string]string{"seed.sav": "seed"})
+	testutil.SettleSync(t, gameID, a, b)
+	st := a.Daemon.Store
+	var oldBase string
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		oldBase = st.GetAgreedHash(gameID, b.NodeID())
+		return oldBase != ""
+	}) {
+		t.Fatal("setup: the devices never recorded that they agree")
+	}
+
+	a.WriteSave("auto.sav", "v1")
+	time.Sleep(syncSettleWindow)
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	if !testutil.WaitFor(30*time.Second, func() bool { return b.ReadSave("auto.sav") == "v1" }) {
+		t.Fatal("setup: auto.sav never reached B")
+	}
+	testutil.SettleSync(t, gameID, a, b)
+
+	handedOver, err := delta.BuildManifest(a.SaveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		return st.GetAgreedHash(gameID, b.NodeID()) == handedOver.ManifestHash()
+	}) {
+		t.Fatal("setup: the report never arrived")
+	}
+	// Undone as a lost report leaves it, with only the served state to go
+	// by: the old base (which clears the push record), the old record of
+	// shared files, and what A served B under that base.
+	if err := st.SetAgreedHash(gameID, b.NodeID(), oldBase); err != nil {
+		t.Fatal(err)
+	}
+	if st.GetPushedHash(gameID, b.NodeID()) != "" {
+		t.Fatal("setup: a push is still on record")
+	}
+	if err := st.SetSyncState(gameID, b.NodeID(), []string{"seed.sav"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	a.Daemon.P2P.Sync.NoteServed(gameID, b.NodeID(), handedOver)
+
+	if err := os.Remove(filepath.Join(a.SaveDir, "auto.sav")); err != nil {
+		t.Fatal(err)
+	}
+	a.API(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil) // before the watcher records the deletion
+	time.Sleep(5 * time.Second)
+
+	if got := a.ReadSave("auto.sav"); got != "" {
+		t.Errorf("the deleted file came back: %q", got)
+	}
+	if got := b.ReadSave("auto.sav"); got != "" {
+		t.Errorf("the deletion never reached B: %q", got)
 	}
 }

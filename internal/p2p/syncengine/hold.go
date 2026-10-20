@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,7 +39,9 @@ import (
 //
 // What the location "held before" is the files the other devices are
 // recorded as having in common with this one, together with the files in
-// this device's newest snapshot that has any. Not the first alone: that
+// this device's newest snapshot that has any — from a snapshot taken since
+// the location has had the folder it has now (lastSavedFiles). Not the first
+// alone: that
 // record lags — a file pushed to another device joins it only once that
 // device has said it has the file — while the other device's own record,
 // which is what it acts on, already has it. The snapshot is there before the
@@ -82,6 +85,11 @@ type emptiness struct {
 func (x emptiness) back(held map[string][]string) bool {
 	for name, files := range held {
 		for _, f := range files {
+			if delta.NeverSynced(f) {
+				// Recorded by a build that still counted it; never part of
+				// the save, so not something that has to come back.
+				continue
+			}
 			if _, ok := x.present[name][f]; !ok {
 				return false
 			}
@@ -154,15 +162,30 @@ func (e *Engine) emptiedLocations(game store.Game) (x emptiness, err error) {
 
 // lastSavedFiles is what the game's newest snapshot with any files held, by
 // save location: what its save was just before it was emptied.
+//
+// A location's files count only from a snapshot taken since it has had the
+// folder it has now. An older one's came from somewhere else — another
+// folder, or another machine whose backup was restored here, which leaves out
+// the files of any location this machine had no folder for yet. Counted, they
+// made a location just given its folder, empty until the files arrived, read
+// as emptied, and the game was held back instead of fetching them.
 func (e *Engine) lastSavedFiles(game store.Game) map[string]map[string]struct{} {
 	snaps, err := e.Store.ListSnapshots(game.ID, game.ActiveBranch) // newest first
 	if err != nil {
 		return nil
 	}
+	mappedSince, err := e.Store.GameRootsMappedSince(game.ID)
+	if err != nil {
+		mappedSince = nil // every snapshot counts, as it did before this was recorded
+	}
 	for _, s := range snaps {
+		taken, known := snapshotTakenMs(s)
 		out := map[string]map[string]struct{}{}
 		add := func(root, path string) {
 			if path == "" || strings.HasSuffix(path, "/") || dotted(path) {
+				return
+			}
+			if root != delta.PrimaryRoot && known && taken < mappedSince[root] {
 				return
 			}
 			if out[root] == nil {
@@ -186,6 +209,18 @@ func (e *Engine) lastSavedFiles(game store.Game) map[string]map[string]struct{} 
 		}
 	}
 	return nil
+}
+
+// snapshotTakenMs is when a snapshot was taken, from its timestamp or, failing
+// that, its id (snap_<ms>). Not known means it counts for every location.
+func snapshotTakenMs(s store.Snapshot) (int64, bool) {
+	if t, err := time.Parse(time.RFC3339Nano, s.Timestamp); err == nil {
+		return t.UnixMilli(), true
+	}
+	if ms, err := strconv.ParseInt(strings.TrimPrefix(s.ID, "snap_"), 10, 64); err == nil && strings.HasPrefix(s.ID, "snap_") {
+		return ms, true
+	}
+	return 0, false
 }
 
 // dotted says whether a path is inside a dot-folder or is a dot-file, which
@@ -232,6 +267,40 @@ func (e *Engine) CheckHold(gameID string, serving bool) (held bool, err error) {
 	// takes holdMu (noteEmptiedByPeer).
 	readDone, settled := e.TryReading(gameID)
 	defer readDone()
+	return e.checkHold(gameID, serving, settled)
+}
+
+// holdSettleWait bounds how long a sync waits for a write in progress here to
+// end before judging whether the folder was emptied.
+const holdSettleWait = 30 * time.Second
+
+// checkHoldSettled is CheckHold for a sync this device is about to start. A
+// write in progress here — an automatic snapshot of the change that emptied
+// the folder, another sync — is waited out, and the folder judged as it then
+// stands.
+//
+// CheckHold decides nothing while anything is writing, and for a sync that
+// answer was "not held": the sync went on, waited for the write itself, read
+// the folder empty, and sent every file's deletion to the other device — the
+// one thing the hold exists to stop. Windows CI: in
+// TestEmptiedFolder_PutBackRestoresThem the other device lost every file while
+// the save was held back.
+// A write that does not end in time is ErrSettling: the sync does not run on
+// a folder nobody could judge, and is tried again later.
+func (e *Engine) checkHoldSettled(ctx context.Context, gameID string) (held bool, err error) {
+	ctx, cancel := context.WithTimeout(ctx, holdSettleWait)
+	defer cancel()
+	readDone, err := e.Reading(ctx, gameID)
+	if err != nil {
+		return false, err
+	}
+	defer readDone()
+	return e.checkHold(gameID, false, true)
+}
+
+// checkHold is CheckHold's judgement, for a caller that has taken the read
+// side of the gate (settled) or tried to and could not.
+func (e *Engine) checkHold(gameID string, serving, settled bool) (held bool, err error) {
 	e.holdMu.Lock()
 	defer e.holdMu.Unlock()
 	game, err := e.Store.GetGame(gameID)
@@ -265,6 +334,11 @@ func (e *Engine) CheckHold(gameID string, serving bool) (held bool, err error) {
 	case has:
 		if x.back(hold.Files()) {
 			_ = e.Store.ClearDeletionHold(gameID)
+			// The save is whole again: kept as it is now (OnPutBack), the
+			// first snapshot of it since it was emptied.
+			if e.OnPutBack != nil {
+				go e.OnPutBack(gameID)
+			}
 			if hold.State == store.HoldAsking {
 				e.Log("success", fmt.Sprintf("every save file of %q is back, so nothing is held back any more", game.Name))
 			} else {
@@ -352,8 +426,8 @@ func (e *Engine) PutBack(gameID string) (fetching int, err error) {
 	}
 	for root, files := range hold.Files() {
 		var missing []string
+		_ = e.Store.ClearDeletedFiles(gameID, root, files)
 		for _, f := range files {
-			_ = e.Store.ClearDeletedFile(gameID, root, f)
 			if _, ok := x.present[root][f]; !ok {
 				missing = append(missing, f)
 			}
@@ -365,6 +439,9 @@ func (e *Engine) PutBack(gameID string) (fetching int, err error) {
 	}
 	if fetching == 0 {
 		err = e.Store.ClearDeletionHold(gameID)
+		if err == nil && e.OnPutBack != nil {
+			go e.OnPutBack(gameID) // whole again already
+		}
 	} else {
 		err = e.Store.SetDeletionHoldState(gameID, store.HoldFetching)
 	}
@@ -482,6 +559,114 @@ type peerDeletions struct {
 // noteDelay is how long NoteEmptiedByPeer waits for the rest of a batch.
 const noteDelay = 300 * time.Millisecond
 
+// SaveFolderGone is told that a game's whole save folder is gone, not just
+// its files: "missing" wins over "emptied" (#66). Deleting a folder removes
+// its files first, and a watcher that saw them go held the game as emptied
+// and asked; the folder then turned out to be missing, and the question
+// stayed, even after the folder came back. An unanswered hold is dropped:
+// the game pauses quietly as a missing folder does, and SaveFolderBack judges
+// the folder afresh when it returns. A hold someone answered — put them back,
+// or delete them there too — is that person's decision and stays.
+func (e *Engine) SaveFolderGone(gameID string) {
+	e.holdMu.Lock()
+	defer e.holdMu.Unlock()
+	hold, has, err := e.Store.GetDeletionHold(gameID)
+	if err != nil || !has || hold.State != store.HoldAsking {
+		return
+	}
+	if err := e.Store.ClearDeletionHold(gameID); err != nil {
+		return
+	}
+	name := gameID
+	if game, err := e.Store.GetGame(gameID); err == nil {
+		name = game.Name
+	}
+	e.Log("info", fmt.Sprintf("the whole save folder of %q is gone, so it is treated as missing rather than emptied: "+
+		"nothing is asked, and it is looked at again when the folder is back", name))
+	e.holdChanged(gameID)
+}
+
+// SaveFolderBack judges a save folder that was missing and is back, before
+// it is watched or synced again. Back empty, or with fewer of the files both
+// devices last shared, it is held exactly as an emptied folder is, and asked
+// about: a folder a game or an uninstaller recreated empty must never be
+// synced as deletions. Reports whether the game is held.
+func (e *Engine) SaveFolderBack(gameID string) (held bool, err error) {
+	e.holdMu.Lock()
+	defer e.holdMu.Unlock()
+	if _, has, err := e.Store.GetDeletionHold(gameID); err != nil || has {
+		return has, err
+	}
+	game, err := e.Store.GetGame(gameID)
+	if err != nil {
+		return false, err
+	}
+	if !e.Store.HasSyncState(game.ID) {
+		return false, nil // never synced: nothing to hold back from
+	}
+	extra, err := e.Store.GameRootPaths(game.ID)
+	if err != nil {
+		extra = nil
+	}
+	for _, p := range append([]string{game.SavePath}, mapValues(extra)...) {
+		delta.InvalidateRoot(p)
+	}
+	m, failures, err := delta.BuildMultiManifest(game.SavePath, extra)
+	if err != nil {
+		return false, err
+	}
+	rules := e.rulesFor(game.ID)
+	m = filterManifest(m, rules)
+	present := map[string]map[string]struct{}{delta.PrimaryRoot: keysOf(m.Files)}
+	for name, root := range m.Extra {
+		present[name] = keysOf(root.Files)
+	}
+	shared, err := e.Store.SharedFiles(game.ID)
+	if err != nil {
+		return false, err
+	}
+	gone := map[string][]string{}
+	total := 0
+	for name, had := range shared {
+		here, known := present[name]
+		if !known || failures[name] != nil {
+			continue
+		}
+		for f := range filterLineage(had, rules) {
+			if _, ok := here[f]; !ok {
+				gone[name] = append(gone[name], f)
+				total++
+			}
+		}
+	}
+	if total == 0 {
+		return false, nil
+	}
+	names := make([]string, 0, len(gone))
+	for name := range gone {
+		sort.Strings(gone[name])
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if err := e.Store.SetDeletionHold(gameID, store.HoldAsking, time.Now().UnixMilli(), gone); err != nil {
+		return false, err
+	}
+	e.Log("warn", fmt.Sprintf("the save folder of %q is back, but without %d of the files both devices last had (%s) — "+
+		"it is not synced until you say whether they were meant to go, so your other devices keep their copies meanwhile",
+		game.Name, total, describeLocations(names)))
+	e.RecordActivity(store.ActivityEvent{GameID: gameID, Kind: store.ActivityEmptied, Files: total})
+	e.holdChanged(gameID)
+	return true, nil
+}
+
+func mapValues(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for _, v := range m {
+		out = append(out, v)
+	}
+	return out
+}
+
 func (e *Engine) holdChanged(gameID string) {
 	if e.OnHoldChanged != nil {
 		e.OnHoldChanged(gameID)
@@ -499,4 +684,38 @@ func describeLocations(names []string) string {
 		}
 	}
 	return strings.Join(parts, " and ")
+}
+
+// emptyingUnconfirmed reports a save that holds nothing, or is held back
+// after being emptied, while nobody has said the emptying was meant. That is
+// not a version of the save: named one, it made this device the newest, so a
+// save put back from a snapshot and the other devices came out as this
+// device's own new version, which every other device was then asked to take.
+// Only "delete them there too" (ConfirmHold) makes it one.
+func (e *Engine) emptyingUnconfirmed(gameID string, local delta.Manifest) bool {
+	hold, has, err := e.Store.GetDeletionHold(gameID)
+	if err == nil && has {
+		return hold.State != store.HoldConfirmed
+	}
+	for p := range local.Files {
+		if !delta.NeverSynced(p) {
+			return false
+		}
+	}
+	return len(local.Extra) == 0
+}
+
+// putBackDecision turns a decision taken while a save is being put back
+// (HoldFetching) into fetching only: every file both devices hold but differ
+// on is the other device's, nothing is offered from here, and nothing is
+// deleted over there. A file only this device holds is left where it is.
+func putBackDecision(d Decision, remote delta.Manifest) Decision {
+	for _, p := range d.FilesToPush {
+		if _, ok := remote.Files[p]; ok {
+			d.FilesToPull = append(d.FilesToPull, p)
+		}
+	}
+	d.FilesToPush, d.DirsToPush = nil, nil
+	d.FilesToDeleteOnPeer, d.DirsToDeleteOnPeer = nil, nil
+	return d
 }

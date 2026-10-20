@@ -1,7 +1,9 @@
 package p2p
 
 import (
+	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,12 +13,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/logging"
+	"github.com/opensave/opensave/internal/owntouch"
 	"github.com/opensave/opensave/internal/p2p/pairing"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
 	"github.com/opensave/opensave/internal/store"
@@ -40,16 +44,46 @@ func (e *Engine) RegisterRoutes(r chi.Router) {
 		r.Get("/api/p2p/games", e.handlePeerGameList)
 		r.Post("/api/p2p/sync-event/{gameId}", e.handleSyncEvent)
 		r.Get("/api/p2p/app-binary", e.handleAppBinary)
+		r.Get("/api/p2p/speedtest", e.handleSpeedTest)
 
 		// What moves save data, or starts a sync: refused while paused.
 		r.Group(func(r chi.Router) {
 			r.Use(e.refuseWhilePaused)
 			r.Get("/api/p2p/manifest/{gameId}", e.handleManifest)
 			r.Post("/api/p2p/blocks/{gameId}", e.handleBlocks)
+			r.Post("/api/p2p/files/{gameId}", e.handleFileBatch)
 			r.Post("/api/p2p/delete-file/{gameId}", e.handleDeleteFile)
 			r.Get("/api/sync/trigger/{gameId}", e.handleSyncTrigger)
 		})
 	})
+}
+
+// speedTestMax bounds one speed test, and speedTestData is what it sends:
+// random, so nothing along the way can compress it into a better figure.
+const speedTestMax = 8 << 20
+
+var speedTestData = func() []byte {
+	b := make([]byte, 1<<20)
+	_, _ = rand.Read(b)
+	return b
+}()
+
+// handleSpeedTest sends n bytes (at most speedTestMax) for a peer to time:
+// how it learns how close this device is (syncengine/linkspeed.go).
+func (e *Engine) handleSpeedTest(w http.ResponseWriter, r *http.Request) {
+	n, _ := strconv.Atoi(r.URL.Query().Get("n"))
+	if n <= 0 || n > speedTestMax {
+		n = speedTestMax
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.Itoa(n))
+	for n > 0 {
+		chunk := min(n, len(speedTestData))
+		if _, err := w.Write(speedTestData[:chunk]); err != nil {
+			return
+		}
+		n -= chunk
+	}
 }
 
 func clientIP(r *http.Request) string {
@@ -62,6 +96,11 @@ func clientIP(r *http.Request) string {
 	}
 	return host
 }
+
+// unsignedRefusal is what a paired device is told when its request was not
+// signed with the pairing's key, over the network or the relay.
+const unsignedRefusal = "Unauthorized: this request was not signed with the key from pairing. " +
+	"Update both devices to OpenSave 2.4.1 or later; if they were paired over the internet before 2.4.0, unpair and pair them again."
 
 // requirePairedPeer allows localhost (dashboard/CLI) plus IPs matching a
 // paired peer. A valid request from a paired peer also refreshes its
@@ -121,6 +160,19 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 			jsonError(w, http.StatusUnauthorized, "Unauthorized: Requesting peer is not paired.")
 			return
 		}
+		// Unsigned, the request has only its source address to say who sent
+		// it, and an address on a shared network can be taken. So nothing
+		// that reads or writes saves is served on it (CVE-2026-103398) —
+		// only unpairing, which gives nothing away and is how a pairing too
+		// old to sign is cleared up.
+		if provenID == "" && matched.AuthVerifiedMs == 0 && r.URL.Path != "/api/p2p/unpair" {
+			e.Log("warn", fmt.Sprintf(
+				"refused an unsigned request from %q: it was not signed with the key from pairing. "+
+					"If it runs a version before 2.4.0, update it; if they were paired long ago, unpair and pair the two again.",
+				matched.Name))
+			jsonError(w, http.StatusUnauthorized, unsignedRefusal)
+			return
+		}
 		// A peer that has proved itself before must keep doing so, or an
 		// attacker simply omits the headers and falls back to the address
 		// check this exists to replace.
@@ -143,13 +195,26 @@ func (e *Engine) requirePairedPeer(next http.Handler) http.Handler {
 
 		// Throttled online-status refresh (10s), with auto-sync on
 		// offline->online transition.
+		//
+		// Decided under onlineMu, on the peer as it is stored now rather than
+		// as the list above read it. A device coming back sends several
+		// requests at once; each read "offline" before any had written
+		// "online", so each started a sync of every game — twenty in a second
+		// for one device (GitHub #15). The lock is taken only when the list
+		// says an update is due, so the ordinary request does not wait on it.
 		const lastSeenLimit = 10_000
 		now := time.Now().UnixMilli()
 		if matched.Status != "online" || now-matched.LastSeenMs > lastSeenLimit {
-			wasOffline := matched.Status != "online"
-			matched.Status = "online"
-			matched.LastSeenMs = now
-			_ = e.Store.UpdatePeer(*matched)
+			e.onlineMu.Lock()
+			wasOffline := false
+			if current, err := e.Store.GetPeer(matched.ID); err == nil &&
+				(current.Status != "online" || now-current.LastSeenMs > lastSeenLimit) {
+				wasOffline = current.Status != "online"
+				current.Status = "online"
+				current.LastSeenMs = now
+				_ = e.Store.UpdatePeer(current)
+			}
+			e.onlineMu.Unlock()
 			if wasOffline {
 				e.Log("info", fmt.Sprintf("peer %q connected; triggering auto-sync for all games", matched.Name))
 				e.GoSync(func(ctx context.Context) { e.SyncAllGames(ctx) })
@@ -537,15 +602,7 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID s
 	// a game deliberately untracked, so the user would be told nothing is
 	// wrong while their save quietly stopped syncing.
 	if settings.ShouldAskBeforeTracking() {
-		if err := e.Store.RecordOfferedGame(store.OfferedGame{
-			GameID: gameID, PeerID: peerID, Name: q.Name,
-			AppID: q.AppID, CoverURL: q.CoverURL, PeerPath: q.SavePath,
-		}); err != nil {
-			e.Log("warn", fmt.Sprintf("could not record %q as an offered game: %v", q.Name, err))
-		} else {
-			e.notifyGamesUpdate()
-		}
-		return store.Game{}, fmt.Errorf("%s: %q", syncengine.AwaitingFolderMessage, q.Name)
+		return e.offerGame(gameID, peerID, q)
 	}
 
 	rules := make([]delta.TranslationRule, len(settings.PathTranslations))
@@ -564,6 +621,25 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID s
 	// instead of a mysterious walk error.
 	if reason := delta.DangerousSyncRoot(localPath); reason != "" {
 		return store.Game{}, fmt.Errorf("cannot auto-track %q at %s: %s — set the game's save path on this device manually", q.Name, logging.Quote(localPath), reason)
+	}
+
+	// The other device names the folder; only this one decides what may be
+	// tracked. A save path in a manifest request is the peer's say, and a
+	// paired device — or anyone posing as one — could name any folder this
+	// user can read: ~/.ssh, a browser profile, another app's settings. Once
+	// tracked, its files were served to the peer and the peer's written into
+	// it (CVE-2026-103398). The old guard above refuses only whole profiles,
+	// drives and system folders.
+	//
+	// So a game arriving from a peer is tracked by itself only where this
+	// device's own scanner recognises a save folder: one it found and noted,
+	// or one inside an emulator's own save folder here. Anywhere else, it is
+	// offered, and the user picks the folder on this device.
+	if e.KnownSaveLocation == nil || !e.KnownSaveLocation(localPath) {
+		e.Log("warn", fmt.Sprintf(
+			"a paired device asked to sync %q at %s, which this device does not know as a save folder — "+
+				"it is offered on Home instead, for you to place", q.Name, logging.Quote(localPath)))
+		return e.offerGame(gameID, peerID, q)
 	}
 
 	game := store.Game{
@@ -594,8 +670,27 @@ func (e *Engine) ensureManifestGame(gameID string, q manifestGameQuery, peerID s
 		_ = os.MkdirAll(localPath, 0o777)
 	}
 	e.Log("info", fmt.Sprintf("auto-tracked %q at %s from peer manifest request", q.Name, logging.Quote(localPath)))
+	if e.OnAutoTracked != nil {
+		e.OnAutoTracked(game)
+	}
 	e.notifyGamesUpdate()
 	return game, nil
+}
+
+// offerGame records a game a peer syncs as offered, for the user to place on
+// this device, and tells the peer this device is waiting rather than that the
+// game does not exist: the same answer, which the peer cannot see past, is
+// given for a game deliberately untracked.
+func (e *Engine) offerGame(gameID, peerID string, q manifestGameQuery) (store.Game, error) {
+	if err := e.Store.RecordOfferedGame(store.OfferedGame{
+		GameID: gameID, PeerID: peerID, Name: q.Name,
+		AppID: q.AppID, CoverURL: q.CoverURL, PeerPath: q.SavePath,
+	}); err != nil {
+		e.Log("warn", fmt.Sprintf("could not record %q as an offered game: %v", q.Name, err))
+	} else {
+		e.notifyGamesUpdate()
+	}
+	return store.Game{}, fmt.Errorf("%s: %q", syncengine.AwaitingFolderMessage, q.Name)
 }
 
 // handleManifest serves a game's manifest + branch + latest-snapshot info.
@@ -615,6 +710,11 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	if e.holdingBack(game) {
 		jsonError(w, http.StatusNotFound, syncengine.HeldMessage)
+		return
+	}
+	// Being played here: synced when the session ends (syncengine/playing.go).
+	if e.Sync.PlayingHere(game.ID) {
+		jsonError(w, http.StatusServiceUnavailable, syncengine.PlayingMessage)
 		return
 	}
 	// Never describe a save a sync here is writing: part-way through, it is a
@@ -640,6 +740,10 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	manifest, failures, err := delta.BuildMultiManifest(game.SavePath, extra)
 	if err != nil {
+		if _, statErr := os.Stat(game.SavePath); statErr != nil {
+			jsonError(w, http.StatusNotFound, syncengine.FolderMissingMessage)
+			return
+		}
 		jsonError(w, http.StatusInternalServerError, "manifest build failed: "+err.Error())
 		return
 	}
@@ -659,11 +763,25 @@ func (e *Engine) handleManifest(w http.ResponseWriter, r *http.Request) {
 		ActiveBranch:      game.ActiveBranch,
 		Proto:             ServedProto(),
 		DeletionConfirmed: e.Sync.DeletionConfirmed(game.ID),
+		Version:           e.Sync.LocalVersion(game, manifest),
+		Versions:          true,
 	}
 	if latest, err := e.Snapshots.LatestSnapshot(gameID, ""); err == nil {
-		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment}
+		resp.LatestSnapshot = &syncengine.SnapshotInfo{ID: latest.ID, Timestamp: latest.Timestamp, Comment: latest.Comment, ContentHash: latest.ContentHash}
 	}
-	jsonOK(w, resp)
+	// The asker already holds the state both devices last agreed on and says
+	// so; if this device still holds it too, "unchanged" is the whole answer.
+	// For a save of a quarter-million files the full manifest is tens of MB
+	// of JSON, and the minute-long reconcile used to fetch it from every peer
+	// every minute to learn that nothing had changed. Single-location games
+	// only: extra locations carry their own bases (see RootHash).
+	if ifHash := r.URL.Query().Get("ifHash"); ifHash != "" && len(manifest.Extra) == 0 &&
+		manifest.ManifestHash() == ifHash {
+		resp.Manifest = delta.Manifest{}
+		resp.Unchanged = true
+		resp.ManifestHash = ifHash
+	}
+	jsonOKCompressed(w, r, resp)
 }
 
 // holdForServing holds the game's save still for a manifest to be served from
@@ -726,11 +844,141 @@ func (e *Engine) handleBlocks(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]any{"blocks": encodeBlocks(blocks, wantsGzip(body.Encodings))})
 }
 
+// Bounds on one batch request, so a peer cannot make this device read and
+// hold an unbounded amount in a single response. The requester stays well
+// under them (syncengine.batchMaxFiles / batchMaxBytes).
+const (
+	fileBatchMaxFiles = 1024
+	fileBatchMaxBytes = 16 << 20
+)
+
+// handleFileBatch serves the blocks of many files of one save location in a
+// single response: handleBlocks for a list. One round trip per file was what
+// made a save of many small files take hours; see syncengine.ProtoBatchFiles.
+//
+// A file that cannot be read is reported in its own entry rather than failing
+// the batch, so the requester can say which one it was.
+func (e *Engine) handleFileBatch(w http.ResponseWriter, r *http.Request) {
+	gameID := chi.URLParam(r, "gameId")
+	var body struct {
+		Root      string                         `json:"root"`
+		Files     []syncengine.FileBlocksRequest `json:"files"`
+		Encodings []string                       `json:"encodings"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Files) == 0 {
+		jsonError(w, http.StatusBadRequest, "files are required")
+		return
+	}
+	if len(body.Files) > fileBatchMaxFiles {
+		jsonError(w, http.StatusBadRequest, fmt.Sprintf("at most %d files per batch", fileBatchMaxFiles))
+		return
+	}
+	game, err := e.trackedGameForPeer(gameID)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, "Game not found.")
+		return
+	}
+	base, ok := e.resolveServeRoot(gameID, game, body.Root)
+	if !ok {
+		jsonError(w, http.StatusNotFound, "This device has no save location named "+strconv.Quote(body.Root)+" for that game.")
+		return
+	}
+	singleFile, _ := delta.ResolveLocalSaveFilePath(base)
+
+	// What the answer will hold: each file's requested blocks at its block
+	// size, but never more than the file itself. Counting every block at full
+	// size took 256 files of 4 KB for 16 MB — the whole limit — and refused
+	// any batch of small files with a few larger ones among them, which failed
+	// whole pulls of saves made of many small files.
+	var requested int64
+	for _, f := range body.Files {
+		bs := f.BlockSize
+		if bs <= 0 {
+			bs = 64 * 1024
+		}
+		n := int64(len(f.BlockIndices)) * int64(bs)
+		if f.RelPath != "" && delta.IsSafePath(base, f.RelPath) {
+			p := delta.LocalNameFor(base, f.RelPath)
+			if singleFile {
+				p = base
+			}
+			if info, err := os.Stat(p); err == nil && info.Size() < n {
+				n = info.Size()
+			}
+		}
+		requested += n
+	}
+	if requested > fileBatchMaxBytes {
+		jsonError(w, http.StatusBadRequest, "batch too large")
+		return
+	}
+	gz := wantsGzip(body.Encodings)
+
+	out := make([]syncengine.FileBlocks, 0, len(body.Files))
+	for _, f := range body.Files {
+		entry := syncengine.FileBlocks{RelPath: f.RelPath}
+		if f.RelPath == "" || !delta.IsSafePath(base, f.RelPath) {
+			entry.Error = "invalid path"
+			out = append(out, entry)
+			continue
+		}
+		// Resolved, not joined — see handleBlocks.
+		fullPath := delta.LocalNameFor(base, f.RelPath)
+		if singleFile {
+			fullPath = base
+		}
+		blocks, err := delta.ReadBlocks(fullPath, f.BlockIndices, f.BlockSize)
+		if err != nil {
+			entry.Error = "read blocks failed: " + err.Error()
+		} else {
+			entry.Blocks = encodeBlocks(blocks, gz)
+		}
+		out = append(out, entry)
+	}
+	jsonOK(w, map[string]any{"files": out})
+}
+
+// peerDeleteSnapshotEvery is how far apart two safety snapshots before a
+// peer's deletions may be: one for a burst of deletions, however many files
+// it removes one request at a time.
+const peerDeleteSnapshotEvery = 10 * time.Minute
+
+// snapshotBeforePeerDeletions takes a safety snapshot of a game before the
+// first of a burst of deletions a peer asks for.
+func (e *Engine) snapshotBeforePeerDeletions(gameID string, r *http.Request) {
+	if e.Snapshots == nil {
+		return
+	}
+	e.peerDeleteSnapMu.Lock()
+	if e.peerDeleteSnap == nil {
+		e.peerDeleteSnap = map[string]time.Time{}
+	}
+	if last, ok := e.peerDeleteSnap[gameID]; ok && time.Since(last) < peerDeleteSnapshotEvery {
+		e.peerDeleteSnapMu.Unlock()
+		return
+	}
+	e.peerDeleteSnap[gameID] = time.Now()
+	e.peerDeleteSnapMu.Unlock()
+
+	asker := "another device"
+	if peer, ok := e.peerByAddress(clientIP(r)); ok {
+		asker = peer.Name
+	}
+	if _, err := e.Snapshots.CreateBeforeReplacing(gameID, fmt.Sprintf("Before %s deleted files here", asker)); err != nil {
+		e.Log("warn", fmt.Sprintf("safety snapshot before %s's deletions failed: %v", asker, err))
+	}
+}
+
 func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	gameID := chi.URLParam(r, "gameId")
 	var body struct {
 		RelPath string `json:"relPath"`
 		Root    string `json:"root"`
+		// Versioned: the asking device keeps save versions. One that does
+		// not decides deletions by the old file comparison, which reads
+		// whatever its copy lacks as deleted — the deletions that emptied
+		// whole saves when a copy had arrived only half-way.
+		Versioned bool `json:"versioned"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.RelPath == "" {
 		jsonError(w, http.StatusBadRequest, "relPath is required.")
@@ -740,6 +988,19 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	game, err := e.trackedGameForPeer(gameID)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, "Game not found.")
+		return
+	}
+	if e.Sync.PlayingHere(game.ID) {
+		jsonError(w, http.StatusServiceUnavailable, syncengine.PlayingMessage)
+		return
+	}
+	if game.AutoSync && !body.Versioned {
+		from := clientIP(r)
+		if p, ok := e.peerByAddress(from); ok {
+			from = p.Name
+		}
+		e.Sync.RefusedOldBuildDelete(game.Name, from)
+		jsonError(w, http.StatusConflict, syncengine.OldBuildDeleteMessage)
 		return
 	}
 	base, ok := e.resolveServeRoot(gameID, game, body.Root)
@@ -760,6 +1021,11 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 	_ = os.Chmod(full, 0o666)
 	deleting := time.Now()
 	if info, statErr := os.Stat(full); statErr == nil {
+		// One copy of the save before a peer starts deleting from it, not
+		// one per file: the watcher no longer snapshots changes OpenSave
+		// applies (owntouch), and it was those, one every few seconds of a
+		// half-deleted save, that had been the only copy before.
+		e.snapshotBeforePeerDeletions(game.ID, r)
 		// What is removed is remembered, so a sync of this device's own that
 		// lands before the rest of the batch does not take it for a change
 		// made here (syncengine/peerdeleted.go).
@@ -768,6 +1034,8 @@ func (e *Engine) handleDeleteFile(w http.ResponseWriter, r *http.Request) {
 			entry, _ = delta.FileEntryFor(full)
 		}
 		// Empty dirs only, for a folder, like rmdirSync.
+		// A change made at a peer's request, not by the game (owntouch).
+		owntouch.MarkRemoved(full)
 		if os.Remove(full) == nil && (info.IsDir() || entry.Hash != "") {
 			e.Sync.NotePeerDeletion(game.ID, body.Root, body.RelPath, entry, info.IsDir())
 		}
@@ -878,6 +1146,10 @@ func (e *Engine) handleSyncEvent(w http.ResponseWriter, r *http.Request) {
 		if e.Sync.Progress.OnSyncError != nil {
 			e.Sync.Progress.OnSyncError(gameID, ev)
 		}
+		// A sync here waiting for this peer to finish need not wait on.
+		if peer, ok := e.peerByAddress(clientIP(r)); ok {
+			e.Sync.NotePeerPulled(gameID, peer.ID)
+		}
 	}
 	jsonOK(w, map[string]any{"success": true})
 }
@@ -916,6 +1188,32 @@ func progressEventFromMap(data map[string]any) syncengine.ProgressEvent {
 	var ev syncengine.ProgressEvent
 	_ = json.Unmarshal(raw, &ev)
 	return ev
+}
+
+// jsonOKCompressed is jsonOK, gzipped when the asker accepts it.
+//
+// For manifests. A save of a few hundred thousand files makes a manifest of
+// tens of MB of JSON, which over a VPN did not arrive inside a peer's request
+// timeout — so the peer never learned what this device holds, every sync of
+// that game failed, and the two devices never converged. Manifest JSON (paths
+// and hex hashes) compresses several times over. Go's HTTP client asks for
+// gzip and unpacks it on its own unless told not to, so every version of
+// OpenSave reads these, including ones that predate this.
+func jsonOKCompressed(w http.ResponseWriter, r *http.Request, v any) {
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		jsonOK(w, v)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Encoding", "gzip")
+	w.Header().Add("Vary", "Accept-Encoding")
+	w.WriteHeader(http.StatusOK)
+	zw, err := gzip.NewWriterLevel(w, gzip.BestSpeed)
+	if err != nil {
+		return
+	}
+	_ = json.NewEncoder(zw).Encode(v)
+	_ = zw.Close()
 }
 
 func jsonOK(w http.ResponseWriter, v any) {
@@ -958,7 +1256,7 @@ func (e *Engine) resolveServeRoot(gameID string, game store.Game, root string) (
 // argument — the read still happens concurrently.
 var servedProto atomic.Int64
 
-func init() { servedProto.Store(syncengine.ProtoMultiRoot) }
+func init() { servedProto.Store(syncengine.ProtoVersions) }
 
 // ServedProto reports the protocol revision advertised to peers.
 func ServedProto() int { return int(servedProto.Load()) }
@@ -979,6 +1277,8 @@ func SetServedProto(v int) int {
 // freshly-pushed files deliberately stay out of it (see persistLineage), so
 // deleting one here would pull it back instead of propagating the delete.
 func (e *Engine) peerFinishedPulling(gameID string, peer syncengine.Peer, data map[string]any) {
+	// A sync here waiting for this peer before slower ones goes on.
+	defer e.Sync.NotePeerPulled(gameID, peer.ID)
 	// Recorded first, and synchronously: the peer said exactly which files it
 	// wrote, so the lineage can be updated now rather than after a manifest
 	// round trip. That round trip is what left a window in which deleting a

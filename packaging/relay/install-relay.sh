@@ -222,7 +222,7 @@ guided_setup() {
 	# token, and SteamGridDB answers that with a bare 401 indistinguishable
 	# from a key that was never valid. Pasting is the normal way to enter
 	# this, which makes stray whitespace the normal way to get it wrong.
-	STEAMGRIDDB_KEY="$(ask_secret 'SteamGridDB key (blank to skip)' | tr -d '[:space:]')"
+	STEAMGRIDDB_KEY="$(ask_secret 'SteamGridDB key (blank to skip)' | tr -d '[:space:][:cntrl:]')"
 	if [ -n "$STEAMGRIDDB_KEY" ]; then HAVE_STEAMGRID=1; fi
 	printf '
 '
@@ -235,7 +235,7 @@ guided_setup() {
 "
 	# Same reasoning: whitespace here reaches Google as part of the secret,
 	# and the only thing it says back is "invalid_client".
-	GOOGLE_SECRET="$(ask_secret 'Google client secret (blank to skip)' | tr -d '[:space:]')"
+	GOOGLE_SECRET="$(ask_secret 'Google client secret (blank to skip)' | tr -d '[:space:][:cntrl:]')"
 	if [ -n "$GOOGLE_SECRET" ]; then HAVE_GOOGLE=1; fi
 
 	printf '
@@ -310,7 +310,7 @@ if [ -n "$GOOGLE_SECRET_FILE" ]; then
 	# Read once, here, and never printed. Whitespace and the trailing newline
 	# a text editor adds are stripped, because they would be sent to Google as
 	# part of the secret and the failure that causes says only "invalid_client".
-	GOOGLE_SECRET="$(tr -d '[:space:]' < "$GOOGLE_SECRET_FILE")"
+	GOOGLE_SECRET="$(tr -d '[:space:][:cntrl:]' < "$GOOGLE_SECRET_FILE")"
 	[ -n "$GOOGLE_SECRET" ] || die "$GOOGLE_SECRET_FILE is empty"
 	HAVE_GOOGLE=1
 fi
@@ -319,8 +319,10 @@ if [ -n "$STEAMGRIDDB_KEY_FILE" ]; then
 	[ -r "$STEAMGRIDDB_KEY_FILE" ] || die "cannot read $STEAMGRIDDB_KEY_FILE"
 	# Stripped for the same reason: a trailing newline would be sent as part of
 	# the bearer token, and SteamGridDB answers that with a bare 401 that looks
-	# exactly like a key that was never valid.
-	STEAMGRIDDB_KEY="$(tr -d '[:space:]' < "$STEAMGRIDDB_KEY_FILE")"
+	# exactly like a key that was never valid. Control characters too: a key
+	# typed at a hidden `read -s` prompt on the production relay arrived with a
+	# Ctrl+A and a backspace in front of it, and SteamGridDB answered 400.
+	STEAMGRIDDB_KEY="$(tr -d '[:space:][:cntrl:]' < "$STEAMGRIDDB_KEY_FILE")"
 	[ -n "$STEAMGRIDDB_KEY" ] || die "$STEAMGRIDDB_KEY_FILE is empty"
 	HAVE_STEAMGRID=1
 fi

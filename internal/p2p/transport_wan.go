@@ -3,6 +3,7 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -38,6 +39,9 @@ func (t *wanTransport) FetchManifest(ctx context.Context, peer syncengine.Peer, 
 		Name: q.Name, SavePath: q.SavePath, IsFile: q.IsFile,
 		AppID: q.AppID, CoverURL: q.CoverURL,
 	}
+	// The peer holds its answer while a sync is writing the save, for up to
+	// ServeSettleWait, before it has the usual time to send it.
+	ctx = withReplyWait(ctx, wanRequestTimeout+syncengine.ServeSettleWait)
 	raw, err := t.wan.Request(ctx, peer.ID, "/manifest/"+gameID, "GET", body)
 	if err != nil {
 		return syncengine.ManifestResponse{}, err
@@ -61,14 +65,11 @@ func (t *wanTransport) FetchManifest(ctx context.Context, peer syncengine.Peer, 
 const slowLinkBytesPerSec = 128 << 10
 
 func (t *wanTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef, blockIndices []int, blockSize int) ([]syncengine.BlockData, error) {
-	// Give the request a deadline proportional to what it's actually moving,
-	// so a big batch on a poor connection isn't cut off mid-flight.
-	if _, hasDeadline := ctx.Deadline(); !hasDeadline && blockSize > 0 {
+	// Give the reply time proportional to what it's actually moving, so a big
+	// batch on a poor connection isn't cut off mid-flight.
+	if blockSize > 0 {
 		expected := int64(len(blockIndices)) * int64(blockSize)
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx,
-			wanRequestTimeout+time.Duration(expected/slowLinkBytesPerSec)*time.Second)
-		defer cancel()
+		ctx = withReplyWait(ctx, wanRequestTimeout+time.Duration(expected/slowLinkBytesPerSec)*time.Second)
 	}
 
 	raw, err := t.wan.Request(ctx, peer.ID, "/blocks/"+ref.GameID, "POST", map[string]any{
@@ -90,7 +91,7 @@ func (t *wanTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, re
 }
 
 func (t *wanTransport) DeleteRemote(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef) error {
-	_, err := t.wan.Request(ctx, peer.ID, "/delete-file/"+ref.GameID, "POST", map[string]any{"relPath": ref.RelPath, "root": ref.Root})
+	_, err := t.wan.Request(ctx, peer.ID, "/delete-file/"+ref.GameID, "POST", map[string]any{"relPath": ref.RelPath, "root": ref.Root, "versioned": true})
 	return err
 }
 
@@ -152,6 +153,30 @@ func (t *routingTransport) FetchManifest(ctx context.Context, peer syncengine.Pe
 
 func (t *routingTransport) FetchBlocks(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef, blockIndices []int, blockSize int) ([]syncengine.BlockData, error) {
 	return t.pick(peer).FetchBlocks(ctx, peer, ref, blockIndices, blockSize)
+}
+
+// FetchFileBatch batches over the LAN only. Relay messages are sealed and
+// size-limited per client (see BatchIndices), so the relay keeps pulling file
+// by file.
+func (t *routingTransport) FetchFileBatch(ctx context.Context, peer syncengine.Peer, gameID, root string, files []syncengine.FileBlocksRequest) ([]syncengine.FileBlocks, error) {
+	if peer.Wan() {
+		return nil, syncengine.ErrBatchUnsupported
+	}
+	b, ok := t.lan.(syncengine.BatchFetcher)
+	if !ok {
+		return nil, syncengine.ErrBatchUnsupported
+	}
+	return b.FetchFileBatch(ctx, peer, gameID, root, files)
+}
+
+// ProbeSpeed tests LAN links only (syncengine.SpeedProber); the relay is the
+// slowest link whatever a test would say.
+func (t *routingTransport) ProbeSpeed(ctx context.Context, peer syncengine.Peer, n int) (int64, time.Duration, error) {
+	p, ok := t.lan.(syncengine.SpeedProber)
+	if peer.Wan() || !ok {
+		return 0, 0, errors.New("no speed test over the relay")
+	}
+	return p.ProbeSpeed(ctx, peer, n)
 }
 
 func (t *routingTransport) DeleteRemote(ctx context.Context, peer syncengine.Peer, ref syncengine.FileRef) error {
