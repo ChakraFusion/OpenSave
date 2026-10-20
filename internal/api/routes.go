@@ -484,9 +484,7 @@ func (s *Server) handleUpdateGame(w http.ResponseWriter, r *http.Request) {
 	if game.SavePath != oldSavePath || game.AutoSync != oldAutoSync {
 		s.Daemon.Watcher.Unwatch(gameID)
 		if game.AutoSync {
-			if err := s.Daemon.Watcher.Watch(gameID, game.SavePath); err != nil {
-				s.Daemon.Log.Log("warn", "re-watch failed: "+err.Error())
-			}
+			s.Daemon.RewatchGame(gameID)
 		}
 	}
 
