@@ -225,6 +225,7 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		return nil
 	}
 
+	e.keepHeldFiles(gameID, sr.root.Name, game.Name, peer, &decision)
 	e.handOverEmptying(gameID, peer, local.Files, &decision)
 
 	// Held across the whole apply, as for the main folder: from the first

@@ -501,6 +501,62 @@ func (e *Engine) handOverEmptying(gameID string, peer Peer, localFiles map[strin
 	return true
 }
 
+// keepHeldFiles takes out of a sync's deletions the files a hold is about:
+// while a game is held, or its files are being put back, none of them is
+// deleted on the other device, whatever this device's folder reads as.
+//
+// "Put them back" with nothing to restore here fetches them from the other
+// device, and this device syncs meanwhile to do it. When the fetched files
+// still read as missing — a save folder that is a link, read as empty — that
+// sync took them for deleted here, and sent the deletion on: the other device
+// deleted the files it was being asked for. A save of memory cards went that
+// way. root is the location's name, "" for the main folder.
+func (e *Engine) keepHeldFiles(gameID, root, gameName string, peer Peer, d *Decision) {
+	if len(d.FilesToDeleteOnPeer) == 0 && len(d.DirsToDeleteOnPeer) == 0 {
+		return
+	}
+	hold, has, err := e.Store.GetDeletionHold(gameID)
+	if err != nil || !has || hold.State == store.HoldConfirmed {
+		return
+	}
+	held := hold.Files()[root]
+	if len(held) == 0 {
+		return
+	}
+	isHeld := make(map[string]bool, len(held))
+	for _, f := range held {
+		isHeld[f] = true
+	}
+	files := make([]string, 0, len(d.FilesToDeleteOnPeer))
+	kept := 0
+	for _, f := range d.FilesToDeleteOnPeer {
+		if isHeld[f] {
+			kept++
+			continue
+		}
+		files = append(files, f)
+	}
+	// A folder is not deleted there while a held file is inside it.
+	dirs := make([]string, 0, len(d.DirsToDeleteOnPeer))
+	for _, dir := range d.DirsToDeleteOnPeer {
+		holds := false
+		for _, f := range held {
+			if strings.HasPrefix(f, strings.TrimSuffix(dir, "/")+"/") {
+				holds = true
+				break
+			}
+		}
+		if !holds {
+			dirs = append(dirs, dir)
+		}
+	}
+	d.FilesToDeleteOnPeer, d.DirsToDeleteOnPeer = files, dirs
+	if kept > 0 {
+		e.Log("warn", fmt.Sprintf("%d of %q's save files read as missing here while they are held back; they are not deleted on %q",
+			kept, gameName, peer.Name))
+	}
+}
+
 // DeletionConfirmed says whether an empty save of this game was emptied on
 // purpose, for the manifest this device serves (ManifestResponse).
 func (e *Engine) DeletionConfirmed(gameID string) bool {

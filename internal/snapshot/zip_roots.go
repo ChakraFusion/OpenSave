@@ -124,6 +124,7 @@ func archiveInto(w *zip.Writer, sourcePath, prefix, root string, reuse *reuseSou
 		}
 	}
 
+	sourcePath = delta.RealRoot(sourcePath) // a linked save folder is walked where it points (delta.RealRoot)
 	walkErr := filepath.WalkDir(sourcePath, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path != sourcePath {

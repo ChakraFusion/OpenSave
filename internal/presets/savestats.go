@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/opensave/opensave/internal/delta"
 )
 
 // Measuring is deliberately separate from detection. Scan answers "could a
@@ -103,6 +105,7 @@ func measureInto(s *DiscoveredSave, deadline time.Time) {
 // understate, which is the right way round: a folder with something in it
 // must never look empty.
 func measureOne(path string, deadline time.Time) (count int, bytes int64, latest int64, truncated, ok bool) {
+	path = delta.RealRoot(path) // a linked save folder is walked where it points (delta.RealRoot)
 	info, err := os.Lstat(path)
 	if err != nil {
 		return 0, 0, 0, false, false

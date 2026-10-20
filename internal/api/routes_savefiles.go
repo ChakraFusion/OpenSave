@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/ignore"
 )
 
@@ -153,6 +154,7 @@ func listSaveFiles(root string, limit int) ([]saveFile, bool) {
 
 	var out []saveFile
 	truncated := false
+	root = delta.RealRoot(root) // a linked save folder is walked where it points (delta.RealRoot)
 	err = filepath.WalkDir(root, func(p string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if d != nil && d.IsDir() {

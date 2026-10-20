@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/fsx"
 	"github.com/opensave/opensave/internal/store"
 )
@@ -177,6 +178,7 @@ func filesUnder(root string) (map[string]int64, error) {
 		out[filepath.Base(root)] = info.Size()
 		return out, nil
 	}
+	root = delta.RealRoot(root) // a linked save folder is walked where it points (delta.RealRoot)
 	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			if path == root {

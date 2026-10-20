@@ -291,6 +291,16 @@ func buildManifest(root string) (Manifest, error) {
 		return m, nil
 	}
 
+	// A save folder that is itself a link is walked where it points, and what
+	// is found there is named relative to it (RealRoot). Where it points is
+	// held to the same rule as the folder.
+	if real := RealRoot(root); real != root {
+		if reason := DangerousSyncRoot(real); reason != "" {
+			return Manifest{}, fmt.Errorf("refusing to scan %s, a link to %s: %s — edit this game's save path so it points at the actual save folder", logging.Quote(root), logging.Quote(real), reason)
+		}
+		root = real
+	}
+
 	var dirs []string
 	// WalkDir, not Walk: Walk issues an extra Lstat per entry, which on
 	// Windows opens every file and dominated the cost of a warm build of a

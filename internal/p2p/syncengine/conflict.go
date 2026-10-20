@@ -234,6 +234,7 @@ func (e *Engine) touchSaveMtimes(gameID, root string) {
 		owntouch.Settled(root)
 		return
 	}
+	root = delta.RealRoot(root) // a linked save folder is walked where it points (delta.RealRoot)
 	_ = filepath.Walk(root, func(path string, fi os.FileInfo, walkErr error) error {
 		if walkErr != nil || fi.IsDir() {
 			return nil
