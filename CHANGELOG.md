@@ -136,6 +136,16 @@ All notable changes to OpenSave are documented here. This project adheres to
   unwatched, and saves written into it were not noticed until the next
   full check, up to fifteen minutes later. It is now picked up at the next
   change in the folder above it. (#100, issue #91)
+- **A save folder that is a link is synced.** Emulator setups such as
+  EmuDeck turn an emulator's save folder into a link to another folder. Such
+  a folder read as empty: OpenSave held it back as emptied, and "Put them
+  back" could then delete the save on your other devices. It is now synced
+  as the folder it points at. And while a game is held back, or its files
+  are being put back, its held files are never deleted on another device.
+  (#110)
+- **Turning auto-sync on watches a game's extra save folders too.** Until
+  now only its main folder was watched, so a change in another of its
+  folders waited for the next sync. (#108, issue #88)
 
 ### Changed
 
