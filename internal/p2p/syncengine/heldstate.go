@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"io"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/opensave/opensave/internal/delta"
 )
@@ -21,17 +23,19 @@ import (
 //
 // Each side can only look in its own history. The device holding the newer
 // save finds the peer's state there on its own sync; the device holding the
-// old copy asks the peer, on a second manifest request carrying the hash of
-// its own files (ManifestQuery.Held), and the peer answers HeldYours. Usually
+// old copy asks the peer, on a second manifest request identifying
+// its own files (ManifestQuery.Held, heldKey), and the peer answers HeldYours. Usually
 // the old copy's device syncs first: tracking the game is what starts it.
 //
 // Compared on files alone, as snapshots record them, after each side's own
 // exclusion rules: two devices with different rules simply find no match, and
 // are asked as before. So is a peer that predates the question.
 
-// heldFilesHash identifies a save by its files alone: paths and content
-// hashes, no folders, as a snapshot records it.
-func heldFilesHash(files map[string]string) string {
+// heldKey identifies a save by its files alone, as a snapshot records them:
+// how many there are, then a hash of their paths and content hashes, no
+// folders. The count goes first so that the device asked can pass over every
+// snapshot that holds fewer files without reading it.
+func heldKey(files map[string]string) string {
 	paths := make([]string, 0, len(files))
 	for p := range files {
 		paths = append(paths, p)
@@ -44,35 +48,47 @@ func heldFilesHash(files map[string]string) string {
 		io.WriteString(h, files[p])
 		io.WriteString(h, "\n")
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return strconv.Itoa(len(files)) + ":" + hex.EncodeToString(h.Sum(nil))
 }
 
-func manifestFilesHash(m delta.Manifest) string {
+func manifestHeldKey(m delta.Manifest) string {
 	files := make(map[string]string, len(m.Files))
 	for p, f := range m.Files {
 		files[p] = f.Hash
 	}
-	return heldFilesHash(files)
+	return heldKey(files)
 }
 
 // HeldState reports whether a snapshot of this game here holds exactly the
-// files filesHash names, as this device's exclusion rules see them. Answers a
-// peer's ManifestQuery.Held.
-func (e *Engine) HeldState(gameID, filesHash string) bool {
-	if filesHash == "" {
+// files key names (heldKey), as this device's exclusion rules see them.
+// Answers a peer's ManifestQuery.Held.
+//
+// One snapshot at a time, newest first, stopping at the first match: a save
+// can hold hundreds of thousands of files and a game dozens of snapshots, so
+// at most one snapshot's files are in memory. A snapshot with fewer files than
+// the key is passed over unread — exclusion rules only take files away.
+func (e *Engine) HeldState(gameID, key string) bool {
+	count, _, ok := strings.Cut(key, ":")
+	want, err := strconv.Atoi(count)
+	if !ok || err != nil || want <= 0 {
 		return false
 	}
-	sets, err := e.Store.SnapshotFileSets(gameID, delta.PrimaryRoot)
+	snaps, err := e.Store.SnapshotFileCounts(gameID, delta.PrimaryRoot, want)
 	if err != nil {
 		return false
 	}
 	rules := e.rulesFor(gameID)
-	for _, files := range sets {
-		m := delta.Manifest{Files: make(map[string]delta.FileEntry, len(files))}
-		for p, h := range files {
-			m.Files[p] = delta.FileEntry{Hash: h}
+	for _, snap := range snaps {
+		files, err := e.Store.SnapshotRootFiles(snap.SnapshotID, delta.PrimaryRoot)
+		if err != nil {
+			continue
 		}
-		if manifestFilesHash(filterManifest(m, rules)) == filesHash {
+		for p := range files {
+			if excluded(rules, p) {
+				delete(files, p)
+			}
+		}
+		if len(files) == want && heldKey(files) == key {
 			return true
 		}
 	}
@@ -86,10 +102,10 @@ func (e *Engine) heldBase(ctx context.Context, gameID string, peer Peer, q Manif
 	if len(local.Files) == 0 || len(remote.Files) == 0 || sameFiles(local, remote) {
 		return ""
 	}
-	if e.HeldState(gameID, manifestFilesHash(remote)) {
+	if e.HeldState(gameID, manifestHeldKey(remote)) {
 		return remote.ManifestHash()
 	}
-	q.Held = manifestFilesHash(local)
+	q.Held = manifestHeldKey(local)
 	again, err := e.Transport.FetchManifest(ctx, peer, gameID, q)
 	if err == nil && again.HeldYours {
 		return local.ManifestHash()

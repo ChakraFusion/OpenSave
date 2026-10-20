@@ -66,7 +66,7 @@ func TestHeldState_ThisDeviceHoldingAStateThePeerHasHeldIsBehind(t *testing.T) {
 	var asked []string
 	env.transport.heldByPeer = func(h string) bool {
 		asked = append(asked, h)
-		return h == manifestFilesHash(old)
+		return h == manifestHeldKey(old)
 	}
 
 	res, err := env.engine.SyncWithPeer(context.Background(), "game1", env.peer)
@@ -126,5 +126,53 @@ func TestHeldState_NotAskedOnceThereIsABase(t *testing.T) {
 	}
 	if asked != 0 {
 		t.Errorf("the peer was asked %d times with a base already agreed", asked)
+	}
+}
+
+// Snapshots are listed with their file counts, newest first, and any holding
+// fewer files than the save being matched are left out unread; a save is
+// found in whichever snapshot holds it.
+func TestHeldState_ReadsOnlySnapshotsLargeEnoughToMatch(t *testing.T) {
+	env := setupEngine(t)
+	var ids []string
+	for _, f := range []string{"a.sav", "b.sav", "c.sav"} {
+		write(t, env.localDir, f, f)
+		snap, err := env.engine.Snapshots.Create("game1", "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, snap.ID)
+	}
+
+	counts, err := env.store.SnapshotFileCounts("game1", delta.PrimaryRoot, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(counts) != 2 || counts[0].SnapshotID != ids[2] || counts[0].Files != 3 ||
+		counts[1].SnapshotID != ids[1] || counts[1].Files != 2 {
+		t.Errorf("snapshots with at least 2 files = %+v, want %s (3) then %s (2)", counts, ids[2], ids[1])
+	}
+
+	hashOf := func(content string) string {
+		dir := t.TempDir()
+		write(t, dir, "x", content)
+		m, _ := delta.BuildManifest(dir)
+		return m.Files["x"].Hash
+	}
+	for _, c := range []struct {
+		files map[string]string
+		held  bool
+	}{
+		{map[string]string{"a.sav": hashOf("a.sav")}, true},
+		{map[string]string{"a.sav": hashOf("a.sav"), "b.sav": hashOf("b.sav")}, true},
+		{map[string]string{"a.sav": hashOf("a.sav"), "b.sav": hashOf("other")}, false},
+		{map[string]string{"a.sav": "", "b.sav": "", "c.sav": "", "d.sav": ""}, false},
+	} {
+		if got := env.engine.HeldState("game1", heldKey(c.files)); got != c.held {
+			t.Errorf("HeldState(%v) = %v, want %v", c.files, got, c.held)
+		}
+	}
+	if env.engine.HeldState("game1", "not-a-key") {
+		t.Error("a malformed key matched")
 	}
 }

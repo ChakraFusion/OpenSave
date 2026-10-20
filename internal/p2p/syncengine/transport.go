@@ -85,7 +85,7 @@ type ManifestQuery struct {
 	// cover art, instead of a blank tile.
 	AppID    string
 	CoverURL string
-	// Held is the hash of this device's files (heldstate.go), sent only when it
+	// Held identifies this device's files (heldstate.go heldKey), sent only when it
 	// has no agreed state with the peer: has the peer held this save?
 	Held string
 }

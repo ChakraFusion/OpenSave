@@ -93,28 +93,42 @@ func (s *Store) SnapshotFiles(snapshotID string) ([]CapturedFile, error) {
 	return rows, nil
 }
 
-// SnapshotFileSets returns, for every snapshot of a game that has records,
-// the files it captured in one save location: path to content hash. Snapshots
-// taken before these records existed are absent, as SnapshotFiles has them
-// empty.
-func (s *Store) SnapshotFileSets(gameID, root string) (map[string]map[string]string, error) {
-	var rows []struct {
-		SnapshotID string `db:"snapshot_id"`
-		Path       string `db:"path"`
-		Hash       string `db:"hash"`
-	}
+// SnapshotFileCount is how many files a snapshot captured in one save location.
+type SnapshotFileCount struct {
+	SnapshotID string `db:"snapshot_id"`
+	Files      int    `db:"files"`
+}
+
+// SnapshotFileCounts lists a game's snapshots that captured at least minFiles
+// files in one save location, with their counts, newest first. Only counts:
+// a save can hold hundreds of thousands of files, and a caller looking for one
+// snapshot reads them one at a time (SnapshotRootFiles) rather than all at once.
+func (s *Store) SnapshotFileCounts(gameID, root string, minFiles int) ([]SnapshotFileCount, error) {
+	var rows []SnapshotFileCount
 	if err := s.db.Select(&rows, `
-		SELECT sf.snapshot_id, sf.path, sf.hash FROM snapshot_files sf
+		SELECT sf.snapshot_id, COUNT(*) AS files FROM snapshot_files sf
 		JOIN snapshots s ON s.id = sf.snapshot_id
-		WHERE s.game_id = ? AND sf.root = ?`, gameID, root); err != nil {
-		return nil, fmt.Errorf("list snapshot files of %s: %w", gameID, err)
+		WHERE s.game_id = ? AND sf.root = ?
+		GROUP BY sf.snapshot_id
+		HAVING COUNT(*) >= ?
+		ORDER BY s.timestamp DESC, s.id DESC`, gameID, root, minFiles); err != nil {
+		return nil, fmt.Errorf("count snapshot files of %s: %w", gameID, err)
 	}
-	sets := map[string]map[string]string{}
+	return rows, nil
+}
+
+// SnapshotRootFiles returns what one snapshot captured in one save location:
+// path to content hash.
+func (s *Store) SnapshotRootFiles(snapshotID, root string) (map[string]string, error) {
+	var rows []CapturedFile
+	if err := s.db.Select(&rows,
+		`SELECT root, path, hash FROM snapshot_files WHERE snapshot_id = ? AND root = ?`,
+		snapshotID, root); err != nil {
+		return nil, fmt.Errorf("list snapshot files for %s: %w", snapshotID, err)
+	}
+	files := make(map[string]string, len(rows))
 	for _, r := range rows {
-		if sets[r.SnapshotID] == nil {
-			sets[r.SnapshotID] = map[string]string{}
-		}
-		sets[r.SnapshotID][r.Path] = r.Hash
+		files[r.Path] = r.Hash
 	}
-	return sets, nil
+	return files, nil
 }
