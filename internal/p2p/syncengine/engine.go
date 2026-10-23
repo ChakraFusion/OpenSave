@@ -2005,7 +2005,15 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 	if rootsErr != nil {
 		mirrorRoots = nil
 	}
-	if _, err := snapshot.ZipRoots(game.SavePath, mirrorRoots, zipPath); err != nil {
+	var captured []store.CapturedFile
+	if e.Snapshots != nil {
+		// Unchanged files copied from the newest snapshot, not compressed
+		// again: seconds rather than minutes for a large save (reuse.go).
+		_, captured, err = e.Snapshots.ArchiveSaveTo(gameID, game.ActiveBranch, zipPath)
+	} else {
+		_, captured, err = snapshot.ZipRootsCapturing(game.SavePath, mirrorRoots, zipPath)
+	}
+	if err != nil {
 		e.Log("warn", fmt.Sprintf("mirror snapshot zip failed: %v", err))
 		return
 	}
@@ -2014,7 +2022,7 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 		return
 	}
 
-	_ = e.Store.CreateSnapshot(store.Snapshot{
+	if err := e.Store.CreateSnapshot(store.Snapshot{
 		ID:           remoteSnap.ID,
 		GameID:       gameID,
 		BranchName:   game.ActiveBranch,
@@ -2023,7 +2031,11 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 		IsSystemAuto: true,
 		ZipPath:      zipPath,
 		SizeBytes:    info.Size(),
-	})
+	}); err == nil {
+		// What it holds, as for any snapshot: without it the next snapshot
+		// here could not reuse this one either.
+		_ = e.Store.RecordSnapshotFiles(remoteSnap.ID, captured)
+	}
 }
 
 // humanBytes formats a byte count as a short human-readable string.
