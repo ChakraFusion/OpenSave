@@ -3,7 +3,6 @@
   // Enter. Everything in it is also somewhere on screen; this is the way to
   // it that does not need the mouse or knowing where it is.
   import { createEventDispatcher, onMount, tick } from 'svelte';
-  import { plural } from '../lib/format.js';
   import Search from 'lucide-svelte/icons/search';
   import CornerDownLeft from 'lucide-svelte/icons/corner-down-left';
   import { navigate, toast, syncPause } from '../lib/stores.js';
@@ -14,6 +13,7 @@
   import { showSetupAgain } from '../lib/setup.js';
   import { appearance, resolvedTheme } from '../lib/appearance.js';
   import { PAGES } from '../lib/shortcuts.js';
+  import { t } from '../lib/i18n.js';
   import { rank, snapshotEntries } from '../lib/palette.js';
 
   const dispatch = createEventDispatcher();
@@ -29,21 +29,21 @@
   const isDark = () => resolvedTheme($appearance.theme, globalThis.matchMedia?.('(prefers-color-scheme: dark)').matches ?? true) === 'dark';
 
   $: entries = [
-    ...PAGES.map((p) => ({ label: `Go to ${p.label}`, kind: 'Page', idle: true, keywords: [p.id], run: () => navigate(p.id) })),
-    { label: 'Sync all games', kind: 'Action', idle: true, run: syncAll },
-    { label: 'Snapshot every game now', kind: 'Action', idle: true, keywords: ['backup', 'save', 'all'], run: snapshotAll },
-    { label: 'Scan for saves', kind: 'Action', idle: true, keywords: ['find', 'detect', 'auto-scan'], run: () => navigate('home', { scan: Date.now() }) },
-    { label: 'Track a folder', kind: 'Action', idle: true, keywords: ['add', 'game'], run: () => navigate('home', { add: true }) },
+    ...PAGES.map((p) => ({ label: $t('palette.goTo', { page: p.label }), kind: 'Page', idle: true, keywords: [p.id], run: () => navigate(p.id) })),
+    { label: $t('palette.syncAll'), kind: 'Action', idle: true, run: syncAll },
+    { label: $t('palette.snapshotAll'), kind: 'Action', idle: true, keywords: ['backup', 'save', 'all'], run: snapshotAll },
+    { label: $t('home.welcome.scanForSaves'), kind: 'Action', idle: true, keywords: ['find', 'detect', 'auto-scan'], run: () => navigate('home', { scan: Date.now() }) },
+    { label: $t('palette.trackFolder'), kind: 'Action', idle: true, keywords: ['add', 'game'], run: () => navigate('home', { add: true }) },
     {
-      label: isDark() ? 'Switch to light theme' : 'Switch to dark theme',
+      label: isDark() ? $t('palette.toLight') : $t('palette.toDark'),
       kind: 'Action',
       idle: true,
       keywords: ['theme', 'appearance', 'mode'],
       run: () => appearance.update((a) => ({ ...a, theme: isDark() ? 'light' : 'dark' }))
     },
-    { label: 'Keyboard shortcuts', kind: 'Help', idle: true, keywords: ['keys', 'help'], run: () => dispatch('help') },
+    { label: $t('shortcuts.title'), kind: 'Help', idle: true, keywords: ['keys', 'help'], run: () => dispatch('help') },
     {
-      label: 'Show the setup guide',
+      label: $t('palette.showSetup'),
       kind: 'Help',
       keywords: ['tutorial', 'getting started', 'onboarding', 'help', 'checklist'],
       run: () => {
@@ -52,9 +52,9 @@
       }
     },
     ...($syncPause.paused
-      ? [{ label: 'Resume syncing', kind: 'Action', idle: true, keywords: ['unpause', 'start'], run: resumeSync }]
+      ? [{ label: $t('pause.resume'), kind: 'Action', idle: true, keywords: ['unpause', 'start'], run: resumeSync }]
       : PAUSE_CHOICES.map((c) => ({
-          label: `Pause syncing ${c.label}`,
+          label: $t('palette.pauseFor', { when: c.label }),
           kind: 'Action',
           keywords: ['stop', 'hold', 'offline'],
           run: () => pauseSync(c.minutes)
@@ -62,7 +62,7 @@
     ...$collections
       .filter((c) => c.gameIds.length)
       .map((c) => ({
-        label: `Show ${c.name}`,
+        label: $t('palette.show', { name: c.name }),
         kind: 'Collection',
         idle: c.builtin,
         keywords: ['collection', 'filter'],
@@ -73,11 +73,11 @@
       })),
     ...$visibleGames.flatMap((g) => [
       { label: g.name, kind: 'Game', idle: true, weight: 1, run: () => runGameAction('open', g) },
-      { label: `Sync ${g.name}`, kind: 'Action', weight: -1, run: () => runGameAction('sync', g) },
-      { label: `Snapshot ${g.name}`, kind: 'Action', weight: -1, keywords: ['backup', 'save'], run: () => runGameAction('snapshot', g) },
-      ...(canLaunch(g) ? [{ label: `Launch ${g.name}`, kind: 'Action', weight: -1, keywords: ['play', 'start'], run: () => runGameAction('launch', g) }] : []),
-      { label: `Open ${g.name} save folder`, kind: 'Action', weight: -1, keywords: ['explorer', 'files'], run: () => runGameAction('folder', g) },
-      { label: `Rename ${g.name}`, kind: 'Action', weight: -1, keywords: ['name', 'title'], run: () => runGameAction('rename', g) }
+      { label: $t('palette.syncGame', { game: g.name }), kind: 'Action', weight: -1, run: () => runGameAction('sync', g) },
+      { label: $t('palette.snapshotGame', { game: g.name }), kind: 'Action', weight: -1, keywords: ['backup', 'save'], run: () => runGameAction('snapshot', g) },
+      ...(canLaunch(g) ? [{ label: $t('palette.launchGame', { game: g.name }), kind: 'Action', weight: -1, keywords: ['play', 'start'], run: () => runGameAction('launch', g) }] : []),
+      { label: $t('palette.openSaveFolder', { game: g.name }), kind: 'Action', weight: -1, keywords: ['explorer', 'files'], run: () => runGameAction('folder', g) },
+      { label: $t('palette.renameGame', { game: g.name }), kind: 'Action', weight: -1, keywords: ['name', 'title'], run: () => runGameAction('rename', g) }
     ]),
     // Snapshots with words of their own — a note, or a comment someone typed
     // — found by those words: "boss" finds "Before the final boss".
@@ -91,7 +91,9 @@
     try {
       const res = await api.post('/api/snapshots/all', {});
       toast(
-        res.failed?.length ? `Snapshot of ${plural(res.taken, 'game')}; ${res.failed.length} could not be taken` : `Took a snapshot of ${plural(res.taken, 'game')}`,
+        res.failed?.length
+          ? $t('palette.snapshotAllPartial', { n: res.taken, failed: res.failed.length })
+          : $t('palette.snapshotAllDone', { n: res.taken }),
         res.failed?.length ? 'error' : 'success'
       );
     } catch (e) {
@@ -101,7 +103,7 @@
 
   async function syncAll() {
     for (const g of $visibleGames) api.post(`/api/games/${g.id}/sync`).catch(() => {});
-    toast('Sync triggered for all games');
+    toast($t('home.syncAllToast'));
   }
 
   function choose(entry) {
@@ -135,14 +137,14 @@
 </script>
 
 <div class="scrim" role="presentation" on:mousedown|self={close}>
-  <div class="palette" role="dialog" aria-modal="true" aria-label="Quick switcher">
+  <div class="palette" role="dialog" aria-modal="true" aria-label={$t('palette.ariaLabel')}>
     <div class="input-row">
       <Search size={17} />
       <input
         bind:this={input}
         bind:value={query}
         on:keydown={onKeydown}
-        placeholder="Jump to a game, a page or an action…"
+        placeholder={$t('palette.placeholder')}
         role="combobox"
         aria-expanded="true"
         aria-controls="palette-results"
@@ -163,11 +165,11 @@
           on:mousedown|preventDefault={() => choose(entry)}
         >
           <span class="label">{entry.label}</span>
-          <span class="kind">{entry.kind}</span>
+          <span class="kind">{$t(`palette.kind.${entry.kind.toLowerCase()}`)}</span>
           {#if i === active}<CornerDownLeft size={13} />{/if}
         </li>
       {:else}
-        <li class="none">Nothing matches “{query}”.</li>
+        <li class="none">{$t('palette.noMatches', { query })}</li>
       {/each}
     </ul>
   </div>
