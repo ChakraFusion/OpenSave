@@ -188,6 +188,16 @@ var presetDefs = []preset{
 			"/run/media/*/*/Emulation/saves",
 		}},
 
+	// RetroDECK keeps every system's saves in one tree as well:
+	// retrodeck/saves/<system>, in the home folder, or on an SD card when it
+	// was moved there.
+	{ID: "retrodeck", Name: "RetroDECK", Type: "emulator", IsWrapper: true,
+		LinuxPath: []string{
+			"~/retrodeck/saves",
+			"/run/media/*/retrodeck/saves",
+			"/run/media/*/*/retrodeck/saves",
+		}},
+
 	// Steam-emulator / repack wrappers (each subfolder = one game). These
 	// are Windows conventions; on Linux the same games run under Proton and
 	// their saves live in the compatdata prefix (see scanProtonCompat).
