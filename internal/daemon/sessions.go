@@ -45,10 +45,12 @@ type sessionState struct {
 	// cpu: each process's processor time at the last poll, and when it last
 	// used any (activeProcesses).
 	cpu map[int]procSeen
-	// saveChanged: when each playing game's save last changed; quietEnded: games
-	// whose session was ended for a save that stopped changing, by the save
-	// as it was then, while their process is still there (endQuietSessions).
+	// saveChanged: when each playing game's save last changed; quiet: where
+	// each one's quiet stretch began; quietEnded: games whose session was
+	// ended as quiet, by the save as it was then, while their process is still
+	// there (endQuietSessions).
 	saveChanged map[string]time.Time
+	quiet       map[string]quietWindow
 	quietEnded  map[string]string
 	// checkpoint is when each playing game last had a snapshot taken while
 	// it was played (holdSnapshotWhilePlaying).
@@ -105,7 +107,7 @@ func (d *Daemon) pollSessionsAt(now time.Time) {
 	procs = d.activeProcessesAt(procs, now)
 	running := sessions.Running(procs, targets)
 	d.notePrograms(procs, targets, learn, running)
-	d.endQuietSessions(running, now)
+	d.endQuietSessions(running, sessions.CPUOf(procs, targets), now)
 	d.sessions.tracker.Poll(running, now)
 }
 
@@ -569,22 +571,47 @@ func (d *Daemon) activeProcessesAt(procs []sessions.Proc, now time.Time) []sessi
 	return out
 }
 
-// quietSessionLimit is how long a session may go without its save changing
-// before it is taken as over. While a game is played its save is held back
-// from syncing (syncengine/playing.go), so a session that never ended would
-// hold the save for good: a process left behind that still ticks over now
-// and then — a crash reporter, a launcher's helper — counts as running
-// however long it lingers (activeProcesses only lets go of one doing nothing).
-// A game being played saves within an hour; ended, the session is kept and
-// synced as when the game closes, and the save changing again starts a new
-// one.
+// quietSessionLimit is how long a session may go without its save changing,
+// and its game's processes all but idle, before it is taken as over.
+//
+// While a game is played its save is held back from syncing
+// (syncengine/playing.go), so a session that never ended would hold the save
+// for good. A process left behind that still ticks over now and then — a
+// crash reporter, a launcher's helper — counts as running however long it
+// lingers: activeProcesses only lets go of one doing nothing at all.
+//
+// A game being played may well not save for an hour — one saved by hand, at
+// save points — but it keeps drawing, and uses far more processor time than
+// quietCPUShare. What a game left behind uses less. Ended, the session is kept
+// and synced as when the game closes.
+//
+// Never a session begun from outside (Tracker.Marked: the Deck plugin, `opensave
+// wrap`): what began it says when it ends, and knows.
 const quietSessionLimit = time.Hour
 
-// endQuietSessions ends the sessions whose save has not changed for
-// quietSessionLimit, and keeps them from starting again at once: running is
-// the games seen running this poll, and a game ended this way is taken out of
-// it while its save is still as it was then. Called before the tracker polls.
-func (d *Daemon) endQuietSessions(running map[string]int, now time.Time) {
+// quietCPUShare is the share of one processor core, at most, that a game's
+// processes may have used over quietSessionLimit for its session to be taken
+// as over: 1%, some 36 seconds in an hour.
+const quietCPUShare = 100 // as a divisor
+
+// quietWindow is where a game's quiet stretch began: the processor time its
+// processes had used by then, and when.
+type quietWindow struct {
+	cpu time.Duration
+	at  time.Time
+}
+
+// endQuietSessions ends the sessions whose save has not changed, and whose
+// processes have all but idled, for quietSessionLimit; and keeps them from
+// starting again at once. running is the games seen running this poll, and
+// cpu their processes' processor time (sessions.CPUOf); a game ended this way
+// is taken out of running while its save is still as it was then. Called
+// before the tracker polls.
+//
+// Measured in windows of quietSessionLimit from the session's start or its
+// save's last change: at the end of one, the session is over if the game was
+// all but idle in it; otherwise a new window begins.
+func (d *Daemon) endQuietSessions(running map[string]int, cpu map[string]sessions.GameCPU, now time.Time) {
 	playing := d.sessions.tracker.Playing()
 	lastHash := func(gameID string) string {
 		if g, err := d.Store.GetGame(gameID); err == nil {
@@ -598,6 +625,9 @@ func (d *Daemon) endQuietSessions(running map[string]int, now time.Time) {
 	if d.sessions.quietEnded == nil {
 		d.sessions.quietEnded = map[string]string{}
 	}
+	if d.sessions.quiet == nil {
+		d.sessions.quiet = map[string]quietWindow{}
+	}
 	for gameID, hash := range d.sessions.quietEnded {
 		if _, still := running[gameID]; !still {
 			delete(d.sessions.quietEnded, gameID) // gone: its next start is a session again
@@ -607,16 +637,38 @@ func (d *Daemon) endQuietSessions(running map[string]int, now time.Time) {
 			delete(running, gameID)
 		}
 	}
+	for gameID := range d.sessions.quiet {
+		if _, ok := playing[gameID]; !ok {
+			delete(d.sessions.quiet, gameID)
+		}
+	}
 	for gameID, since := range playing {
-		last := since
-		if changed := d.sessions.saveChanged[gameID]; changed.After(last) {
-			last = changed
+		g, seen := cpu[gameID]
+		if d.sessions.tracker.Marked(gameID) || !seen || !g.Measured {
+			delete(d.sessions.quiet, gameID) // begun from outside, or cannot be told
+			continue
 		}
-		if now.Sub(last) >= quietSessionLimit {
-			d.sessions.quietEnded[gameID] = lastHash(gameID)
-			delete(running, gameID)
-			end = append(end, gameID)
+		w, has := d.sessions.quiet[gameID]
+		if !has {
+			d.sessions.quiet[gameID] = quietWindow{cpu: g.CPU, at: since} // the first window: from the start
+			continue
 		}
+		if d.sessions.saveChanged[gameID].After(w.at) || g.CPU < w.cpu {
+			d.sessions.quiet[gameID] = quietWindow{cpu: g.CPU, at: now} // saved, or a new process: a new window
+			continue
+		}
+		span := now.Sub(w.at)
+		if span < quietSessionLimit {
+			continue
+		}
+		if g.CPU-w.cpu >= span/quietCPUShare {
+			d.sessions.quiet[gameID] = quietWindow{cpu: g.CPU, at: now} // busy: being played
+			continue
+		}
+		delete(d.sessions.quiet, gameID)
+		d.sessions.quietEnded[gameID] = lastHash(gameID)
+		delete(running, gameID)
+		end = append(end, gameID)
 	}
 	d.sessions.mu.Unlock()
 
@@ -625,7 +677,7 @@ func (d *Daemon) endQuietSessions(running map[string]int, now time.Time) {
 		if g, err := d.Store.GetGame(gameID); err == nil {
 			name = g.Name
 		}
-		d.Log.Log("info", fmt.Sprintf("%q has not saved for %s while seen running: taken as no longer played, so its save is kept and synced",
+		d.Log.Log("info", fmt.Sprintf("%q has neither saved nor done anything for %s while seen running: taken as no longer played, so its save is kept and synced",
 			name, quietSessionLimit))
 		d.sessions.tracker.Finish(gameID, now)
 	}
