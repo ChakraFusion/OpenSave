@@ -1,3 +1,8 @@
+-- IF NOT EXISTS throughout: builds of an earlier draft of this change made
+-- these same tables under other numbers (settings_files and
+-- settings_observations in 0043, marks in 0041), and a database from one of
+-- them must still start.
+
 -- Files in a game's main save folder judged to be its settings rather than its
 -- save, by what they hold (presets/detectsettings.go), and files shown to be a
 -- save after all — by changing with the save, in this device's snapshots or in
@@ -7,7 +12,7 @@
 -- settings files are. verdict 'save' keeps it syncing for good: detection never
 -- takes it again, and a game database entry that named it is overruled.
 -- path is relative to the main save folder, slash-separated.
-CREATE TABLE settings_files (
+CREATE TABLE IF NOT EXISTS settings_files (
     game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     path    TEXT NOT NULL,
     verdict TEXT NOT NULL,
@@ -20,7 +25,7 @@ CREATE TABLE settings_files (
 -- moved counts syncs in which the save changed and so did that copy, still
 -- those in which the save changed and it did not. A settings file is changed
 -- now and then; a save that was taken for one changes with every session.
-CREATE TABLE settings_observations (
+CREATE TABLE IF NOT EXISTS settings_observations (
     game_id   TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
     peer_id   TEXT NOT NULL,
     path      TEXT NOT NULL,
@@ -34,7 +39,7 @@ CREATE TABLE settings_observations (
 -- were taken for; a step whose value changes in a later build runs again.
 -- Here: when each game's files were last judged, by which detector, for
 -- which save folder (daemon/detectsettings.go).
-CREATE TABLE marks (
+CREATE TABLE IF NOT EXISTS marks (
     name  TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
