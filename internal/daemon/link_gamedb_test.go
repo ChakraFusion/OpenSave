@@ -10,10 +10,12 @@ import (
 	"github.com/opensave/opensave/internal/store"
 )
 
-// A game tracked without an App ID is given the game database's, once, when
-// its folder plainly is that game's: not for a folder holding many games'
-// saves, and not again after someone took it away.
-func TestLinkToGameDatabase_OncePerFolder(t *testing.T) {
+// A game tracked without an App ID is not given the game database's on a
+// guess: the game its folder plainly is gets suggested, and the App ID is set
+// only when the user confirms it. A folder holding many games' saves is not
+// suggested as one; an answer either way, and an App ID taken away, are not
+// asked about again.
+func TestGameDBLink_SuggestedThenConfirmed(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Skip("the game database below uses Windows placeholders")
 	}
@@ -41,30 +43,59 @@ Duck Game:
 	d.Scanner = &presets.Scanner{CacheFile: filepath.Join(dir, "steam-app-cache.json"), GOOS: "windows"}
 
 	game := store.Game{ID: "duckov", Name: "Duckov", SavePath: duck, ActiveBranch: "main", MaxSnapshots: 5}
+	declined := store.Game{ID: "duckov2", Name: "Duckov copy", SavePath: duck, ActiveBranch: "main", MaxSnapshots: 5}
 	wide := store.Game{ID: "lowlow", Name: "Everything in LocalLow", SavePath: low, ActiveBranch: "main", MaxSnapshots: 5}
-	for _, g := range []store.Game{game, wide} {
+	for _, g := range []store.Game{game, declined, wide} {
 		if err := d.Store.CreateGame(g); err != nil {
 			t.Fatal(err)
 		}
+		d.suggestGameDatabaseLink(g)
+	}
+	reload := func(id string) store.Game {
+		g, _ := d.Store.GetGame(id)
+		return g
 	}
 
-	if got := d.linkToGameDatabase(game); got.AppID != "3167020" || got.Name != "Duckov" {
-		t.Fatalf("linked as %+v, want App ID 3167020 and the name left as it is", got)
+	// Suggested, not set.
+	s := d.SuggestedGameDBLink(reload(game.ID))
+	if s == nil || s.AppID != "3167020" || s.Name != "Duck Game" {
+		t.Fatalf("suggestion = %+v, want Duck Game (3167020)", s)
 	}
-	if stored, _ := d.Store.GetGame(game.ID); stored.AppID != "3167020" || stored.CoverURL == "" {
-		t.Errorf("stored as %+v", stored)
+	if reload(game.ID).AppID != "" {
+		t.Fatal("the App ID was set before anyone confirmed it")
 	}
-	if got := d.linkToGameDatabase(wide); got.AppID != "" {
-		t.Errorf("a folder holding many games' saves was linked to one: %q", got.AppID)
+	if d.SuggestedGameDBLink(reload(wide.ID)) != nil {
+		t.Error("a folder holding many games' saves was suggested as one")
 	}
 
-	// Someone takes the App ID away again: it stays away.
-	stored, _ := d.Store.GetGame(game.ID)
-	stored.AppID, stored.CoverURL = "", ""
-	if err := d.Store.UpdateGame(stored); err != nil {
+	// Confirmed: linked, the name left as it is.
+	if err := d.AnswerGameDBLink(reload(game.ID), true); err != nil {
 		t.Fatal(err)
 	}
-	if got := d.linkToGameDatabase(stored); got.AppID != "" {
-		t.Errorf("an App ID taken away was put back: %q", got.AppID)
+	if g := reload(game.ID); g.AppID != "3167020" || g.Name != "Duckov" || g.CoverURL == "" {
+		t.Errorf("after confirming: %+v", g)
+	}
+
+	// Declined: nothing set, and not asked again.
+	if err := d.AnswerGameDBLink(reload(declined.ID), false); err != nil {
+		t.Fatal(err)
+	}
+	d.suggestGameDatabaseLink(reload(declined.ID))
+	if g := reload(declined.ID); g.AppID != "" || d.SuggestedGameDBLink(g) != nil {
+		t.Errorf("a declined link came back: %+v", g)
+	}
+	if err := d.AnswerGameDBLink(reload(declined.ID), true); err != ErrNoGameDBSuggestion {
+		t.Errorf("answering with nothing suggested: %v, want ErrNoGameDBSuggestion", err)
+	}
+
+	// The App ID taken away again: not suggested again.
+	g := reload(game.ID)
+	g.AppID, g.CoverURL = "", ""
+	if err := d.Store.UpdateGame(g); err != nil {
+		t.Fatal(err)
+	}
+	d.suggestGameDatabaseLink(reload(game.ID))
+	if d.SuggestedGameDBLink(reload(game.ID)) != nil {
+		t.Error("an App ID taken away was suggested again")
 	}
 }

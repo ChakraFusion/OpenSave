@@ -569,7 +569,10 @@ func (s *Server) gamePayload(g store.Game) map[string]any {
 		"deviceSettings": s.Daemon.DeviceSettings(g),
 		// Found by what they hold, and waiting to be confirmed; they keep
 		// syncing meanwhile (daemon.SuggestedSettings).
-		"suggestedSettings":  s.Daemon.SuggestedSettings(g),
+		"suggestedSettings": s.Daemon.SuggestedSettings(g),
+		// The game in the game database a game tracked without an App ID
+		// looks like, to be confirmed (daemon.SuggestedGameDBLink).
+		"gameDBSuggestion":   s.Daemon.SuggestedGameDBLink(g),
 		"syncDeviceSettings": g.SyncDeviceSettings,
 		"branches":           branches,
 		"createdAt":          g.CreatedAt,

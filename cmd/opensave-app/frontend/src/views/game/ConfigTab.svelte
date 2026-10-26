@@ -43,6 +43,21 @@
     return run(done, () => api.post(`/api/games/${game.id}/suggested-settings`, { path, keepHere }));
   }
 
+  // The game in the game database this one looks like, for a game tracked
+  // without an App ID: linked only when confirmed here, as the App ID brings
+  // its settings files with it, left out of syncing.
+  $: dbSuggestion = game.gameDBSuggestion ?? null;
+  function answerLink(accept) {
+    const s = dbSuggestion;
+    if (!s) return;
+    const done = accept ? $t('game.config.dbLinked', { name: s.name }) : $t('game.config.dbNotLinked');
+    return run(done, async () => {
+      await api.post(`/api/games/${game.id}/gamedb-link`, { accept });
+      // The form holds the App ID as the tab opened; saving it would undo this.
+      if (accept) cfg.appId = s.appId;
+    });
+  }
+
   // Cover preview: a custom URL wins, else the proxied Steam art for the App
   // ID being edited.
   $: cover =
@@ -140,6 +155,19 @@
         </span>
       {/if}
     </div>
+    {#if dbSuggestion}
+      <div class="db-suggestion">
+        <span class="hint">{$t('game.config.dbSuggestion', { name: dbSuggestion.name })}</span>
+        <span class="decide">
+          <button class="btn small" disabled={$busy} on:click={() => answerLink(true)}>
+            {$t('game.config.dbLink')}
+          </button>
+          <button class="btn small ghost" disabled={$busy} on:click={() => answerLink(false)}>
+            {$t('game.config.dbNotThis')}
+          </button>
+        </span>
+      </div>
+    {/if}
     <AppIdField bind:value={cfg.appId} error={appIdError} />
     <div class="field">
       <label for="c-exe">Executable path</label>
@@ -285,6 +313,17 @@
     font-size: 0.85rem;
     color: var(--text-dim);
     font-weight: 500;
+  }
+  .db-suggestion {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 14px;
+  }
+  .db-suggestion .decide {
+    display: inline-flex;
+    gap: 6px;
   }
   .device-settings .decide {
     display: inline-flex;
