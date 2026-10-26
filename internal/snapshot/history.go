@@ -1,17 +1,19 @@
 package snapshot
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"sort"
-)
+import "fmt"
 
 // How often files changed along with a game's save, read from its
 // snapshots: a settings file is changed now and then, when someone changes a
 // setting; a save changes with nearly every session. A file taken for a
 // game's settings that changes like a save is not its settings
 // (daemon/detectsettings.go).
+//
+// Read from the recorded file lists only, and compared by the database
+// (store.SnapshotsDiffer): a save can hold a quarter of a million files, and
+// reading each snapshot's whole list — or, for one taken before lists were
+// recorded, its whole archive — to find whether the rest of it changed was
+// tens of millions of rows each time it was asked. A snapshot with no recorded
+// list is left out.
 
 const (
 	historySnapshots = 40 // the most recent ones are read
@@ -27,10 +29,6 @@ func (m *Manager) ChangesLikeASave(gameID string, paths []string) map[string]str
 	if len(paths) == 0 {
 		return out
 	}
-	watched := make(map[string]bool, len(paths))
-	for _, p := range paths {
-		watched[p] = true
-	}
 	snaps, err := m.Store.AllSnapshotsOfGame(gameID)
 	if err != nil {
 		return out
@@ -39,47 +37,30 @@ func (m *Manager) ChangesLikeASave(gameID string, paths []string) map[string]str
 		snaps = snaps[len(snaps)-historySnapshots:]
 	}
 
-	// Per snapshot, the hashes of the watched files and one value for the
-	// rest of the save.
-	type state struct {
-		watched map[string]string
-		rest    string
-	}
-	var states []state
-	for _, s := range snaps {
-		files, err := m.filesOf(s)
-		if err != nil || len(files) == 0 {
-			continue
-		}
-		st := state{watched: map[string]string{}}
-		var rest []string
-		for _, f := range files {
-			if f.Root != "" {
-				continue
-			}
-			if watched[f.Path] {
-				st.watched[f.Path] = f.Hash
-			} else {
-				rest = append(rest, f.Path+"\x00"+f.Hash)
-			}
-		}
-		st.rest = restKey(rest)
-		states = append(states, st)
-	}
-
 	saves := 0
 	moved := map[string]int{}
-	for i := 1; i < len(states); i++ {
-		a, b := states[i-1], states[i]
-		if a.rest == b.rest {
-			continue // the save did not change: nothing to compare with
+	prevID, prev := "", map[string]string(nil)
+	for _, s := range snaps {
+		if !m.Store.SnapshotHasFiles(s.ID) {
+			continue
 		}
-		saves++
-		for p := range watched {
-			if a.watched[p] != b.watched[p] {
-				moved[p]++
+		hashes, err := m.Store.SnapshotPathHashes(s.ID, "", paths)
+		if err != nil {
+			continue
+		}
+		if prevID != "" {
+			// Only where the rest of the save changed is there anything to
+			// compare the watched files with.
+			if differ, err := m.Store.SnapshotsDiffer(prevID, s.ID, "", paths); err == nil && differ {
+				saves++
+				for _, p := range paths {
+					if prev[p] != hashes[p] {
+						moved[p]++
+					}
+				}
 			}
 		}
+		prevID, prev = s.ID, hashes
 	}
 	if saves < historyMinSaves {
 		return out
@@ -90,14 +71,4 @@ func (m *Manager) ChangesLikeASave(gameID string, paths []string) map[string]str
 		}
 	}
 	return out
-}
-
-func restKey(entries []string) string {
-	sort.Strings(entries)
-	h := sha256.New()
-	for _, e := range entries {
-		h.Write([]byte(e))
-		h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))
 }
