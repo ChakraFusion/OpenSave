@@ -1775,7 +1775,7 @@ func (e *Engine) pullFiles(ctx context.Context, peer Peer, gameID string, game s
 		}
 		if err := e.pullFile(ctx, peer, FileRef{GameID: gameID, Root: root.Name, RelPath: relPath}, localFilePath,
 			remoteFile, indices, throttle, tracker, reportProgress); err != nil {
-			return e.noteUnwritable(gameID, game.Name, root.Path, err)
+			return e.noteUnwritable(gameID, game.Name, root.Path, filepath.Dir(localFilePath), err)
 		}
 		if remoteFile.MtimeMs > 0 {
 			mtime := time.UnixMilli(int64(remoteFile.MtimeMs))
