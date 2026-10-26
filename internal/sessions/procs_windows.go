@@ -10,8 +10,7 @@ import (
 )
 
 // listProcesses walks the process table and asks each process for its full
-// program path, how much memory it holds and how much processor time it has
-// used. A process this user may not look at (a service, another
+// program path and how much processor time it has used. A process this user may not look at (a service, another
 // user's) is skipped: no game of theirs is one of ours.
 func listProcesses() ([]Proc, error) {
 	snap, err := windows.CreateToolhelp32Snapshot(windows.TH32CS_SNAPPROCESS, 0)
@@ -40,22 +39,6 @@ func listProcesses() ([]Proc, error) {
 	return out, nil
 }
 
-var procGetProcessMemoryInfo = windows.NewLazySystemDLL("kernel32.dll").NewProc("K32GetProcessMemoryInfo")
-
-// processMemoryCounters is PROCESS_MEMORY_COUNTERS.
-type processMemoryCounters struct {
-	cb                         uint32
-	PageFaultCount             uint32
-	PeakWorkingSetSize         uintptr
-	WorkingSetSize             uintptr
-	QuotaPeakPagedPoolUsage    uintptr
-	QuotaPagedPoolUsage        uintptr
-	QuotaPeakNonPagedPoolUsage uintptr
-	QuotaNonPagedPoolUsage     uintptr
-	PagefileUsage              uintptr
-	PeakPagefileUsage          uintptr
-}
-
 func inspect(pid uint32, buf []uint16) (Proc, bool) {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
 	if err != nil {
@@ -70,12 +53,8 @@ func inspect(pid uint32, buf []uint16) (Proc, bool) {
 
 	var creation, exit, kernel, user windows.Filetime
 	timesOK := windows.GetProcessTimes(h, &creation, &exit, &kernel, &user) == nil
-	var mem processMemoryCounters
-	mem.cb = uint32(unsafe.Sizeof(mem))
-	r, _, _ := procGetProcessMemoryInfo.Call(uintptr(h), uintptr(unsafe.Pointer(&mem)), uintptr(mem.cb))
-	if timesOK && r != 0 {
+	if timesOK {
 		p.Measured = true
-		p.Memory = uint64(mem.WorkingSetSize)
 		// FILETIME counts 100-nanosecond intervals.
 		ticks := (uint64(kernel.HighDateTime)<<32 | uint64(kernel.LowDateTime)) +
 			(uint64(user.HighDateTime)<<32 | uint64(user.LowDateTime))

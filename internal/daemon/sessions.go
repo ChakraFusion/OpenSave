@@ -518,10 +518,14 @@ type procSeen struct {
 }
 
 // idleFor is how long a process may use no processor time at all before it
-// is no longer the game, however much memory it holds: what a killed game
-// leaves behind can keep its memory. A game being played uses some all the
-// time — a paused one still draws its menu.
-const idleFor = time.Minute
+// is no longer the game, however much or little memory it holds. A game
+// being played uses some all the time — a paused one still draws its menu —
+// but one minimised in the background can throttle to almost nothing, or be
+// suspended, and Windows trims its memory too. Ending its session then would
+// sync the save under it, which is what the session is there to stop (asked
+// in review on #117). Five minutes still lets go of what a closed game left
+// behind well before the quarter of an hour one lingered.
+const idleFor = 5 * time.Minute
 
 // busyCPU is the processor time between two polls that counts as using any.
 const busyCPU = 20 * time.Millisecond
@@ -534,12 +538,6 @@ func (d *Daemon) activeProcessesAt(procs []sessions.Proc, now time.Time) []sessi
 	out := procs[:0:0]
 	for _, p := range procs {
 		before, seen := prev[p.PID]
-		if sessions.Idle(p, before.cpu, seen) {
-			if p.Measured {
-				next[p.PID] = procSeen{cpu: p.CPU, busy: before.busy}
-			}
-			continue
-		}
 		if !p.Measured {
 			out = append(out, p) // cannot be told: counted
 			continue
@@ -550,7 +548,7 @@ func (d *Daemon) activeProcessesAt(procs []sessions.Proc, now time.Time) []sessi
 		}
 		next[p.PID] = s
 		if now.Sub(s.busy) > idleFor {
-			continue // holding memory, doing nothing
+			continue // doing nothing for long enough not to be the game
 		}
 		out = append(out, p)
 	}

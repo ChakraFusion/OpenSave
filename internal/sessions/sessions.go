@@ -34,13 +34,11 @@ type Proc struct {
 	Exe string
 	// Args is the command line, where the system says (Linux).
 	Args []string
-	// Measured says Memory and CPU were read (Windows): the program's working
-	// set in bytes, and the processor time it has used so far. A game being
-	// played holds hundreds of megabytes and keeps the processor busy; what a
-	// game leaves behind when it closes — a crash handler, a stub of the same
-	// name — holds next to nothing and does nothing (Idle).
+	// Measured says CPU was read (Windows): the processor time the program has
+	// used so far. A game being played uses some all the time; what a game
+	// leaves behind when it closes — a crash handler, a stub of the same name —
+	// uses none (daemon.activeProcesses).
 	Measured bool
-	Memory   uint64
 	CPU      time.Duration
 	// SteamAppID is the Steam app the process was started for, where Steam
 	// tagged it (Linux: SteamAppId in the environment, or AppId=… on the
@@ -260,19 +258,3 @@ func (t *Tracker) Finish(gameID string, at time.Time) {
 // List returns the processes running now. Where the system cannot say, it
 // returns none and an error, and nothing is ever seen playing.
 func List() ([]Proc, error) { return listProcesses() }
-
-// Idle reports a process that holds next to no memory and has used no
-// processor time since it was last seen (prevCPU, when it was): not a game
-// being played, whatever it is called. A process that could not be measured
-// is never called idle.
-func Idle(p Proc, prevCPU time.Duration, seenBefore bool) bool {
-	if !p.Measured || p.Memory >= idleMemory {
-		return false
-	}
-	return !seenBefore || p.CPU-prevCPU < idleCPU
-}
-
-const (
-	idleMemory = 32 << 20               // a game holds far more
-	idleCPU    = 100 * time.Millisecond // per poll: 1% of ten seconds
-)

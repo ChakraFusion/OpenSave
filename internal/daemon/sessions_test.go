@@ -237,14 +237,18 @@ func TestSessionHoldsSnapshotsAndSyncWhilePlaying(t *testing.T) {
 func TestSessionEndsWhenOnlyAStubIsLeft(t *testing.T) {
 	d := newTestDaemon(t)
 	g, _ := sessionGame(t, d, "stub")
-	running := sessions.Proc{PID: 9, Exe: g.ExePath, Measured: true, Memory: 2 << 30, CPU: time.Second}
+	running := sessions.Proc{PID: 9, Exe: g.ExePath, Measured: true, CPU: time.Second}
 	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{running}, nil }
 	d.PollSessions()
 	if d.PlayingSince(g.ID).IsZero() {
 		t.Fatal("setup: the game was not seen running")
 	}
-	// The game closed; a stub of the same program lingers, doing nothing.
-	stub := sessions.Proc{PID: 9, Exe: g.ExePath, Measured: true, Memory: 800 << 10, CPU: time.Second}
+	// The game closed; a stub of the same program lingers, doing nothing, and
+	// has for longer than idleFor.
+	stub := sessions.Proc{PID: 9, Exe: g.ExePath, Measured: true, CPU: time.Second}
+	d.sessions.mu.Lock()
+	d.sessions.cpu[9] = procSeen{cpu: time.Second, busy: time.Now().Add(-idleFor - time.Minute)}
+	d.sessions.mu.Unlock()
 	d.sessions.list = func() ([]sessions.Proc, error) { return []sessions.Proc{stub}, nil }
 	d.PollSessions()
 	since := d.PlayingSince(g.ID)
@@ -258,17 +262,18 @@ func TestSessionEndsWhenOnlyAStubIsLeft(t *testing.T) {
 	}
 }
 
-// What a killed game leaves behind can keep its memory; it is no longer the
-// game once it has used no processor time for a minute. One still working —
-// a paused game draws its menu — stays.
-func TestActiveProcesses_HoldingMemoryDoingNothing(t *testing.T) {
+// A process that has used no processor time for idleFor is no longer the game,
+// whatever it holds: what a killed game leaves behind. One quiet for less —
+// a game minimised in the background, throttled or suspended — still is, so
+// its session and the hold on its save go on. One working stays.
+func TestActiveProcesses_QuietForLongIsNotTheGame(t *testing.T) {
 	d := newTestDaemon(t)
 	t0 := time.Now()
 	left := func(cpu time.Duration) sessions.Proc {
-		return sessions.Proc{PID: 1, Exe: `G:\Games\Crimson Desert\bin64\CrimsonDesert.exe`, Measured: true, Memory: 2 << 30, CPU: cpu}
+		return sessions.Proc{PID: 1, Exe: `G:\Games\Crimson Desert\bin64\CrimsonDesert.exe`, Measured: true, CPU: cpu}
 	}
 	playing := func(cpu time.Duration) sessions.Proc {
-		return sessions.Proc{PID: 2, Exe: `G:\Games\Other\game.exe`, Measured: true, Memory: 2 << 30, CPU: cpu}
+		return sessions.Proc{PID: 2, Exe: `G:\Games\Other\game.exe`, Measured: true, CPU: cpu}
 	}
 	count := func(ps []sessions.Proc) map[int]bool {
 		m := map[int]bool{}
@@ -285,9 +290,16 @@ func TestActiveProcesses_HoldingMemoryDoingNothing(t *testing.T) {
 	if !got[1] || !got[2] {
 		t.Errorf("half a minute in: %v, want both", got)
 	}
-	got = count(d.activeProcessesAt([]sessions.Proc{left(5 * time.Second), playing(3 * time.Second)}, t0.Add(70*time.Second)))
+	// Minimised and throttled: quiet for minutes, and still the game.
+	for _, at := range []time.Duration{70 * time.Second, 4 * time.Minute} {
+		got = count(d.activeProcessesAt([]sessions.Proc{left(5 * time.Second), playing(3 * time.Second)}, t0.Add(at)))
+		if !got[1] {
+			t.Errorf("quiet for %s: no longer counted, so a game in the background would lose its session", at)
+		}
+	}
+	got = count(d.activeProcessesAt([]sessions.Proc{left(5 * time.Second), playing(4 * time.Second)}, t0.Add(idleFor+10*time.Second)))
 	if got[1] {
-		t.Error("a process doing nothing for over a minute still counts as the game")
+		t.Error("a process doing nothing for longer than idleFor still counts as the game")
 	}
 	if !got[2] {
 		t.Error("a game using the processor was dropped")
