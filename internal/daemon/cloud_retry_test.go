@@ -48,6 +48,9 @@ func TestAFailedCloudUploadIsSentAgainWhenTheCloudIsBack(t *testing.T) {
 	if err := os.MkdirAll(cloudDir, 0o777); err != nil {
 		t.Fatal(err)
 	}
+	if err := cloud.MarkLocalFolder(cloudDir); err != nil { // the share, back with its marker
+		t.Fatal(err)
+	}
 	dev.check()
 
 	if _, err := os.Stat(filepath.Join(cloudDir, name)); err != nil {
@@ -76,11 +79,14 @@ func TestAFailedUploadOfASnapshotSinceRemovedIsForgotten(t *testing.T) {
 	if err := os.MkdirAll(cloudDir, 0o777); err != nil {
 		t.Fatal(err)
 	}
+	if err := cloud.MarkLocalFolder(cloudDir); err != nil { // the share, back with its marker
+		t.Fatal(err)
+	}
 	dev.check()
 	if pending, _ := dev.d.Store.CloudRetries(); len(pending) != 0 {
 		t.Errorf("a snapshot that is gone is still waiting to be sent: %+v", pending)
 	}
-	if entries, _ := os.ReadDir(cloudDir); len(entries) != 0 {
+	if entries, _ := os.ReadDir(cloudDir); len(entries) != 1 { // the backup folder's marker, and nothing sent
 		t.Errorf("something was sent for a snapshot that is gone: %v", entries)
 	}
 }

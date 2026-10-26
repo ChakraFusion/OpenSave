@@ -167,6 +167,10 @@ type Engine struct {
 	// answer was said already this session (playing.go).
 	playingMu   sync.Mutex
 	playingSaid map[string]bool
+	// ObserveSettings is told what another device holds of a game, as its
+	// manifest arrives, to watch how the files left out as the game's
+	// settings change (daemon/detectsettings.go). Set by the daemon.
+	ObserveSettings func(game store.Game, peerID string, remote delta.Manifest)
 }
 
 // New creates an Engine.
@@ -563,6 +567,11 @@ func (e *Engine) SyncWithPeer(ctx context.Context, gameID string, peer Peer) (Re
 	// would propagate a deletion of the very file being protected.
 	ignoreRules := e.rulesFor(gameID)
 	unfilteredLocal, unfilteredRemote := localManifest, remoteData.Manifest
+	// How the files left out as the game's settings change on the other
+	// device (daemon/detectsettings.go).
+	if e.ObserveSettings != nil && len(unfilteredRemote.Files) > 0 {
+		e.ObserveSettings(game, peer.ID, unfilteredRemote)
+	}
 	// Filtered always, not only with rules: launcher files (delta.NeverSynced)
 	// are left out the same way.
 	localManifest = filterManifest(localManifest, ignoreRules)
@@ -2023,7 +2032,15 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 	if rootsErr != nil {
 		mirrorRoots = nil
 	}
-	if _, err := snapshot.ZipRoots(game.SavePath, mirrorRoots, zipPath); err != nil {
+	var captured []store.CapturedFile
+	if e.Snapshots != nil {
+		// Unchanged files copied from the newest snapshot, not compressed
+		// again: seconds rather than minutes for a large save (reuse.go).
+		_, captured, err = e.Snapshots.ArchiveSaveTo(gameID, game.ActiveBranch, zipPath)
+	} else {
+		_, captured, err = snapshot.ZipRootsCapturing(game.SavePath, mirrorRoots, zipPath)
+	}
+	if err != nil {
 		e.Log("warn", fmt.Sprintf("mirror snapshot zip failed: %v", err))
 		return
 	}
@@ -2032,7 +2049,7 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 		return
 	}
 
-	_ = e.Store.CreateSnapshot(store.Snapshot{
+	if err := e.Store.CreateSnapshot(store.Snapshot{
 		ID:           remoteSnap.ID,
 		GameID:       gameID,
 		BranchName:   game.ActiveBranch,
@@ -2041,7 +2058,11 @@ func (e *Engine) recordMirrorSnapshot(gameID string, game store.Game, peer Peer,
 		IsSystemAuto: true,
 		ZipPath:      zipPath,
 		SizeBytes:    info.Size(),
-	})
+	}); err == nil {
+		// What it holds, as for any snapshot: without it the next snapshot
+		// here could not reuse this one either.
+		_ = e.Store.RecordSnapshotFiles(remoteSnap.ID, captured)
+	}
 }
 
 // humanBytes formats a byte count as a short human-readable string.

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/opensave/opensave/internal/cloud"
 	"github.com/opensave/opensave/internal/daemon"
 	"github.com/opensave/opensave/internal/p2p/syncengine"
 	"github.com/opensave/opensave/internal/snapshot"
@@ -47,6 +48,7 @@ func (s *Server) routes(r chi.Router) {
 	r.Post("/api/games/{gameId}/link", s.handleLinkGame)
 	r.Get("/api/games/{gameId}/roots", s.handleListGameRoots)
 	r.Post("/api/games/{gameId}/roots", s.handleAddGameRoot)
+	r.Post("/api/games/{gameId}/suggested-settings", s.handleDecideSuggestedSettings)
 	r.Delete("/api/games/{gameId}/roots/{root}", s.handleRemoveGameRoot)
 	r.Delete("/api/games/{gameId}/alias/{aliasId}", s.handleUnlinkGame)
 
@@ -291,6 +293,14 @@ func (s *Server) applyCloudPatch(patch *cloudSyncPatch) error {
 		}
 		for k, v := range patch.CustomClientSecrets {
 			cfg.CustomClientSecrets[k] = v
+		}
+	}
+	// A local folder chosen now is the one meant: marked as the backup folder,
+	// so that later, a share that is not connected is told apart from it
+	// (cloud.MarkLocalFolder).
+	if cfg.Provider == "local" && (patch.URL != nil || patch.Provider != nil) {
+		if err := cloud.MarkLocalFolder(cfg.URL); err != nil {
+			return err
 		}
 	}
 	return s.Daemon.Store.UpdateCloudConfig(cfg)

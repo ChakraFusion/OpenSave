@@ -14,17 +14,18 @@
   const fly = gated(flyIn);
   import { cloudOffers, toast } from '../lib/stores.js';
   import { api } from '../lib/api.js';
+  import { t, segments } from '../lib/i18n.js';
   import { timeAgo } from '../lib/timeago.js';
   import CloudDownload from 'lucide-svelte/icons/cloud-download';
 
   let busy = '';
 
-  const where = {
+  $: where = {
     google_drive: 'Google Drive',
     onedrive: 'OneDrive',
     dropbox: 'Dropbox',
-    webdav: 'your WebDAV server',
-    local: 'your backup folder'
+    webdav: $t('cloudOffer.where.webdav'),
+    local: $t('cloudOffer.where.local')
   };
 
   const key = (o) => `${o.gameId}:${o.snapshotId}`;
@@ -34,7 +35,7 @@
     busy = key(offer);
     try {
       await api.post('/api/cloud/offers/accept', { gameId: offer.gameId, snapshotId: offer.snapshotId });
-      toast(`Now using ${offer.deviceName}'s save for “${offer.gameName}” — this device's is kept as a snapshot`, 'success');
+      toast($t('cloudOffer.acceptedToast', { device: offer.deviceName, game: offer.gameName }), 'success');
     } catch (e) {
       toast(e.message, 'error');
     } finally {
@@ -62,26 +63,24 @@
         <div class="offer-icon"><CloudDownload size={19} /></div>
         <div class="offer-body">
           <div class="offer-title">
-            <strong>{offer.deviceName}</strong> has a newer save for <strong>{offer.gameName}</strong>
+            {#each segments($t('cloudOffer.title'), { device: offer.deviceName, game: offer.gameName }, ['device', 'game']) as part}{#if part.bold}<strong>{part.text}</strong>{:else}{part.text}{/if}{/each}
           </div>
           <div class="offer-sub">
-            Saved {timeAgo(offer.savedAt)} · in {where[offer.provider] ?? 'your cloud backup'}
+            {$t('cloudOffer.sub', { when: timeAgo(offer.savedAt), place: where[offer.provider] ?? $t('cloudOffer.where.cloud') })}
           </div>
           {#if offer.diverged}
             <!-- Not "since the two last matched": two devices meeting through
                  the cloud for the first time never matched at all, and that
                  is the commonest way to see this card. -->
             <div class="offer-warn">
-              This device's save has changes of its own that aren't in {offer.deviceName}'s.
-              Bringing theirs replaces them — this device's save is kept as a snapshot you can go
-              back to.
+              {$t('cloudOffer.diverged', { device: offer.deviceName })}
             </div>
           {/if}
         </div>
         <div class="offer-actions">
-          <button class="btn small" disabled={!!busy} on:click={() => later(offer)}>Not now</button>
+          <button class="btn small" disabled={!!busy} on:click={() => later(offer)}>{$t('cloudOffer.notNow')}</button>
           <button class="btn small primary" disabled={!!busy} on:click={() => bring(offer)}>
-            {busy === key(offer) ? 'Bringing…' : 'Bring it here'}
+            {busy === key(offer) ? $t('cloudOffer.bringing') : $t('cloudOffer.bring')}
           </button>
         </div>
       </div>

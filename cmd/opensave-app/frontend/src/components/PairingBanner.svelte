@@ -6,6 +6,7 @@
   import { pairingRequests, toast } from '../lib/stores.js';
   import { api } from '../lib/api.js';
   import { demandAttention } from '../lib/notify.js';
+  import { t, segments } from '../lib/i18n.js';
   import Link from 'lucide-svelte/icons/link';
 
   let busy = false;
@@ -17,14 +18,14 @@
   function onRequests(list) {
     const fresh = list.filter((r) => !seen.has(r.peerId));
     if (fresh.length > 0) {
-      const who = fresh[0].deviceName ?? 'A device';
-      demandAttention('pairing', { title: `${who} wants to pair`, body: 'Open OpenSave to accept or decline.', open: { view: 'devices', params: {} } });
-      toast(`${who} wants to pair`, 'info');
+      const who = fresh[0].deviceName ?? $t('pairing.aDevice');
+      demandAttention('pairing', { title: $t('pairing.wantsToPair', { device: who }), body: $t('pairing.openToAccept'), open: { view: 'devices', params: {} } });
+      toast($t('pairing.wantsToPair', { device: who }), 'info');
     }
     seen = new Set(list.map((r) => r.peerId));
   }
 
-  const approve = (req) => act('/api/peers/approve', req, `Paired with ${req.deviceName}`);
+  const approve = (req) => act('/api/peers/approve', req, $t('pairing.pairedWith', { device: req.deviceName }));
   const reject = (req) => act('/api/peers/reject', req, null);
 
   async function act(path, req, okMsg) {
@@ -39,8 +40,6 @@
       busy = false;
     }
   }
-
-  const source = (req) => (req.isWan ? 'over the internet' : `from ${req.address}`);
 </script>
 
 {#if $pairingRequests.length > 0}
@@ -49,12 +48,14 @@
       <div class="pair-card" transition:fly={{ y: -20, duration: 200 }}>
         <div class="pair-icon"><Link size={19} /></div>
         <div class="pair-body">
-          <div class="pair-title"><strong>{req.deviceName ?? 'A device'}</strong> wants to pair</div>
-          <div class="pair-sub">{source(req)} · approve to start syncing your saves</div>
+          <div class="pair-title">
+            {#each segments($t('pairing.wantsToPair'), { device: req.deviceName ?? $t('pairing.aDevice') }, ['device']) as part}{#if part.bold}<strong>{part.text}</strong>{:else}{part.text}{/if}{/each}
+          </div>
+          <div class="pair-sub">{req.isWan ? $t('pairing.subInternet') : $t('pairing.subFrom', { address: req.address })}</div>
         </div>
         <div class="pair-actions">
-          <button class="btn small" disabled={busy} on:click={() => reject(req)}>Ignore</button>
-          <button class="btn small primary" disabled={busy} on:click={() => approve(req)}>Approve</button>
+          <button class="btn small" disabled={busy} on:click={() => reject(req)}>{$t('pairing.ignore')}</button>
+          <button class="btn small primary" disabled={busy} on:click={() => approve(req)}>{$t('pairing.approve')}</button>
         </div>
       </div>
     {/each}
