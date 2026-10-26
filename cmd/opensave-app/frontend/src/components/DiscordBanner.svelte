@@ -5,6 +5,7 @@
   // clickable version, shown above the notes where the announcement is.
   import { native } from '../lib/api.js';
   import { DISCORD_URL } from '../lib/links.js';
+  import { t } from '../lib/i18n.js';
 
   export let compact = false;
 </script>
@@ -16,10 +17,10 @@
     </svg>
   </span>
   <span class="text">
-    <span class="title">The OpenSave Discord is open</span>
-    <span class="sub">Get help, report a bug, or see what's coming before it ships.</span>
+    <span class="title">{$t('discord.title')}</span>
+    <span class="sub">{$t('discord.sub')}</span>
   </span>
-  <span class="cta">Join <span class="arrow" aria-hidden="true">→</span></span>
+  <span class="cta">{$t('discord.join')} <span class="arrow" aria-hidden="true">→</span></span>
 </button>
 
 <style>
