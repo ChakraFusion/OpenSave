@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -87,4 +88,41 @@ func (d *Daemon) markTracked(m *presets.GameMatch) {
 			return
 		}
 	}
+}
+
+func gameDBMark(gameID string) string { return "gamedb:" + gameID }
+
+// linkToGameDatabase gives a game tracked without an App ID the one the game
+// database knows its folder by, strictly (IdentifyFolderStrictly): a folder
+// tracked by hand, or found under a name of the scan's own making ("Pal
+// (Epic/Unreal Save)"), gets cover art, launching, session detection and its
+// device settings. The name is the user's and is left as it is.
+//
+// Once per game and folder (a mark): an App ID someone took away again is not
+// put back at the next start.
+func (d *Daemon) linkToGameDatabase(game store.Game) store.Game {
+	if game.AppID != "" || game.SavePath == "" {
+		return game
+	}
+	if d.Store.Mark(gameDBMark(game.ID)) == game.SavePath {
+		return game
+	}
+	_ = d.Store.SetMark(gameDBMark(game.ID), game.SavePath)
+	m, ok := d.gameDB().IdentifyFolderStrictly(game.SavePath)
+	if !ok || m.AppID == "" {
+		return game
+	}
+	game.AppID = m.AppID
+	if game.CoverURL == "" {
+		game.CoverURL = SteamCoverURL(m.AppID)
+	}
+	if err := d.Store.UpdateGame(game); err != nil {
+		return game
+	}
+	d.Log.Log("info", fmt.Sprintf("%q is %s in the game database: cover art, its settings and seeing it played come from there", game.Name, m.Name))
+	d.exclusionsChanged(game)
+	if d.OnGameChanged != nil {
+		d.OnGameChanged(game.ID)
+	}
+	return game
 }

@@ -51,6 +51,9 @@ func (d *Daemon) detectSettingsDue(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
+		// A game tracked without an App ID gets the game database's first, if
+		// its folder says which game it is: its settings come from there too.
+		game = d.linkToGameDatabase(game)
 		mark := d.Store.Mark(settingsDetectMark(game.ID))
 		want := detectorVersion + "|" + game.SavePath
 		if prev, at, ok := strings.Cut(mark, "@"); ok && prev == want {
