@@ -44,6 +44,13 @@ func newCloudDevice(t *testing.T, name, cloudDir string) *cloudDevice {
 	cfg.Enabled = true
 	cfg.Provider = "local"
 	cfg.URL = cloudDir
+	// Chosen as the backup folder, as Cloud Backup's settings do — unless the
+	// test starts with the cloud out of reach (a file where the folder goes).
+	if info, err := os.Stat(cloudDir); err != nil || info.IsDir() {
+		if err := cloud.MarkLocalFolder(cloudDir); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := d.Store.UpdateCloudConfig(cfg); err != nil {
 		t.Fatal(err)
 	}

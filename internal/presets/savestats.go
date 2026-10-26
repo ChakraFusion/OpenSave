@@ -152,6 +152,12 @@ func measureOne(path string, deadline time.Time) (count int, bytes int64, latest
 		if d.IsDir() {
 			return nil
 		}
+		// Not part of any save (Steam's remotecache.vdf): a folder holding
+		// only that is a game Steam knows of, not a save, and was tracked as
+		// one — twenty-odd games with nothing to sync.
+		if delta.NeverSynced(d.Name()) {
+			return nil
+		}
 		fi, err := d.Info()
 		if err != nil {
 			return nil

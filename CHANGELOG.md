@@ -146,6 +146,17 @@ All notable changes to OpenSave are documented here. This project adheres to
 - **Turning auto-sync on watches a game's extra save folders too.** Until
   now only its main folder was watched, so a change in another of its
   folders waited for the next sync. (#108, issue #88)
+- **A backup folder that is not connected is no longer written to.** With a
+  folder on a network share or removable drive as the backup destination, a
+  backup taken while it was not connected went onto this PC's own disk and
+  counted as done. OpenSave now marks the folder when you choose it, says
+  when it is not available, and sends the backup once it is back. (#119,
+  issue #46)
+- **A device joining with an old copy of a save is not asked which to
+  keep.** When one device's save is a state the other already had, from a
+  backup or an earlier install, it simply takes the newer save. (#106)
+- **A Steam folder holding only Steam's own file is not offered as a game
+  with saves.** (#115)
 
 ### Changed
 
@@ -176,14 +187,19 @@ All notable changes to OpenSave are documented here. This project adheres to
   a click. A move now stays in the part of the window it starts in — the
   sidebar, the page, the title bar — and only crosses into another at its
   edge. (#101)
+- **Faster after receiving a large save.** The snapshot taken once a save
+  arrives from another device copies the files that did not change instead
+  of compressing them all again; with a save of a quarter-million files the
+  app sat at 100% for minutes. (#116)
 
 ### Added
 
-- **Chinese, Simplified and Traditional,** for the Home screen, the title
-  bar, the status bar, notifications and the Transfers panel, and a Language
+- **Chinese, Simplified and Traditional,** for the Home screen, the sidebar,
+  the title bar, the status bar, notifications, banners, the command palette
+  and the Transfers panel, and a Language
   choice in Settings → Appearance, which follows the system by default:
   Taiwan, Hong Kong and Macau get Traditional, the rest Simplified. (#48,
-  #77, from #19 and #20)
+  #77, #112, from #19 and #20)
 - **Track a game from the save catalogue.** "Track game" beside "Track
   folder" finds a game by name, by the program you pick, or one that is
   running, and tracks it with its name, cover and save folder. A folder

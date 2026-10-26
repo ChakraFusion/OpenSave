@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"fmt"
+	"path/filepath"
 	"testing"
 )
 
@@ -65,5 +66,31 @@ func TestSnapshotReusesUnchangedFiles(t *testing.T) {
 	}
 	if len(files) != 51 {
 		t.Errorf("second snapshot records %d files, want 51", len(files))
+	}
+}
+
+// The archive written for a snapshot recorded after a pull reuses the
+// unchanged files of the branch's newest snapshot too, and says what it holds.
+func TestArchiveSaveToReusesUnchangedFiles(t *testing.T) {
+	env := setup(t)
+	for i := 0; i < 20; i++ {
+		write(t, env.saveDir, fmt.Sprintf("map/chunk_%02d.bin", i), fmt.Sprintf("chunk %d ........................", i))
+	}
+	if _, err := env.mgr.Create("game1", "before the pull", false); err != nil {
+		t.Fatal(err)
+	}
+	// What a pull wrote: one chunk changed.
+	write(t, env.saveDir, "map/chunk_05.bin", "from the other device")
+
+	zipPath := filepath.Join(t.TempDir(), "mirror.zip")
+	skipped, captured, err := env.mgr.ArchiveSaveTo("game1", "main", zipPath)
+	if err != nil || len(skipped) > 0 {
+		t.Fatalf("archive: skipped=%v err=%v", skipped, err)
+	}
+	if got := lastReused.Load(); got != 19 {
+		t.Errorf("copied %d unchanged entries, want 19", got)
+	}
+	if len(captured) != 20 {
+		t.Errorf("recorded %d files, want 20", len(captured))
 	}
 }
