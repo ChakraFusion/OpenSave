@@ -305,3 +305,54 @@ func TestActiveProcesses_QuietForLongIsNotTheGame(t *testing.T) {
 		t.Error("a game using the processor was dropped")
 	}
 }
+
+// A session whose save has not changed for quietSessionLimit is taken as over,
+// whatever is still running: otherwise a process left behind that still ticks
+// over would hold the save back from syncing for good. It does not start
+// again at once, and the save changing again starts a new one.
+func TestQuietSession_EndsAfterAnHourWithoutASave(t *testing.T) {
+	d := newTestDaemon(t)
+	g, _ := sessionGame(t, d, "quiet")
+	t0 := time.Now()
+	cpu := time.Duration(0)
+	d.sessions.list = func() ([]sessions.Proc, error) {
+		cpu += time.Second // busy enough to count, every poll
+		return []sessions.Proc{{PID: 7, Exe: g.ExePath, Measured: true, CPU: cpu}}, nil
+	}
+	d.pollSessionsAt(t0)
+	if d.PlayingSince(g.ID).IsZero() {
+		t.Fatal("setup: the game was not seen running")
+	}
+
+	// It saved half an hour in: still played at the hour.
+	d.sessions.mu.Lock()
+	if d.sessions.saveChanged == nil {
+		d.sessions.saveChanged = map[string]time.Time{}
+	}
+	d.sessions.saveChanged[g.ID] = t0.Add(30 * time.Minute)
+	d.sessions.mu.Unlock()
+	d.pollSessionsAt(t0.Add(61 * time.Minute))
+	if d.PlayingSince(g.ID).IsZero() {
+		t.Fatal("a session that saved half an hour ago was ended")
+	}
+
+	// No save for an hour since: over, and not started again by the process
+	// still there.
+	d.pollSessionsAt(t0.Add(91 * time.Minute))
+	if !d.PlayingSince(g.ID).IsZero() {
+		t.Fatal("a session with no save for an hour still holds the save")
+	}
+	d.pollSessionsAt(t0.Add(92 * time.Minute))
+	if !d.PlayingSince(g.ID).IsZero() {
+		t.Error("the process still running started the session again at once")
+	}
+
+	// The game saves again: being played after all.
+	if err := d.Store.SetLastManifestHash(g.ID, "a save made since"); err != nil {
+		t.Fatal(err)
+	}
+	d.pollSessionsAt(t0.Add(93 * time.Minute))
+	if d.PlayingSince(g.ID).IsZero() {
+		t.Error("the game saved again but no session started")
+	}
+}

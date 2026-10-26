@@ -45,6 +45,11 @@ type sessionState struct {
 	// cpu: each process's processor time at the last poll, and when it last
 	// used any (activeProcesses).
 	cpu map[int]procSeen
+	// saveChanged: when each playing game's save last changed; quietEnded: games
+	// whose session was ended for a save that stopped changing, by the save
+	// as it was then, while their process is still there (endQuietSessions).
+	saveChanged map[string]time.Time
+	quietEnded  map[string]string
 	// checkpoint is when each playing game last had a snapshot taken while
 	// it was played (holdSnapshotWhilePlaying).
 	checkpoint map[string]time.Time
@@ -85,20 +90,23 @@ func (d *Daemon) PlayingSince(gameID string) time.Time {
 }
 
 // PollSessions looks at what is running once.
-func (d *Daemon) PollSessions() {
+func (d *Daemon) PollSessions() { d.pollSessionsAt(time.Now()) }
+
+func (d *Daemon) pollSessionsAt(now time.Time) {
 	targets, learn, err := d.sessionTargets()
 	if err != nil || len(targets) == 0 {
-		d.sessions.tracker.Poll(nil, time.Now())
+		d.sessions.tracker.Poll(nil, now)
 		return
 	}
 	procs, err := d.sessions.list()
 	if err != nil {
 		return
 	}
-	procs = d.activeProcesses(procs)
+	procs = d.activeProcessesAt(procs, now)
 	running := sessions.Running(procs, targets)
 	d.notePrograms(procs, targets, learn, running)
-	d.sessions.tracker.Poll(running, time.Now())
+	d.endQuietSessions(running, now)
+	d.sessions.tracker.Poll(running, now)
 }
 
 func (d *Daemon) runSessions(ctx context.Context) {
@@ -373,6 +381,7 @@ func (d *Daemon) sessionEnded(gameID string, started, ended time.Time) {
 	startHash := d.sessions.startHash[gameID]
 	delete(d.sessions.startHash, gameID)
 	delete(d.sessions.checkpoint, gameID)
+	delete(d.sessions.saveChanged, gameID)
 	seen := d.sessions.seen[gameID]
 	delete(d.sessions.seen, gameID)
 	d.sessions.mu.Unlock()
@@ -484,6 +493,10 @@ func (d *Daemon) holdSnapshotWhilePlaying(gameID string) bool {
 		d.sessions.checkpoint = map[string]time.Time{}
 	}
 	now := time.Now()
+	if d.sessions.saveChanged == nil {
+		d.sessions.saveChanged = map[string]time.Time{}
+	}
+	d.sessions.saveChanged[gameID] = now // the game is saving: being played (endQuietSessions)
 	if !checkpointDue(since, d.sessions.checkpoint[gameID], now) {
 		return true
 	}
@@ -554,4 +567,66 @@ func (d *Daemon) activeProcessesAt(procs []sessions.Proc, now time.Time) []sessi
 	}
 	d.sessions.cpu = next
 	return out
+}
+
+// quietSessionLimit is how long a session may go without its save changing
+// before it is taken as over. While a game is played its save is held back
+// from syncing (syncengine/playing.go), so a session that never ended would
+// hold the save for good: a process left behind that still ticks over now
+// and then — a crash reporter, a launcher's helper — counts as running
+// however long it lingers (activeProcesses only lets go of one doing nothing).
+// A game being played saves within an hour; ended, the session is kept and
+// synced as when the game closes, and the save changing again starts a new
+// one.
+const quietSessionLimit = time.Hour
+
+// endQuietSessions ends the sessions whose save has not changed for
+// quietSessionLimit, and keeps them from starting again at once: running is
+// the games seen running this poll, and a game ended this way is taken out of
+// it while its save is still as it was then. Called before the tracker polls.
+func (d *Daemon) endQuietSessions(running map[string]int, now time.Time) {
+	playing := d.sessions.tracker.Playing()
+	lastHash := func(gameID string) string {
+		if g, err := d.Store.GetGame(gameID); err == nil {
+			return g.LastManifestHash
+		}
+		return ""
+	}
+
+	var end []string
+	d.sessions.mu.Lock()
+	if d.sessions.quietEnded == nil {
+		d.sessions.quietEnded = map[string]string{}
+	}
+	for gameID, hash := range d.sessions.quietEnded {
+		if _, still := running[gameID]; !still {
+			delete(d.sessions.quietEnded, gameID) // gone: its next start is a session again
+		} else if lastHash(gameID) != hash {
+			delete(d.sessions.quietEnded, gameID) // saved since: being played after all
+		} else {
+			delete(running, gameID)
+		}
+	}
+	for gameID, since := range playing {
+		last := since
+		if changed := d.sessions.saveChanged[gameID]; changed.After(last) {
+			last = changed
+		}
+		if now.Sub(last) >= quietSessionLimit {
+			d.sessions.quietEnded[gameID] = lastHash(gameID)
+			delete(running, gameID)
+			end = append(end, gameID)
+		}
+	}
+	d.sessions.mu.Unlock()
+
+	for _, gameID := range end {
+		name := gameID
+		if g, err := d.Store.GetGame(gameID); err == nil {
+			name = g.Name
+		}
+		d.Log.Log("info", fmt.Sprintf("%q has not saved for %s while seen running: taken as no longer played, so its save is kept and synced",
+			name, quietSessionLimit))
+		d.sessions.tracker.Finish(gameID, now)
+	}
 }
