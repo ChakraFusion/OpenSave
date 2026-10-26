@@ -430,3 +430,28 @@ func TestInstallFolderNames(t *testing.T) {
 		}
 	}
 }
+
+// A game whose sessions this device sees is not held while it is closed: a
+// change then is not play, and is sent at once. Nor is one just after a
+// session's end, the game writing as it closes. Only a game whose program is
+// not seen is held as a stretch.
+func TestActivity_ARecognisedGameIsNotHeldWhileClosed(t *testing.T) {
+	d := newTestDaemon(t)
+	g, _ := sessionGame(t, d, "recognised")
+	start := time.Now()
+	d.sessions.tracker.Begin(g.ID, start)
+	d.sessions.tracker.Finish(g.ID, start.Add(40*time.Minute))
+	if d.holdSnapshotWhilePlaying(g.ID) || d.changingNow(g.ID) {
+		t.Error("a change just after the session's end was held")
+	}
+	st, _ := d.Store.PlayStatsFor(g.ID)
+	if st.Sessions == 0 {
+		t.Skip("the session was too short to be recorded here")
+	}
+	d.sessions.mu.Lock()
+	d.sessions.endedAt[g.ID] = start.Add(-time.Hour) // long ago
+	d.sessions.mu.Unlock()
+	if d.holdSnapshotWhilePlaying(g.ID) || d.changingNow(g.ID) {
+		t.Error("a change to a recognised game, closed, was held as play")
+	}
+}

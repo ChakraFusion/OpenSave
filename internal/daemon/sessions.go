@@ -45,6 +45,8 @@ type sessionState struct {
 	// cpu: each process's processor time at the last poll, and when it last
 	// used any (activeProcesses).
 	cpu map[int]procSeen
+	// endedAt: when each game's last session ended (noteActivity).
+	endedAt map[string]time.Time
 	// saveChanged: when each playing game's save last changed; quiet: where
 	// each one's quiet stretch began; quietEnded: games whose session was
 	// ended as quiet, by the save as it was then, while their process is still
@@ -406,6 +408,10 @@ func (d *Daemon) sessionEnded(gameID string, started, ended time.Time) {
 	delete(d.sessions.startHash, gameID)
 	delete(d.sessions.checkpoint, gameID)
 	delete(d.sessions.saveChanged, gameID)
+	if d.sessions.endedAt == nil {
+		d.sessions.endedAt = map[string]time.Time{}
+	}
+	d.sessions.endedAt[gameID] = ended
 	seen := d.sessions.seen[gameID]
 	delete(d.sessions.seen, gameID)
 	d.sessions.mu.Unlock()
@@ -829,6 +835,13 @@ func (d *Daemon) noteActivity(gameID string) (time.Time, bool) {
 	if d.opts.SyncEveryChange {
 		return now, false
 	}
+	// A game whose sessions are seen here, while none is open: a change is
+	// not play, and is sent at once (recognised). So is one just after a
+	// session's end: the game writing as it closes.
+	if d.sessions.tracker.Playing()[gameID].IsZero() && d.sessions.active[gameID] == nil &&
+		(now.Sub(d.sessions.endedAt[gameID]) < sessionEndGrace || d.recognisedLocked(gameID)) {
+		return now, false
+	}
 	a := d.sessions.active[gameID]
 	if a == nil {
 		a = &activity{start: now, changes: 1}
@@ -1014,4 +1027,21 @@ func (d *Daemon) playingHere(gameID string) bool {
 		return true
 	}
 	return !d.opts.SyncEveryChange && d.Watcher != nil && d.Watcher.ChangePending(gameID)
+}
+
+// sessionEndGrace is how long after a session ends a change to its save is
+// still the session's — the game writing as it closes — and sent at once.
+const sessionEndGrace = 2 * time.Minute
+
+// recognisedLocked reports a game whose sessions this device sees: one has
+// been recorded, or the folder it ran from is known. While no session of such
+// a game is open, a change to its save is not play, and is sent at once;
+// only a game whose program is not seen is held as a stretch (noteActivity).
+// Called with sessions.mu held.
+func (d *Daemon) recognisedLocked(gameID string) bool {
+	if dir := d.Store.Mark(installFolderMark(gameID)); dir != "" {
+		return true
+	}
+	st, err := d.Store.PlayStatsFor(gameID)
+	return err == nil && st.Sessions > 0
 }
