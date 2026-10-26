@@ -114,9 +114,39 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 	rules := e.rulesFor(gameID)
 	remote := sr.remote
 	unfilteredLocal, unfilteredRemote := local, remote
-	if !rules.Empty() {
-		local = filterManifest(local, rules)
-		remote = filterManifest(remote, rules)
+	local = filterManifest(local, rules)
+	remote = filterManifest(remote, rules)
+
+	// A push is proven once the peer is seen holding exactly what was handed
+	// over, whatever became of its report — the repair the main folder makes
+	// (see SyncWithPeer), and for the same reason. The push was recorded below
+	// and nothing ever read it, so a lost report left this location's base
+	// behind both devices, and the next edit on one of them read as both
+	// having moved: a conflict over a change only one device made.
+	//
+	// The lineage is repaired with it, before anything is classified: the
+	// report is also what records which files both sides hold. Without that,
+	// a file deleted here after a lost report read as one the peer had and
+	// this device never did, and it was fetched back — the deletion undone
+	// (TestMultiRootScenario_ADeletionSurvivesALostReport). Both held exactly
+	// the pushed state, so its files are the lineage.
+	//
+	// Not while the game is held as emptied (hold.go): the lineage is then
+	// kept on purpose. "Put them back" with no snapshot takes the files out of
+	// it so that the next sync fetches them; written back here, they read as
+	// deleted on this device, and the deletions went to the peer — both
+	// devices lost the location's files
+	// (TestMultiRootScenario_PutBackOfAnEmptiedLocationSurvivesALostReport).
+	//
+	// Both hashes are of the filtered view, which is what the push recorded.
+	if pushed := e.Store.GetPushedHashForRoot(gameID, peer.ID, sr.root.Name); pushed != "" {
+		if remoteHash := remote.RootHash(delta.PrimaryRoot); remoteHash == pushed &&
+			e.Store.GetAgreedHashForRoot(gameID, peer.ID, sr.root.Name) != remoteHash {
+			if _, held, err := e.Store.GetDeletionHold(gameID); err == nil && !held {
+				e.persistRootLineage(gameID, peer.ID, sr.root.Name, remote, remote)
+			}
+			_ = e.Store.SetAgreedHashForRoot(gameID, peer.ID, sr.root.Name, remoteHash)
+		}
 	}
 
 	fileList, dirList, err := e.Store.GetSyncStateForRoot(gameID, peer.ID, sr.root.Name)
@@ -124,15 +154,24 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 		return err
 	}
 	lineageFiles, lineageDirs := toSet(fileList), toSet(dirList)
-	if !rules.Empty() {
-		// Without this an exclusion added to a location that had already
-		// synced reads as "we both had this file and now I do not", and the
-		// deletion travels to the peer — destroying the copy the rule was
-		// written to protect.
-		lineageFiles = filterLineage(lineageFiles, rules)
-		lineageDirs = filterLineage(lineageDirs, rules)
+	// Without this an exclusion added to a location that had already
+	// synced reads as "we both had this file and now I do not", and the
+	// deletion travels to the peer — destroying the copy the rule was
+	// written to protect.
+	lineageFiles = filterLineage(lineageFiles, rules)
+	lineageDirs = filterLineage(lineageDirs, rules)
+	// And the deletions this device recorded in this location, as the main
+	// folder uses them (see SyncWithPeer): a recorded deletion does not depend
+	// on the lineage surviving, and is acted on only while the peer's copy is
+	// still exactly what was deleted.
+	deleted := e.recordedDeletions(gameID, sr.root.Name)
+	for path := range deleted {
+		if excluded(rules, path) {
+			delete(deleted, path)
+		}
 	}
-	decision := Compute(local, remote, lineageFiles, lineageDirs)
+	decision := ComputeWithDeletions(local, remote, lineageFiles, lineageDirs,
+		e.Store.GetAgreedHashForRoot(gameID, peer.ID, sr.root.Name), deleted)
 
 	if !decision.HasChanges() {
 		e.persistRootLineage(gameID, peer.ID, sr.root.Name, local, remote)
@@ -151,28 +190,15 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 	// point of detecting a conflict is that nobody's work disappears, and a
 	// second detector that is nearly right is worse than none, because it
 	// looks like the work has been done.
+	// (A push proven by the peer holding it was banked as the base above.)
 	base := e.Store.GetAgreedHashForRoot(gameID, peer.ID, sr.root.Name)
-	// A push is proven once the peer is seen holding exactly what was handed
-	// over, whatever became of its report — the repair the main folder makes
-	// (see SyncWithPeer), and for the same reason. The push was recorded below
-	// and nothing ever read it, so a lost report left this location's base
-	// behind both devices, and the next edit on one of them read as both
-	// having moved: a conflict over a change only one device made.
-	//
-	// Both hashes are of the filtered view, which is what the push recorded.
-	if pushed := e.Store.GetPushedHashForRoot(gameID, peer.ID, sr.root.Name); pushed != "" {
-		if remoteHash := remote.RootHash(delta.PrimaryRoot); base != remoteHash && remoteHash == pushed {
-			_ = e.Store.SetAgreedHashForRoot(gameID, peer.ID, sr.root.Name, remoteHash)
-			base = remoteHash
-		}
-	}
 	// A base recorded before the rules existed was hashed over everything, so
 	// it can equal neither filtered side — and a base matching neither reads
 	// as both having moved, which is a conflict on the first sync after anyone
 	// adds a rule. If a side's UNFILTERED state still hashes to the base then
 	// that side has not changed, and its filtered hash says the same thing in
 	// today's terms. Same translation the main folder does.
-	if !rules.Empty() && base != "" {
+	if base != "" {
 		switch base {
 		case unfilteredLocal.RootHash(delta.PrimaryRoot):
 			base = local.RootHash(delta.PrimaryRoot)
@@ -268,6 +294,22 @@ func (e *Engine) syncOneRoot(ctx context.Context, gameID string, game store.Game
 
 func (e *Engine) persistRootLineage(gameID, peerID, root string, local, remote delta.Manifest) {
 	files, dirs := IntersectLineage(local, remote)
+	// As persistLineage does for the main folder: a path both held before
+	// that one side holds no longer is a deletion in flight, and its record is
+	// what lets the next sync send it on rather than fetch the file back. The
+	// refresh after a peer's report runs in the background, so a file deleted
+	// here before it ran dropped out of the record — and came back
+	// (TestMultiRootScenario_ADeletionSurvivesALateRefresh).
+	if oldFiles, oldDirs, err := e.Store.GetSyncStateForRoot(gameID, peerID, root); err == nil {
+		files = keepPendingDeletions(files, oldFiles, local.Files, remote.Files)
+		dirs = keepPendingDirDeletions(dirs, oldDirs, local.Dirs, remote.Dirs)
+	}
+	// And excluded paths stay out of it, as in the main folder: the refresh
+	// rebuilds this from unfiltered manifests. Always filtered, not only with
+	// rules: launcher files (delta.NeverSynced) are left out the same way.
+	rules := e.rulesFor(gameID)
+	files = filterPathList(files, rules)
+	dirs = filterPathList(dirs, rules)
 	if err := e.Store.SetSyncStateForRoot(gameID, peerID, root, files, dirs); err != nil {
 		e.Log("warn", fmt.Sprintf("persist lineage for the %q location failed: %v", root, err))
 	}

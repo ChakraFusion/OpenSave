@@ -197,6 +197,13 @@ func TestCloud_SyncLocalRepairsATruncatedRemoteCopy(t *testing.T) {
 
 	a.WriteSave("slot1.sav", strings.Repeat("save data ", 500))
 	gameID := a.TrackGame("Repair Game")
+	// A change first: a snapshot of the same files as the one tracking took
+	// would be that one (snapshot/content.go). After tracking's snapshot, which
+	// runs in the background: made before it, the change is in that one too,
+	// the two hold the same files, and the older is removed for the newer —
+	// whose cloud copy, picked below, no local snapshot then repairs.
+	waitForWatch(t, a, gameID)
+	a.WriteSave("slot1.sav", strings.Repeat("more save data ", 500))
 	a.API(http.MethodPost, "/api/games/"+gameID+"/snapshot", map[string]any{"comment": "full"}, nil)
 
 	name := waitForUpload(t, cloudDir)[0]

@@ -3,6 +3,65 @@
 All notable changes to OpenSave are documented here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [2.4.1] — 2026-10-02
+
+A security update: please install it on every device. A paired device could
+make the one it synced with track any folder and share it; now a game from
+another device is only tracked by itself at a folder this one already knows
+as a save folder, and requests for save data must be signed. Devices still on
+2.3 need updating to keep syncing, and devices paired over the internet before
+2.4.0 need to be paired again.
+
+### Security
+
+- **A paired device can no longer reach folders that aren't game saves
+  (CVE-2026-103398).** When another device synced a game this one didn't
+  have yet, OpenSave tracked it at whatever folder that device named, and
+  then served that folder's files to it and accepted files into it. Only
+  whole drives, profiles and system folders were refused, so a malicious or
+  impersonated device could read or overwrite other files you can access.
+  Now a game arriving from another device is tracked by itself only at a
+  folder this device's own scan recognises as a save folder, or inside an
+  emulator's save folder here. Anything else appears on Home as offered,
+  for you to place in a folder you choose. Reported by mansurmavlankulov.
+- **Requests for save data must now be signed with the key from pairing.**
+  A device that had never signed a request, and pairings made over the
+  internet before 2.4.0 (which never kept a key), were let through on their
+  word or their network address. Both are now refused. **Update every
+  device to 2.4.1**, and if two devices were paired over the internet before
+  2.4.0, unpair them and pair them again. Unpairing still works without a
+  signature, so an old pairing can always be cleared.
+
+### Fixed
+
+- **Restoring onto a new PC no longer holds a game back for nothing.** After
+  a backup from the old PC was restored, giving one of a game's other save
+  locations its folder on the new machine read as every file there deleted:
+  the game was held back, asking whether that was meant, instead of fetching
+  the files from your other devices. What a location held before now counts
+  only from when it got the folder it has.
+- **The first launch after boot no longer fails to reach OpenSave.** With a
+  large library, starting up takes several seconds on a cold disk, and the
+  window asked for OpenSave's address before there was one: it said it
+  "can't reach OpenSave's background service at http://" and Retry worked.
+  The window now waits for startup to finish. Reported with the cause
+  pinned down in GitHub #17.
+- **A game another device brings over gets a history here too.** A game
+  tracked because a paired device synced it got no first snapshot and no
+  watch. Where the save was already the same on both devices, as Steam Cloud
+  often leaves them, nothing was ever pulled, so that device never had a
+  snapshot of the game at all; and until the periodic check came round, a
+  change made there was not sent on. It now gets both, as a game tracked by
+  hand does (GitHub #16).
+- **A save of a great many files no longer wears the machine down.** A
+  device coming back online started a sync of every game once for each
+  request it sent — some twenty at once — instead of once; a folder was walked
+  again by everything that asked about it at the same moment, where they now
+  share one walk; and hashing allocated a fresh buffer for every file, which
+  for a Project Zomboid save of 238,000 files came to gigabytes per pass.
+  2.4's hash cache had already stopped most of the re-reading behind the
+  report (GitHub #15).
+
 ## [2.4.0] — 2026-09-30
 
 Everything from the four 2.4 betas below, now stable. Coming from 2.3.1, it

@@ -194,3 +194,22 @@ func (d *Daemon) AnswerEmptied(gameID, answer string) (EmptiedAnswer, error) {
 	})
 	return out, nil
 }
+
+// snapshotPutBack keeps a save once every file of it is back after it was
+// emptied: nothing was snapshotted while it was empty or part-way back.
+func (d *Daemon) snapshotPutBack(gameID string) {
+	game, err := d.Store.GetGame(gameID)
+	if err != nil {
+		return
+	}
+	if _, err := d.Snapshots.Create(gameID, "Put back", true); err != nil {
+		d.Log.Log("warn", fmt.Sprintf("could not keep %q as it was put back: %v", game.Name, err))
+		return
+	}
+	if hash, err := d.currentContentHash(game); err == nil {
+		_ = d.Store.SetLastManifestHash(gameID, hash)
+	}
+	if d.OnGameChanged != nil {
+		d.OnGameChanged(gameID)
+	}
+}

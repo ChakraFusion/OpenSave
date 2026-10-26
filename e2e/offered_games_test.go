@@ -49,6 +49,9 @@ func TestOfferedGames_DefaultStillAutoTracks(t *testing.T) {
 
 	a.WriteSave("slot1.sav", "from A")
 	gameID := a.TrackGame("AutoTracked Game")
+	// A folder B's own scan knows: tracked by itself. One it does not is
+	// offered instead (next test).
+	b.KnowPeersSaveFolder(a.SaveDir)
 	syncTo(a, gameID, b.NodeID())
 
 	var games []store.Game
@@ -73,6 +76,30 @@ func TestOfferedGames_DefaultStillAutoTracks(t *testing.T) {
 	if len(offers) != 0 {
 		t.Errorf("auto-tracking also recorded %d offer(s); the two paths must be "+
 			"exclusive or the user is asked about a game already syncing", len(offers))
+	}
+}
+
+// Even by default, a game at a folder this device does not know as a save is
+// offered, not tracked: the peer names the folder, and that is not enough to
+// make this device read and write it (CVE-2026-103398).
+func TestOfferedGames_DefaultOffersAFolderThisDeviceDoesNotKnow(t *testing.T) {
+	a := testutil.NewTestDaemon(t, "Offer-Unknown-A")
+	b := testutil.NewTestDaemon(t, "Offer-Unknown-B")
+	a.PairWith(b)
+
+	a.WriteSave("slot1.sav", "from A")
+	gameID := a.TrackGame("Unknown Folder Game")
+	syncTo(a, gameID, b.NodeID())
+
+	if !testutil.WaitFor(30*time.Second, func() bool {
+		offers, _ := b.Daemon.Store.ListOfferedGames()
+		return len(offers) == 1 && offers[0].GameID == gameID
+	}) {
+		offers, _ := b.Daemon.Store.ListOfferedGames()
+		t.Fatalf("the game was not offered on B; offers %+v", offers)
+	}
+	if g, err := b.Daemon.Store.GetGame(gameID); err == nil {
+		t.Errorf("B tracked the game at %s, a folder it does not know as a save", g.SavePath)
 	}
 }
 

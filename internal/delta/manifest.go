@@ -10,11 +10,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/opensave/opensave/internal/fsx"
@@ -26,6 +29,32 @@ import (
 // must exclude them, or an interrupted patch's leftover would sync to the
 // peer as a real file (and cascade into name.opensave.tmp.opensave.tmp).
 const TmpSuffix = ".opensave.tmp"
+
+// NeverSynced reports whether a file in a save folder is never part of the
+// save, on any device.
+//
+// remotecache.vdf is Steam's record of what Steam Cloud has uploaded for a
+// game, kept beside the game's files in Steam's userdata folder — which is
+// where a game whose saves live in Steam Cloud is tracked. It describes this
+// device's Steam, not the save: syncing it hands Steam another machine's
+// bookkeeping. And that folder is under Program Files, where writing needs
+// rights OpenSave does not have, so the copy failed with "access denied" on
+// every pass, from every device.
+//
+// Left out where decisions are made — what to sync, what a version is, what
+// a snapshot holds — and NOT from the manifest a device builds and serves: a
+// device on an older build would read the gap as the file deleted, and
+// delete its own copy (the same reasoning as exclusion rules,
+// syncengine/ignore.go).
+func NeverSynced(rel string) bool {
+	return strings.EqualFold(path.Base(rel), "remotecache.vdf")
+}
+
+// NeverSyncedList names what NeverSynced leaves out. It goes into the tag of
+// a version's hash, so changing the list re-takes the hash quietly on every
+// device, like changing a game's exclusion rules — instead of every device
+// calling the same save a new version of its own at once.
+const NeverSyncedList = "remotecache.vdf"
 
 // staleTmpAge is how old a leftover TmpSuffix file must be before the
 // manifest walk garbage-collects it. Generous enough that a patch actively
@@ -153,6 +182,28 @@ func hashBytes(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// hashBuffers holds HashFile's read buffers for reuse, one pool per block
+// size. A buffer of a whole block per file, whatever the file's size, made a
+// save of 238,000 small files allocate 15 GB per manifest build (GitHub #15).
+// Nothing keeps a buffer past the call: each chunk is hashed where it lies.
+var hashBuffers = map[int]*sync.Pool{
+	defaultBlockSize: newHashBufferPool(defaultBlockSize),
+	mediumBlockSize:  newHashBufferPool(mediumBlockSize),
+	largeBlockSize:   newHashBufferPool(largeBlockSize),
+}
+
+func newHashBufferPool(size int) *sync.Pool {
+	return &sync.Pool{New: func() any {
+		b := make([]byte, size)
+		return &b
+	}}
+}
+
+// hashBuffer is a read buffer of one block, from its pool.
+func hashBuffer(blockSize int) *[]byte {
+	return hashBuffers[blockSize].Get().(*[]byte)
+}
+
 // HashFile computes the whole-file SHA-256 and per-block SHA-256 list for
 // the file at path, using the block size dictated by its size.
 func HashFile(path string) (FileEntry, error) {
@@ -169,7 +220,9 @@ func HashFile(path string) (FileEntry, error) {
 	defer f.Close()
 
 	whole := sha256.New()
-	buf := make([]byte, blockSize)
+	pooled := hashBuffer(blockSize)
+	defer hashBuffers[blockSize].Put(pooled)
+	buf := *pooled
 	var blocks []Block
 	index := 0
 	for {
@@ -192,9 +245,17 @@ func HashFile(path string) (FileEntry, error) {
 		}
 	}
 
+	wholeHash := hex.EncodeToString(whole.Sum(nil))
+	// A single-block file's block hash is the whole-file hash; share the one
+	// string. Most save files are single-block, and on a save of a quarter
+	// million of them the duplicate hex strings cost ~20MB per manifest.
+	if len(blocks) == 1 {
+		blocks[0].Hash = wholeHash
+	}
+
 	return FileEntry{
 		Size:      info.Size(),
-		Hash:      hex.EncodeToString(whole.Sum(nil)),
+		Hash:      wholeHash,
 		Blocks:    blocks,
 		BlockSize: blockSize,
 		MtimeMs:   Milli(info.ModTime().UnixMilli()),
@@ -203,7 +264,13 @@ func HashFile(path string) (FileEntry, error) {
 
 // BuildManifest walks root (a directory or a single file, per
 // ResolveLocalSaveFilePath) and returns a full Manifest of its contents.
+// Builds of one folder that overlap are coalesced (manifest_builds.go); the
+// walk itself is buildManifest.
 func BuildManifest(root string) (Manifest, error) {
+	return builds.build(root)
+}
+
+func buildManifest(root string) (Manifest, error) {
 	// Never scan profile/system-level folders. A mis-tracked game pointing
 	// at e.g. C:\Users\<name> would otherwise try to hash (and sync!) the
 	// whole user profile — and die on the first legacy junction anyway.
@@ -232,7 +299,20 @@ func BuildManifest(root string) (Manifest, error) {
 	}
 
 	var dirs []string
-	err = filepath.Walk(root, func(path string, walkInfo os.FileInfo, walkErr error) error {
+	// WalkDir, not Walk: Walk issues an extra Lstat per entry, which on
+	// Windows opens every file and dominated the cost of a warm build of a
+	// large save (13-19s vs ~1.2s for 240k files). WalkDir takes size and
+	// mtime from the directory listing itself.
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		var walkInfo os.FileInfo
+		if walkErr == nil && path != root {
+			// Reparse points are rejected below from the listing's type bits,
+			// before Info is asked for anything.
+			if d.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+				return nil
+			}
+			walkInfo, walkErr = d.Info()
+		}
 		if walkErr != nil {
 			// The save folder itself could not be read — its listing refused,
 			// or the folder gone since it was looked at. That is not an empty
@@ -251,7 +331,7 @@ func BuildManifest(root string) (Manifest, error) {
 			// skipped instead of failing the whole manifest — one
 			// unreadable directory must not abort every sync of the game.
 			if os.IsPermission(walkErr) {
-				if walkInfo != nil && walkInfo.IsDir() {
+				if d != nil && d.IsDir() {
 					return filepath.SkipDir
 				}
 				return nil
@@ -310,7 +390,6 @@ func BuildManifest(root string) (Manifest, error) {
 			}
 			return nil
 		}
-
 		entry, err := cachedHashFile(path, walkInfo)
 		if err != nil {
 			// Deleted after the walk listed it and before it could be read.

@@ -102,3 +102,93 @@ func TestMissingFolder_ARestartDoesNotRecreateItEmpty(t *testing.T) {
 		t.Errorf("the save folder is back and it is not watched")
 	}
 }
+
+// A save folder that went missing and comes back empty — recreated by the
+// game or an uninstaller — is held and asked about, as an emptied folder is,
+// never synced as deletions (#66).
+func TestMissingFolder_ComingBackEmptyIsHeld(t *testing.T) {
+	a, b, gameID := missingThenBack(t, "Missing Back Empty Game", nil)
+	if e := emptiedState(t, b, gameID); e == nil || e.Files != 2 {
+		t.Errorf("the folder came back empty and B says %+v; want it held back over 2 files", e)
+	}
+	syncBothWays(t, gameID, a, b)
+	for rel, want := range map[string]string{"slot1.sav": "hours of play", "slot2.sav": "more hours"} {
+		if got := a.ReadSave(rel); got != want {
+			t.Errorf("A's %s is %q after B's folder came back empty — the loss was passed on", rel, got)
+		}
+	}
+}
+
+// The same with some files back: fewer than both devices last shared is held
+// too, over the files that are not there.
+func TestMissingFolder_ComingBackWithFewerFilesIsHeld(t *testing.T) {
+	a, b, gameID := missingThenBack(t, "Missing Back Fewer Game", map[string]string{"slot1.sav": "hours of play"})
+	if e := emptiedState(t, b, gameID); e == nil || e.Files != 1 {
+		t.Errorf("the folder came back without slot2.sav and B says %+v; want it held back over 1 file", e)
+	}
+	syncBothWays(t, gameID, a, b)
+	if got := a.ReadSave("slot2.sav"); got != "more hours" {
+		t.Errorf("A's slot2.sav is %q after B's folder came back without it — the loss was passed on", got)
+	}
+}
+
+// Deleting a whole folder removes its files first. A watcher that saw them go
+// held the game as emptied; once the folder itself is gone, "missing" wins:
+// nothing is asked, the game waits quietly, and a folder that comes back
+// whole simply syncs again (#66).
+func TestMissingFolder_AnEmptiedHoldGivesWayToMissing(t *testing.T) {
+	a, b, gameID := pairAndTrack(t, "Missing Wins Game", map[string]string{
+		"slot1.sav": "hours of play",
+		"slot2.sav": "more hours",
+	})
+	testutil.SettleSync(t, gameID, a, b)
+	emptyFolder(t, b.SaveDir)
+	syncBothWays(t, gameID, a, b)
+	if e := emptiedState(t, b, gameID); e == nil {
+		t.Fatal("setup: emptying B's folder did not hold the game back")
+	}
+
+	testutil.RemoveTree(t, b.SaveDir)
+	b.API(http.MethodPost, "/api/watch/reload", nil, nil)
+	if e := emptiedState(t, b, gameID); e != nil {
+		t.Errorf("the whole folder is gone and B still asks about it: %+v", e)
+	}
+	syncBothWays(t, gameID, a, b)
+	if got := a.ReadSave("slot1.sav"); got != "hours of play" {
+		t.Errorf("A's slot1.sav is %q while B's folder is missing", got)
+	}
+
+	if err := os.MkdirAll(b.SaveDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	b.WriteSave("slot1.sav", "hours of play")
+	b.WriteSave("slot2.sav", "more hours")
+	b.API(http.MethodPost, "/api/watch/reload", nil, nil)
+	if e := emptiedState(t, b, gameID); e != nil {
+		t.Errorf("the folder came back whole and B holds it: %+v", e)
+	}
+}
+
+// missingThenBack pairs two devices over a two-file save, takes B's folder
+// away whole, lets both try to sync while it is missing, then brings it back
+// holding back (nil: empty) and has B look again.
+func missingThenBack(t *testing.T, name string, back map[string]string) (a, b *testutil.TestDaemon, gameID string) {
+	t.Helper()
+	a, b, gameID = pairAndTrack(t, name, map[string]string{
+		"slot1.sav": "hours of play",
+		"slot2.sav": "more hours",
+	})
+	testutil.SettleSync(t, gameID, a, b)
+	testutil.RemoveTree(t, b.SaveDir)
+	b.API(http.MethodPost, "/api/watch/reload", nil, nil)
+	syncBothWays(t, gameID, a, b)
+
+	if err := os.MkdirAll(b.SaveDir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	for rel, body := range back {
+		b.WriteSave(rel, body)
+	}
+	b.API(http.MethodPost, "/api/watch/reload", nil, nil)
+	return a, b, gameID
+}

@@ -38,6 +38,11 @@ type Options struct {
 	// DisableDiscovery skips UDP LAN discovery (tests pair peers manually
 	// and don't want broadcast traffic).
 	DisableDiscovery bool
+	// SyncEveryChange keeps and syncs every change made here as it comes,
+	// never holding a stretch of changes back as play when no session is seen
+	// (sessions.go, noteActivity). For tests of syncing itself, which change a
+	// save several times a minute and expect each change to travel.
+	SyncEveryChange bool
 }
 
 // Daemon is the assembled core. Access subsystems directly for operations
@@ -62,9 +67,19 @@ type Daemon struct {
 	// Games whose save folder is not there; see missing.go.
 	missingMu sync.Mutex
 	missing   map[string]bool
+	// relocateChecked is when each missing save folder was last looked for on
+	// another drive (missing.go).
+	relocateChecked map[string]time.Time
 
 	// Play sessions; see sessions.go.
 	sessions sessionState
+
+	// Restores under way; see restoreprogress.go.
+	restoring restoreState
+
+	// Device settings; see devicesettings.go.
+	devMu sync.Mutex
+	dev   devSettingsCache
 
 	// OnCloudOffers receives the saves from other devices' cloud backups
 	// that are waiting for an answer, whenever that list changes, and
@@ -80,6 +95,9 @@ type Daemon struct {
 	newGames   newGameState
 	// scanMu runs one save scan at a time. See ScanForSaves.
 	scanMu sync.Mutex
+	// mergeMu runs one merge of identical snapshots at a time
+	// (MergeSnapshotDuplicates).
+	mergeMu sync.Mutex
 
 	// uploads counts cloud mirrors still running, so Stop can wait for them
 	// rather than letting process exit truncate one.
@@ -145,6 +163,9 @@ func New(opts Options) (*Daemon, error) {
 
 	snaps := snapshot.New(s)
 	snaps.Log = log.Log
+	// Each new snapshot takes the place of older automatic ones it holds
+	// whole (snapshot/content.go).
+	snaps.PruneOnCreate = true
 
 	d := &Daemon{
 		Paths:     paths,
@@ -159,6 +180,18 @@ func New(opts Options) (*Daemon, error) {
 
 	d.initSessions()
 
+	// How far a restore has come, for the window (restoreprogress.go).
+	snaps.OnRestoreProgress = d.noteRestoreProgress
+
+	// A game's device settings are left out of syncing (devicesettings.go).
+	d.P2P.Sync.DeviceSettingsFor = d.deviceSettingsFor
+	d.P2P.Sync.ObserveSettings = d.observeSettings
+	// A game being played here is synced when its session ends
+	// (syncengine/playing.go).
+	d.P2P.Sync.Playing = d.playingHere
+	// An emptied save whole again is kept (emptied.go).
+	d.P2P.Sync.OnPutBack = d.snapshotPutBack
+
 	// A restore or a branch switch rewrites a save folder; nothing syncing it
 	// may read it half-way (syncengine/settle.go).
 	snaps.WriteGate = d.P2P.Sync.Writing
@@ -166,8 +199,20 @@ func New(opts Options) (*Daemon, error) {
 	// A paired peer untracking/re-tracking a game mirrors here.
 	d.P2P.OnUntrackRequest = d.untrackFromPeer
 	d.P2P.OnRetrackRequest = d.retrackFromPeer
+	// A game tracked because a peer asked for it is set up as TrackGame would.
+	d.P2P.OnAutoTracked = d.adoptAutoTracked
 	// A Switch save a peer syncs goes into this device's own emulator profile.
 	d.P2P.SwitchSaveFolder = d.Scanner.SwitchSaveFolder
+	// What a game arriving from a peer may be tracked at without asking:
+	// a folder this device's own scanner noted as a save, one inside an
+	// emulator's save folder here, or a Switch title's slot in a NAND here.
+	// Anything else is offered to the user.
+	d.P2P.KnownSaveLocation = func(path string) bool {
+		if known, err := d.Store.IsKnownSave(path); err == nil && known {
+			return true
+		}
+		return d.Scanner.InsideEmulatorSaveRoot(path) || presets.IsSwitchSaveSlot(path)
+	}
 
 	// Every new snapshot mirrors to the configured cloud provider in the
 	// background; failures are logged, never fatal.
@@ -203,7 +248,7 @@ func New(opts Options) (*Daemon, error) {
 			if err != nil {
 				return ""
 			}
-			return game.SyncIgnore
+			return d.IgnoreText(game)
 		},
 		GetLastManifestHash: func(gameID string) (string, error) {
 			game, err := s.GetGame(gameID)
@@ -214,10 +259,30 @@ func New(opts Options) (*Daemon, error) {
 		},
 		SetLastManifestHash: s.SetLastManifestHash,
 		CreateSnapshot: func(gameID string) error {
-			_, err := snaps.Create(gameID, "", true)
+			// While a game is played, the watcher only snapshots at a
+			// checkpoint (sessions.go), named so, and gone once the
+			// session's end is kept.
+			comment := ""
+			if d.playingHere(gameID) {
+				comment = checkpointComment
+			}
+			_, err := snaps.Create(gameID, comment, true)
 			return err
 		},
+		SyncWriting: func(gameID string) bool {
+			return d.P2P != nil && d.P2P.Sync != nil && d.P2P.Sync.BeingWritten(gameID)
+		},
+		SyncWritingNow: func(gameID string) bool {
+			return d.P2P != nil && d.P2P.Sync != nil && d.P2P.Sync.WritingNow(gameID)
+		},
+		HoldSnapshot: d.holdSnapshotWhilePlaying,
 		OnChanged: func(gameID string) {
+			// A change made here, by the game or the user: a new version of
+			// the save, recorded before anyone is offered it.
+			d.P2P.Sync.NoteLocalChange(gameID)
+			// How the files left out as its settings changed with it
+			// (detectsettings.go).
+			d.observeLocalSettings(gameID)
 			// An emptied save is noticed as it happens, and said on screen,
 			// even with no other device online to hold it back from.
 			_, _ = d.P2P.Sync.CheckHold(gameID, false)
@@ -254,6 +319,10 @@ func (d *Daemon) Start() error {
 	if err != nil {
 		return err
 	}
+	// Snapshots that hold the same files are kept once (snapshot/content.go).
+	// In the background, once things have settled: naming a snapshot taken
+	// before contents were recorded reads its whole archive.
+	time.AfterFunc(2*time.Minute, func() { d.MergeSnapshotDuplicates(false) })
 	// Switch games tracked under a made-up name get their real one, when an
 	// emulator here knows it by now.
 	d.nameSwitchGames()
@@ -263,6 +332,9 @@ func (d *Daemon) Start() error {
 	// hundred — and too small is the expensive direction, because the cache
 	// then evicts entries it is about to want and starts re-reading saves.
 	delta.SetHashCacheBudgetForGames(len(games))
+
+	// Before anything is watched or compared.
+	d.adoptExclusionView(games)
 
 	for _, game := range games {
 		// Backfill cover art for games tracked before covers existed (or
@@ -350,6 +422,44 @@ func (d *Daemon) Start() error {
 				return
 			case <-ticker.C:
 				d.PruneOldSnapshots()
+			}
+		}
+	})
+
+	// The database file gives back the space of what was deleted from it
+	// (store/compact.go), hourly.
+	d.P2P.GoSync(func(ctx context.Context) {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				d.Store.Compact()
+			}
+		}
+	})
+
+	// Find each game's settings by what they hold (detectsettings.go): a few
+	// minutes after start, then hourly for whatever is due.
+	d.P2P.GoSync(func(ctx context.Context) {
+		first := time.NewTimer(newGameFirstScan)
+		defer first.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-first.C:
+			d.detectSettingsDue(ctx)
+		}
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				d.detectSettingsDue(ctx)
 			}
 		}
 	})
@@ -639,6 +749,18 @@ func (d *Daemon) ResyncWatchers() (started, stopped int) {
 		if _, watching := d.Watcher.Watching(id); watching {
 			continue
 		}
+		// A folder that was missing and is back is judged before it is watched
+		// again: back empty, or with fewer of the files both devices last
+		// shared, it is held and asked about rather than synced as deletions.
+		// Watching first would let the catch-up start a sync ahead of that.
+		d.missingMu.Lock()
+		wasMissing := d.missing[id]
+		d.missingMu.Unlock()
+		if wasMissing && !SaveFolderMissing(path) && d.P2P != nil && d.P2P.Sync != nil {
+			if _, err := d.P2P.Sync.SaveFolderBack(id); err != nil {
+				d.Log.Log("warn", fmt.Sprintf("could not check the save folder of %q that is back: %v", names[id], err))
+			}
+		}
 		if err := d.watchGame(id, path); err != nil {
 			if errors.Is(err, watcher.ErrSaveFolderMissing) {
 				d.noteMissing(id, names[id], path, true)
@@ -673,6 +795,12 @@ func (d *Daemon) TrackGame(game store.Game) (store.Game, error) {
 		return store.Game{}, err
 	}
 	game.SavePath = abs
+	// Nor a folder inside another game's, or holding one: the same files
+	// would be watched, snapshotted and synced twice, under two games that
+	// each think them theirs.
+	if other, ok := d.overlappingGame(abs); ok {
+		return store.Game{}, fmt.Errorf("%q already tracks %s, which this folder is inside or holds — track one or the other", other.Name, other.SavePath)
+	}
 
 	// Fresh track from the UI (no id supplied): derive the id from the name,
 	// but disambiguate collisions so a second save location for a same-named
@@ -771,7 +899,7 @@ func (d *Daemon) TrackGame(game store.Game) (store.Game, error) {
 	d.initialSnapshots.Add()
 	go func() {
 		defer d.initialSnapshots.Done()
-		if _, err := d.Snapshots.Create(game.ID, "Initial snapshot", true); err != nil {
+		if _, err := d.SnapshotWithBaseline(game.ID, "Initial snapshot", true); err != nil {
 			d.Log.Log("warn", fmt.Sprintf("initial snapshot for %q failed: %v", game.Name, err))
 		}
 		if _, err := d.Store.GetGame(game.ID); err != nil {
@@ -973,6 +1101,40 @@ func (d *Daemon) checkSavePathShape(abs string) error {
 	return nil
 }
 
+// MergeSnapshotDuplicates keeps every game's identical snapshots once
+// (snapshot.Manager.MergeDuplicates), one game at a time. Returns how many
+// were merged and the bytes freed. all looks at every game; otherwise only at
+// games with snapshots whose content is not named yet.
+func (d *Daemon) MergeSnapshotDuplicates(all bool) (merged int, freed int64) {
+	d.mergeMu.Lock()
+	defer d.mergeMu.Unlock()
+	games, err := d.Store.ListGames()
+	if err != nil {
+		return 0, 0
+	}
+	for _, g := range games {
+		// Once per game: snapshots taken since are named as they are taken,
+		// and checked against the older ones then (PruneOnCreate). A game
+		// whose snapshots all have their content named has had its pass.
+		if unnamed, err := d.Store.SnapshotsWithoutContentHash(g.ID); !all && (err != nil || len(unnamed) == 0) {
+			continue
+		}
+		if n, f, err := d.Snapshots.MergeDuplicates(g.ID); err == nil {
+			merged += n
+			freed += f
+		}
+		// And steps on the way to a newer snapshot that holds them whole.
+		if n, f, err := d.Snapshots.PruneContained(g.ID); err == nil {
+			merged += n
+			freed += f
+		}
+	}
+	if merged > 0 {
+		d.Log.Log("info", fmt.Sprintf("snapshots cleaned up: %d identical or held whole by a newer one, %d MB freed", merged, freed>>20))
+	}
+	return merged, freed
+}
+
 // EnsureImportedSnapshot registers a snapshot restored from an .sscb
 // backup: creates the branch if missing and inserts the metadata row
 // unless that snapshot id is already known (idempotent re-imports).
@@ -1051,6 +1213,7 @@ func (d *Daemon) UntrackGame(gameID string) error {
 	// same ID and would inherit all of it — and a stale lineage reads a file
 	// that went missing while untracked as a deletion to propagate.
 	_ = d.Store.ForgetGameSyncState(gameID)
+	d.P2P.Sync.ForgetServed(gameID)
 	d.P2P.ClearPendingResync(gameID)
 	d.P2P.NotifyUntrack(gameID)
 	return nil
@@ -1208,6 +1371,7 @@ func (d *Daemon) untrackFromPeer(gameID string) {
 	// And everything it agreed with any peer, for the reason given in
 	// UntrackGame: the ID comes back, and this must not come back with it.
 	_ = d.Store.ForgetGameSyncState(gameID)
+	d.P2P.Sync.ForgetServed(gameID)
 	d.P2P.ClearPendingResync(gameID)
 	d.Log.Log("info", fmt.Sprintf("game %q untracked on a paired device", gameID))
 }
@@ -1232,6 +1396,14 @@ func (d *Daemon) retrackFromPeer(gameID string) {
 	}
 	if info, err := os.Stat(savePath); err != nil || (!info.IsDir() && !isFileSave(savePath)) {
 		d.Log.Log("info", fmt.Sprintf("game %q re-tracked on a paired device; its old folder here (%s) is gone, so it will be placed afresh", gameID, savePath))
+		return
+	}
+	// Nor at one that holds no save: a game untracked because it was tracked
+	// where it never saved (a Steam folder of Steam's own files) and tracked
+	// again where it does on the other device must not come back here at
+	// the empty folder. Placed afresh, it follows the other device's.
+	if holdsNoSave(savePath) {
+		d.Log.Log("info", fmt.Sprintf("game %q re-tracked on a paired device; its old folder here (%s) held no save, so it will be placed afresh", gameID, savePath))
 		return
 	}
 	if name == "" {

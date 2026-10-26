@@ -275,6 +275,7 @@ func TestCoverArtPropagatesOnSync(t *testing.T) {
 	a.PairWith(b)
 
 	gameID := a.TrackGame("Cover Game")
+	b.KnowPeersSaveFolder(a.SaveDir) // so B tracks it by itself
 	// Give A's game a cover; B does not track this game at all.
 	a.API(http.MethodPatch, "/api/games/"+gameID, map[string]string{
 		"appId": "264710", "coverUrl": "https://cdn.example/steam/264710/cover.jpg",

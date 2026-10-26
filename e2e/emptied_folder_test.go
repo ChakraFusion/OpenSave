@@ -4,9 +4,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/testutil"
 )
 
@@ -247,4 +249,159 @@ func TestEmptiedFolder_AnUnconfirmedEmptyFolderIsNotTakenAsDeletions(t *testing.
 			t.Errorf("the sync says %q, want peer_holding", r.Status)
 		}
 	}
+}
+
+// A save put back is the other device's: every file it holds differently,
+// even one whose copy here looks newer by its date, comes from there, and
+// this device ends on the other's version rather than one of its own that
+// every other device would then be asked to take.
+func TestEmptiedFolder_PutBackTakesTheOtherDevicesSaveAndVersion(t *testing.T) {
+	a, b, gameID := emptiedAndHeld(t, "Emptied Source Of Truth Game")
+
+	// The other device moves on meanwhile: one file changed, and written
+	// with a date older than the copy in the snapshot here.
+	path := filepath.Join(b.SaveDir, "slot2.sav")
+	if err := os.WriteFile(path, []byte("played on since"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	syncBothWays(t, gameID, b, a)
+
+	before := len(b.Daemon.Log.History())
+	a.API(http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]string{"answer": "restore"}, nil)
+	syncBothWays(t, gameID, a, b)
+
+	if got := a.ReadSave("slot2.sav"); got != "played on since" {
+		t.Errorf("put back, slot2.sav is %q: the copy here won over the other device's", got)
+	}
+	if got := b.ReadSave("slot2.sav"); got != "played on since" {
+		t.Errorf("the other device's slot2.sav became %q", got)
+	}
+	va, _ := a.Daemon.Store.GetGameVersion(gameID)
+	vb, _ := b.Daemon.Store.GetGameVersion(gameID)
+	if va.Vector != vb.Vector {
+		t.Errorf("versions differ after the put-back: here %s, there %s", va.Vector, vb.Vector)
+	}
+	for _, e := range b.Daemon.Log.History()[before:] {
+		if strings.Contains(e.Message, "newer version") && strings.Contains(e.Message, "taking") {
+			t.Errorf("the other device took a version from the one put back: %s", e.Message)
+		}
+	}
+}
+
+// Emptying a save and putting it back leaves no snapshot of the empty folder
+// or of the save part-way back; the save whole again is kept as "Put back".
+func TestEmptiedFolder_NoSnapshotOfTheEmptyOrHalfSave(t *testing.T) {
+	a, b, gameID := emptiedAndHeld(t, "Emptied Snapshots Game")
+	a.API(http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]string{"answer": "restore"}, nil)
+	syncBothWays(t, gameID, a, b)
+
+	var games map[string]struct {
+		Branches map[string]struct {
+			Snapshots []struct {
+				Comment   string `json:"comment"`
+				SizeBytes int64  `json:"sizeBytes"`
+			} `json:"snapshots"`
+		} `json:"branches"`
+	}
+	var comments []string
+	if !testutil.WaitFor(15*time.Second, func() bool {
+		a.API(http.MethodGet, "/api/games", nil, &games)
+		comments = comments[:0]
+		putBack := false
+		for _, br := range games[gameID].Branches {
+			for _, s := range br.Snapshots {
+				comments = append(comments, s.Comment)
+				if s.Comment == "Put back" {
+					putBack = true
+				}
+			}
+		}
+		return putBack
+	}) {
+		t.Errorf("no snapshot of the save put back; snapshots: %q", comments)
+	}
+	for _, br := range games[gameID].Branches {
+		for _, s := range br.Snapshots {
+			if s.SizeBytes < 100 {
+				t.Errorf("a snapshot of the emptied folder was kept: %q, %d bytes", s.Comment, s.SizeBytes)
+			}
+		}
+	}
+}
+
+// The emptied device's own sync, started while something there is writing
+// the save — the automatic snapshot of the very change that emptied it, or
+// another sync — must still be held back.
+//
+// Whether the folder was emptied is only judged while nothing writes it, and
+// a sync used to read "nothing decided yet" as "not held": it went on, waited
+// for the write itself, read the folder empty and sent every deletion to the
+// other device. Windows CI, TestEmptiedFolder_PutBackRestoresThem: the other
+// device lost all three files while the save was supposedly held back.
+func TestEmptiedFolder_ASyncStartedDuringAWriteIsStillHeld(t *testing.T) {
+	a, b, gameID := pairAndTrack(t, "Emptied Mid-Write Game", emptiedSave)
+	testutil.SettleSync(t, gameID, a, b)
+
+	release := a.Daemon.P2P.Sync.Writing(gameID)
+	emptyFolder(t, a.SaveDir)
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		release()
+	}()
+	if code := a.APIStatus(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil); code != http.StatusConflict {
+		t.Errorf("syncing the emptied game while a write was in progress = %d, want it held back (409)", code)
+	}
+	syncBothWays(t, gameID, a, b)
+	stillHasIt(t, b, "the other device, after the emptied device synced mid-write")
+	if e := emptiedState(t, a, gameID); e == nil || e.Files != 3 {
+		t.Errorf("the emptied device says %+v; want the game held back over 3 files", e)
+	}
+}
+
+// "Put them back" with no snapshot fetches the files even when a lost report
+// has left the base behind. The push-proof repair records what both devices
+// held; while the game is held as emptied it must leave alone the record put
+// back takes the files out of, or they read as deleted here and the other
+// device loses them too.
+func TestEmptiedFolder_PutBackSurvivesALostReport(t *testing.T) {
+	a, b, gameID := emptiedAndHeld(t, "Emptied Lost Report Game")
+	var snaps map[string]struct {
+		Branches map[string]struct {
+			Snapshots []struct {
+				ID string `json:"id"`
+			} `json:"snapshots"`
+		} `json:"branches"`
+	}
+	a.API(http.MethodGet, "/api/games", nil, &snaps)
+	for _, br := range snaps[gameID].Branches {
+		for _, s := range br.Snapshots {
+			if err := a.Daemon.Store.SetSnapshotCheck(s.ID, time.Now().UnixMilli(), "damaged for this test"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	a.API(http.MethodPost, "/api/games/"+gameID+"/emptied", map[string]string{"answer": "restore"}, nil)
+	// What a lost report leaves: the push still on record, and the base
+	// behind what the peer holds.
+	held, err := delta.BuildManifest(b.SaveDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetAgreedHash(gameID, b.NodeID(), "a base from before"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Daemon.Store.SetPushedHash(gameID, b.NodeID(), held.ManifestHash()); err != nil {
+		t.Fatal(err)
+	}
+	if a.Daemon.Store.GetPushedHash(gameID, b.NodeID()) == "" {
+		t.Fatal("setup: the push record did not stick")
+	}
+	a.APIStatus(http.MethodPost, "/api/games/"+gameID+"/sync", nil, nil)
+	syncBothWays(t, gameID, a, b)
+	stillHasIt(t, b, "the other device")
+	stillHasIt(t, a, "the emptied device, from the other")
 }
