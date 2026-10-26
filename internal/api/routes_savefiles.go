@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -233,4 +234,34 @@ func listSaveFiles(root string, limit int) ([]saveFile, bool) {
 		return out, truncated
 	}
 	return out, truncated
+}
+
+// handleDecideSuggestedSettings answers a suggested settings file from the
+// game's configuration tab: {"path": "...", "keepHere": true} leaves it out of
+// syncing as this device's settings, false keeps it syncing for good.
+func (s *Server) handleDecideSuggestedSettings(w http.ResponseWriter, r *http.Request) {
+	gameID := chi.URLParam(r, "gameId")
+	game, err := s.Daemon.Store.GetGame(gameID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "Game not found.")
+		return
+	}
+	var body struct {
+		Path     string `json:"path"`
+		KeepHere bool   `json:"keepHere"`
+	}
+	if err := readJSON(r, &body); err != nil || body.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	if err := s.Daemon.DecideSuggestedSettings(game, body.Path, body.KeepHere); err != nil {
+		if errors.Is(err, daemon.ErrNotSuggested) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.BroadcastGamesUpdate()
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }

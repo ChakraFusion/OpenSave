@@ -6,9 +6,16 @@ import (
 )
 
 // Verdicts on a file in a game's save folder (migrations/0042_settings_files.sql).
+//
+// A file found by what it holds is only suggested: it keeps syncing until
+// someone confirms it in the game's configuration tab (settings) or keeps it
+// syncing (declined, never suggested again). A wrong guess would otherwise
+// stop part of a save syncing without anyone knowing.
 const (
-	VerdictSettings = "settings"
-	VerdictSave     = "save"
+	VerdictSuggested = "suggested"
+	VerdictSettings  = "settings"
+	VerdictDeclined  = "declined"
+	VerdictSave      = "save"
 )
 
 // SettingsFile is a verdict on one file of a game's main save folder.

@@ -87,45 +87,62 @@ func (d *Daemon) DetectSettings(game store.Game) {
 		}
 	}
 	for p, v := range known {
-		if v.Verdict == store.VerdictSettings {
+		if v.Verdict == store.VerdictSettings || v.Verdict == store.VerdictSuggested {
 			ask = append(ask, p)
 		}
 	}
 	saves := d.Snapshots.ChangesLikeASave(game.ID, ask)
 
-	changed := false
-	var taken, given []string
+	// What is found here is only suggested: it keeps syncing until someone
+	// confirms it in the game's configuration tab (store.VerdictSuggested).
+	// Only what was confirmed is left out, and given back if it changes like a
+	// save; a suggestion that does is withdrawn the same way.
+	excluded, suggested := false, false
+	var offered, given []string
 	for _, f := range found {
 		if _, ok := known[f.Path]; ok {
 			continue
 		}
-		v := store.SettingsFile{GameID: game.ID, Path: f.Path, Verdict: store.VerdictSettings, Reason: f.Reason}
+		v := store.SettingsFile{GameID: game.ID, Path: f.Path, Verdict: store.VerdictSuggested, Reason: f.Reason}
 		if why, isSave := saves[f.Path]; isSave {
 			v.Verdict, v.Reason = store.VerdictSave, why
 		} else {
-			taken = append(taken, f.Path)
+			offered = append(offered, f.Path)
 		}
 		if d.Store.SetSettingsFile(v) == nil {
-			changed = true
+			suggested = true
 		}
 	}
 	for p, v := range known {
-		if why, isSave := saves[p]; isSave && v.Verdict == store.VerdictSettings {
-			v.Verdict, v.Reason, v.AtMs = store.VerdictSave, why, 0
-			if d.Store.SetSettingsFile(v) == nil {
-				changed = true
-				given = append(given, p+" ("+why+")")
-			}
+		why, isSave := saves[p]
+		if !isSave || (v.Verdict != store.VerdictSettings && v.Verdict != store.VerdictSuggested) {
+			continue
+		}
+		was := v.Verdict
+		v.Verdict, v.Reason, v.AtMs = store.VerdictSave, why, 0
+		if d.Store.SetSettingsFile(v) != nil {
+			continue
+		}
+		if was == store.VerdictSettings {
+			excluded = true
+			given = append(given, p+" ("+why+")")
+		} else {
+			suggested = true
 		}
 	}
-	if !changed {
-		return
+	if suggested {
+		d.forgetVerdicts(game.ID)
+		if d.OnGameChanged != nil {
+			d.OnGameChanged(game.ID)
+		}
 	}
-	d.exclusionsChanged(game)
-	if len(taken) > 0 && !game.SyncDeviceSettings {
-		d.Log.Log("info", fmt.Sprintf("%q: %s %s this device's settings, not the save — each device keeps its own. "+
-			"Untick it under the game's \"Files that shouldn't sync\" to sync it after all.",
-			game.Name, strings.Join(taken, ", "), isAre(len(taken))))
+	if excluded {
+		d.exclusionsChanged(game)
+	}
+	if len(offered) > 0 && !game.SyncDeviceSettings {
+		d.Log.Log("info", fmt.Sprintf("%q: %s %s like this device's settings rather than the save. %s still syncing; "+
+			"to keep %s on each device instead, confirm %s in the game's configuration tab.",
+			game.Name, strings.Join(offered, ", "), lookLike(len(offered)), itTheyAre(len(offered)), itThem(len(offered)), itThem(len(offered))))
 	}
 	if len(given) > 0 {
 		d.Log.Log("warn", fmt.Sprintf("%q: %s changed along with the save, so %s part of the save after all — syncing again.",
@@ -234,16 +251,30 @@ func (d *Daemon) observeLocalSettings(gameID string) {
 	d.observeSettings(game, "", m)
 }
 
-func isAre(n int) string {
-	if n == 1 {
-		return "is"
-	}
-	return "are"
-}
-
 func itThey(n int) string {
 	if n == 1 {
 		return "it is"
 	}
 	return "they are"
+}
+
+func lookLike(n int) string {
+	if n == 1 {
+		return "looks"
+	}
+	return "look"
+}
+
+func itTheyAre(n int) string {
+	if n == 1 {
+		return "It is"
+	}
+	return "They are"
+}
+
+func itThem(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }

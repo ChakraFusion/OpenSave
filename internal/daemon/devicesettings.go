@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"errors"
+
 	"github.com/opensave/opensave/internal/delta"
 	"github.com/opensave/opensave/internal/presets"
 	"github.com/opensave/opensave/internal/store"
@@ -160,4 +162,50 @@ func (d *Daemon) adoptExclusionView(games []store.Game) {
 			_ = d.Store.SetLastManifestHash(game.ID, watcher.ContentHash(m, now))
 		}
 	}
+}
+
+// SuggestedSettings is what was found here by what it holds and still waits
+// for an answer in the game's configuration tab. Each keeps syncing until it
+// is confirmed (store.VerdictSuggested).
+func (d *Daemon) SuggestedSettings(game store.Game) []DeviceSetting {
+	verdicts, err := d.Store.SettingsFiles(game.ID)
+	if err != nil {
+		return nil
+	}
+	var out []DeviceSetting
+	for _, v := range verdicts {
+		if v.Verdict == store.VerdictSuggested {
+			out = append(out, DeviceSetting{Pattern: "/" + v.Path, Source: "suggested", Reason: v.Reason})
+		}
+	}
+	return out
+}
+
+// ErrNotSuggested is an answer about a file that is not waiting for one.
+var ErrNotSuggested = errors.New("that file is not a suggested settings file")
+
+// DecideSuggestedSettings records the answer to a suggestion: keepHere leaves
+// the file out of syncing as this game's settings from now on, like the game
+// database's (and gives it back if it then changes like a save); otherwise it
+// keeps syncing, and is not suggested again.
+func (d *Daemon) DecideSuggestedSettings(game store.Game, path string, keepHere bool) error {
+	verdicts, err := d.Store.SettingsFiles(game.ID)
+	if err != nil {
+		return err
+	}
+	for _, v := range verdicts {
+		if v.Path != path || v.Verdict != store.VerdictSuggested {
+			continue
+		}
+		v.Verdict, v.AtMs = store.VerdictDeclined, 0
+		if keepHere {
+			v.Verdict = store.VerdictSettings
+		}
+		if err := d.Store.SetSettingsFile(v); err != nil {
+			return err
+		}
+		d.exclusionsChanged(game)
+		return nil
+	}
+	return ErrNotSuggested
 }
