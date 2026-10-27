@@ -72,7 +72,13 @@ func TestSettings_AutoDeleteOldSnapshots_SweepsWhenSwitchedOn(t *testing.T) {
 	if _, err := ts.daemon.Store.GetSnapshot(newest[0].ID); err != nil {
 		t.Errorf("the branch's newest snapshot was deleted")
 	}
-	if _, err := os.Stat(filepath.Join(backups, "snap_old_auto.zip")); err == nil {
+	// Waited for, not looked at once: the sweep deletes the rows first and
+	// the archives after its last row (PruneOlderThan), so under load the row
+	// was found gone while the archive was still there.
+	if !waitFor(10*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(backups, "snap_old_auto.zip"))
+		return os.IsNotExist(err)
+	}) {
 		t.Errorf("the deleted snapshot's archive is still on disk")
 	}
 }

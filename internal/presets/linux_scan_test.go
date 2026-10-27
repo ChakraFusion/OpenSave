@@ -251,6 +251,74 @@ func TestEmuDeckDetection(t *testing.T) {
 	}
 }
 
+// RetroDECK keeps every system's saves in retrodeck/saves/<system>: each
+// system's folder surfaces as its own candidate, as EmuDeck's do. Asked for
+// by a Steam Deck user whose RetroDECK games the scan did not find.
+func TestRetroDECKDetection(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	home := t.TempDir()
+	for _, system := range []string{"psx", "gc"} {
+		p := filepath.Join(home, "retrodeck", "saves", system)
+		if err := os.MkdirAll(p, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "game.srm"), []byte("x"), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sc := &Scanner{CacheFile: filepath.Join(t.TempDir(), "cache.json"), GOOS: "linux", HomeDir: home}
+	found := sc.Scan(nil)
+
+	got := map[string]string{}
+	for _, d := range found {
+		if strings.HasPrefix(d.ID, "retrodeck-") {
+			got[d.ID] = d.Name
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 RetroDECK discoveries, got %d: %v", len(got), got)
+	}
+	if got["retrodeck-psx"] != "RetroDECK (psx)" {
+		t.Errorf("psx entry = %q", got["retrodeck-psx"])
+	}
+	if got["retrodeck-gc"] != "RetroDECK (gc)" {
+		t.Errorf("gc entry = %q", got["retrodeck-gc"])
+	}
+}
+
+// RetroDECK installed in a folder of the user's choosing, as a user had it:
+// ~/Games/Retrodeck/retrodeck/saves. Its systems are found there too.
+func TestRetroDECKDetection_ChosenFolder(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	home := t.TempDir()
+	for _, system := range []string{"ps2", "snes"} {
+		p := filepath.Join(home, "Games", "Retrodeck", "retrodeck", "saves", system)
+		if err := os.MkdirAll(p, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(p, "game.srm"), []byte("x"), 0o666); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	sc := &Scanner{CacheFile: filepath.Join(t.TempDir(), "cache.json"), GOOS: "linux", HomeDir: home}
+	got := map[string]string{}
+	for _, d := range sc.Scan(nil) {
+		if strings.HasPrefix(d.ID, "retrodeck-") {
+			got[d.ID] = d.SavePath
+		}
+	}
+	for _, system := range []string{"ps2", "snes"} {
+		want := filepath.Join(home, "Games", "Retrodeck", "retrodeck", "saves", system)
+		if got["retrodeck-"+system] != want {
+			t.Errorf("%s: found at %q, want %q (all: %v)", system, got["retrodeck-"+system], want, got)
+		}
+	}
+}
+
 // TestPresetGlobPaths: SD-card style wildcard locations resolve through
 // filepath.Glob.
 func TestPresetGlobPaths(t *testing.T) {

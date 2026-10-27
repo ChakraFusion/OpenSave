@@ -60,7 +60,7 @@ func writeTempZip(t *testing.T, content string) string {
 
 func TestLocalFolderRoundTrip(t *testing.T) {
 	svc, s := newTestService(t)
-	destDir := t.TempDir()
+	destDir := markedDir(t)
 	setCloudConfig(t, s, func(c *store.CloudConfig) {
 		c.Enabled = true
 		c.Provider = "local"
@@ -274,7 +274,7 @@ func TestGoogleDriveProviderWithTokenRefresh(t *testing.T) {
 // stay, older ones are deleted, other games/branches are untouched.
 func TestPruneGameBranch(t *testing.T) {
 	svc, s := newTestService(t)
-	destDir := t.TempDir()
+	destDir := markedDir(t)
 	setCloudConfig(t, s, func(c *store.CloudConfig) {
 		c.Enabled = true
 		c.Provider = "local"
@@ -789,7 +789,7 @@ func TestUploadIsDoneWithTheArchiveWhenItSaysSo(t *testing.T) {
 	setCloudConfig(t, s, func(c *store.CloudConfig) {
 		c.Enabled = true
 		c.Provider = "local"
-		c.URL = t.TempDir()
+		c.URL = markedDir(t)
 	})
 	src := writeTempZip(t, "zip bytes")
 	var removeErr error
@@ -861,13 +861,16 @@ func folderNames(t *testing.T, dir string) []string {
 	}
 	var names []string
 	for _, e := range entries {
+		if e.Name() == folderMarker {
+			continue // what makes it the backup folder, not a copy's leftover
+		}
 		names = append(names, e.Name())
 	}
 	return names
 }
 
 func TestALocalCopyInProgressIsNotListed(t *testing.T) {
-	dir := t.TempDir()
+	dir := markedDir(t)
 	p := localFolder{cfg: store.CloudConfig{URL: dir}}
 	const name = "game__main__snap_1.zip"
 	body := []byte(strings.Repeat("archive bytes ", 4096))
@@ -908,7 +911,7 @@ func TestALocalCopyInProgressIsNotListed(t *testing.T) {
 }
 
 func TestALocalCopyThatFailsLeavesNothing(t *testing.T) {
-	dir := t.TempDir()
+	dir := markedDir(t)
 	p := localFolder{cfg: store.CloudConfig{URL: dir}}
 	if err := p.put(&failingReader{}, "game__main__snap_1.zip"); err == nil {
 		t.Fatal("a copy whose source failed reported success")
@@ -963,7 +966,7 @@ func TestALocalCopyIsAsReadableAsBefore(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("permission bits are not how Windows shares a folder")
 	}
-	dir := t.TempDir()
+	dir := markedDir(t)
 	plain := filepath.Join(dir, "plain")
 	f, err := os.Create(plain)
 	if err != nil {

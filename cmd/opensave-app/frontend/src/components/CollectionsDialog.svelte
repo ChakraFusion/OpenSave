@@ -9,6 +9,7 @@
   import Trash2 from 'lucide-svelte/icons/trash-2';
   import Plus from 'lucide-svelte/icons/plus';
   import Modal from './ui/Modal.svelte';
+  import { t } from '../lib/i18n.js';
   import ModalFoot from './ui/ModalFoot.svelte';
   import { askConfirm } from '../lib/stores.js';
   import { collectionsDialog } from '../lib/gameactions.js';
@@ -45,13 +46,14 @@
 
   async function remove(c) {
     const n = c.gameIds.length;
-    if (!(await askConfirm(`Delete the collection “${c.name}”? ${n ? `Its ${n} game${n === 1 ? '' : 's'} stay tracked; only the grouping goes.` : 'It is empty.'}`, { title: 'Delete collection?', confirmText: 'Delete', danger: true }))) return;
+    const body = $t('collections.deleteConfirmBody', { name: c.name }) + ' ' + (n ? $t('collections.deleteConfirmGames', { n }) : $t('collections.deleteConfirmEmpty'));
+    if (!(await askConfirm(body, { title: $t('collections.deleteConfirmTitle'), confirmText: $t('common.delete'), danger: true }))) return;
     await deleteCollection(c.id);
   }
 </script>
 
 {#if game}
-  <Modal title="Collections" icon={Tags} onClose={close} width={460} height="auto" maxHeight="min(78vh, 620px)">
+  <Modal title={$t('collections.title')} icon={Tags} onClose={close} width={460} height="auto" maxHeight="min(78vh, 620px)">
     <svelte:fragment slot="sub">{game.name}</svelte:fragment>
     <div class="body">
       <ul>
@@ -80,22 +82,22 @@
                 <span class="count">{c.gameIds.length}</span>
               </label>
               {#if !c.builtin}
-                <button class="btn small ghost icon" title="Rename" aria-label="Rename {c.name}" on:click={() => startRename(c)}><Pencil size={13} /></button>
-                <button class="btn small ghost icon" title="Delete" aria-label="Delete {c.name}" on:click={() => remove(c)}><Trash2 size={13} /></button>
+                <button class="btn small ghost icon" title={$t('common.rename')} aria-label={$t('collections.renameAria', { name: c.name })} on:click={() => startRename(c)}><Pencil size={13} /></button>
+                <button class="btn small ghost icon" title={$t('common.delete')} aria-label={$t('collections.deleteAria', { name: c.name })} on:click={() => remove(c)}><Trash2 size={13} /></button>
               {/if}
             {/if}
           </li>
         {/each}
       </ul>
       <form class="new" on:submit|preventDefault={add}>
-        <input placeholder="New collection, e.g. Playing now" maxlength="40" bind:value={newName} />
-        <button class="btn small" type="submit" disabled={!newName.trim()}><Plus size={14} />Add</button>
+        <input placeholder={$t('collections.newPlaceholder')} maxlength="40" bind:value={newName} />
+        <button class="btn small" type="submit" disabled={!newName.trim()}><Plus size={14} />{$t('common.add')}</button>
       </form>
-      <p class="hint">Collections are for finding games in the library; they don't change how a game syncs.</p>
+      <p class="hint">{$t('collections.hint')}</p>
     </div>
     <ModalFoot>
       <span></span>
-      <button class="btn primary" on:click={close}>Done</button>
+      <button class="btn primary" on:click={close}>{$t('common.done')}</button>
     </ModalFoot>
   </Modal>
 {/if}

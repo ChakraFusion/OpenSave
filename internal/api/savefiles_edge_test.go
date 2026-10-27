@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strconv"
 	"testing"
+	"time"
 )
 
 // A location whose folder is gone must not blank the listing. Somebody who
@@ -33,9 +34,13 @@ func TestSaveFiles_MissingLocationDoesNotBreakTheListing(t *testing.T) {
 	}
 	ts.do(t, http.MethodPost, "/api/games/gone-loc/roots", map[string]string{"name": "config", "path": cfg})
 
-	// The drive goes away.
-	if err := os.RemoveAll(cfg); err != nil {
-		t.Fatal(err)
+	// The drive goes away. Retried briefly: adding the location started its
+	// watch and first read in the background (RewatchGame), and on Windows a
+	// folder being read cannot be removed ("used by another process") — this
+	// test racing the app, as testutil.RemoveTree says of the same race.
+	var rmErr error
+	if !waitFor(5*time.Second, func() bool { rmErr = os.RemoveAll(cfg); return rmErr == nil }) {
+		t.Fatal(rmErr)
 	}
 
 	list := getSaveFiles(t, ts, "gone-loc", nil)
